@@ -246,7 +246,7 @@ impl LongTermMemory {
             })
             .sum();
 
-        total_distance / a.len() as f32 < 0.5
+        total_distance / (a.len() as f32) < 0.5
     }
 
     /// Preserve elite DNA

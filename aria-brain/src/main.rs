@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 use warp::Filter;
 use futures::{StreamExt, SinkExt};
-use tracing::{info, warn, error, Level};
+use tracing::{info, warn, Level};
 
 use substrate::Substrate;
 use signal::Signal;
@@ -191,7 +191,7 @@ async fn evolution_loop(
 
 async fn handle_connection(
     ws: warp::ws::WebSocket,
-    substrate: Arc<Substrate>,
+    _substrate: Arc<Substrate>,
     perception_tx: broadcast::Sender<Signal>,
     mut expression_rx: broadcast::Receiver<Signal>,
 ) {

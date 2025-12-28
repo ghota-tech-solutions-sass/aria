@@ -7,21 +7,19 @@ mod signal;
 mod visualizer;
 
 use std::io::{self, Write};
-use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use futures_util::{StreamExt, SinkExt};
 use crossterm::{
     execute,
-    terminal::{enable_raw_mode, disable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen, Clear, ClearType},
-    cursor::{MoveTo, Show, Hide},
+    terminal::{enable_raw_mode, disable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    cursor::{Show, Hide},
     event::{self, Event, KeyCode, KeyEventKind},
-    style::{Color, Print, SetForegroundColor, ResetColor},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
 
 use signal::Signal;
-use visualizer::{AriaVisualizer, BrainStats};
+use visualizer::AriaVisualizer;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 

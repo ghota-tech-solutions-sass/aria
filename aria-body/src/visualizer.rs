@@ -94,7 +94,7 @@ impl AriaVisualizer {
                 Constraint::Min(10),     // Main area
                 Constraint::Length(3),   // Input
             ])
-            .split(frame.area());
+            .split(frame.size());
 
         // Header
         self.draw_header(frame, chunks[0]);

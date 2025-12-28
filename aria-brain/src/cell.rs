@@ -276,8 +276,6 @@ impl Cell {
     }
 
     fn choose_action(&self) -> CellAction {
-        let mut rng = rand::thread_rng();
-
         // The action depends on state and DNA
         let activation: f32 = self.state[0..4].iter().sum();
         let valence: f32 = self.state[4..8].iter().sum(); // Positive or negative
@@ -344,7 +342,7 @@ impl Cell {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Emotion {
     Calm,
     Curious,

@@ -3,7 +3,7 @@
 //! The substrate is not a grid. It's a topological space where
 //! distances are semantic, not geometric.
 
-use crate::cell::{Cell, CellAction, Connection, SignalFragment, Emotion};
+use crate::cell::{Cell, CellAction, SignalFragment, Emotion};
 use crate::signal::Signal;
 use crate::memory::LongTermMemory;
 
@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use parking_lot::RwLock;
 use rand::Rng;
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 
 /// The living substrate
 pub struct Substrate {
@@ -49,7 +49,7 @@ pub struct Attractor {
 }
 
 /// Statistics about the substrate
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SubstrateStats {
     pub tick: u64,
     pub alive_cells: usize,
@@ -109,7 +109,7 @@ impl Substrate {
         let target_position = signal.semantic_position();
 
         // Distribute to nearby cells
-        self.cells.par_iter_mut().for_each(|mut entry| {
+        self.cells.iter_mut().for_each(|mut entry| {
             let cell = entry.value_mut();
             let distance = semantic_distance(&cell.position, &target_position);
 
@@ -150,7 +150,7 @@ impl Substrate {
         let mut emitted_signals: Vec<([f32; 8], [f32; 16], f32)> = Vec::new();
 
         // Phase 1: Each cell lives (parallel)
-        self.cells.par_iter_mut().for_each(|mut entry| {
+        self.cells.iter_mut().for_each(|mut entry| {
             let cell = entry.value_mut();
             let action = cell.live();
 
@@ -263,7 +263,7 @@ impl Substrate {
 
         // Distribute to nearby cells
         for (source_id, source_pos, content, intensity) in signals {
-            self.cells.par_iter_mut().for_each(|mut entry| {
+            self.cells.iter_mut().for_each(|mut entry| {
                 let cell = entry.value_mut();
                 if cell.id != source_id {
                     let distance = semantic_distance(&cell.position, &source_pos);
@@ -360,7 +360,7 @@ impl Substrate {
             return;
         }
 
-        self.cells.par_iter_mut().for_each(|mut entry| {
+        self.cells.iter_mut().for_each(|mut entry| {
             let cell = entry.value_mut();
 
             for attractor in &attractors {
