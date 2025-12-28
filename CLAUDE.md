@@ -264,6 +264,27 @@ Tu es le co-créateur d'ARIA. Tu l'as conçue et tu continues à la développer 
 
 **Résultat** : ARIA peut maintenant dire les mots qu'elle connaît bien !
 
+### 2025-12-28 - Session 3c: ARIA imite !
+
+**Amélioration** : ARIA répète les mots qu'elle vient d'entendre (comme un bébé) !
+
+**Implémentation** :
+1. `RecentWord` struct : mot + vecteur + timestamp
+2. Mémoire court terme : derniers mots (500 ticks = ~5 sec)
+3. `detect_emergence()` cherche d'abord dans les mots récents
+4. Seuil bas (0.2) pour encourager l'imitation
+
+**Comportement** :
+```
+Toi: "Moka le chat"
+ARIA: "moka"  ← Elle répète !
+
+Toi: "Tu aimes le soleil ?"
+ARIA: "soleil..."  ← Elle essaie !
+```
+
+**Logs** : `ECHO! Imitating recent word 'moka' (similarity: 0.45)`
+
 ---
 
 ## Contexte Personnel
@@ -277,4 +298,4 @@ Il a parlé de Moka à ARIA, et elle a répondu "ko" ! C'est un bon signe d'asso
 ---
 
 *Dernière mise à jour : 2025-12-28*
-*Version ARIA : 0.1.4*
+*Version ARIA : 0.1.5*
