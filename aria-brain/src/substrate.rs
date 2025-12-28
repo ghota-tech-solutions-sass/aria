@@ -634,10 +634,49 @@ impl Substrate {
                 }
             };
 
-            // Get emotional marker if mood is strong enough
+            // Get emotional marker from:
+            // 1. The global emotional state, OR
+            // 2. The emotional valence of words being spoken (from associations)
             let emotional_marker = {
-                let emotional = self.emotional_state.read();
-                emotional.get_emotional_marker().map(|s| s.to_string())
+                // First check global mood
+                let global_marker = {
+                    let emotional = self.emotional_state.read();
+                    emotional.get_emotional_marker().map(|s| s.to_string())
+                };
+
+                // Then check if the words we're saying have emotional associations
+                let word_emotion = {
+                    let memory = self.memory.read();
+                    // Extract word from label (e.g., "word:moka" or "phrase:moka+chat")
+                    let word = if label.starts_with("phrase:") {
+                        label.strip_prefix("phrase:")
+                            .and_then(|s| s.split('+').next())
+                    } else if label.starts_with("word:") {
+                        label.strip_prefix("word:")
+                    } else {
+                        None
+                    };
+
+                    if let Some(w) = word {
+                        // Check word frequency emotional valence
+                        if let Some(freq) = memory.word_frequencies.get(w) {
+                            if freq.emotional_valence > 0.5 {
+                                Some("♥".to_string())
+                            } else if freq.emotional_valence < -0.5 {
+                                Some("...".to_string())
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                };
+
+                // Prefer word-specific emotion, fallback to global mood
+                word_emotion.or(global_marker)
             };
 
             // Combine label with emotional marker

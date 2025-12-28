@@ -386,5 +386,28 @@ Il a parlé de Moka à ARIA, et elle a répondu "ko" ! C'est un bon signe d'asso
 
 ---
 
+### 2025-12-28 - Session 5b: Valence émotionnelle des mots
+
+**Améliorations** :
+
+1. Vocabulaire émotionnel FR synchronisé entre brain et body
+   - "J'aime", "adore", "content" → détectés comme positifs
+   - "triste", "déteste", "peur" → détectés comme négatifs
+
+2. Les mots apprennent leur valence émotionnelle
+   - Quand tu dis "J'aime Moka", le mot "moka" devient associé à du positif
+   - Quand ARIA dit "moka", elle ajoute ♥ si le mot a une valence positive
+
+**Comportement** :
+```
+Toi: "J'aime Moka"
+[moka.emotional_valence augmente]
+
+Toi: "Moka"
+ARIA: "moka chat ♥"  ← Elle sait que Moka = amour !
+```
+
+---
+
 *Dernière mise à jour : 2025-12-28*
-*Version ARIA : 0.1.7*
+*Version ARIA : 0.1.8*

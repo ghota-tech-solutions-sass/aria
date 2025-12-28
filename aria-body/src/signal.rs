@@ -54,10 +54,37 @@ impl Signal {
         content[27] = if text.contains(',') { 0.5 } else { 0.0 };
 
         let lower = text.to_lowercase();
-        content[28] = if lower.contains("love") || lower.contains("happy") || lower.contains("good") { 1.0 } else { 0.0 };
-        content[29] = if lower.contains("hate") || lower.contains("sad") || lower.contains("bad") { -1.0 } else { 0.0 };
-        content[30] = if lower.contains("help") || lower.contains("please") { 0.5 } else { 0.0 };
-        content[31] = if lower.contains("why") || lower.contains("how") || lower.contains("what") { 0.8 } else { 0.0 };
+
+        // Positive emotions (love, joy, affection) - FR + EN
+        let positive_words = [
+            "love", "happy", "good", "great", "beautiful", "nice", "sweet", "cute",
+            "aime", "adore", "content", "heureux", "heureuse", "bien", "super", "génial",
+            "joli", "jolie", "beau", "belle", "mignon", "mignonne", "bisou", "calin",
+            "merci", "bravo", "cool", "chouette", "sympa", "♥", "❤", ":)", "<3"
+        ];
+        content[28] = if positive_words.iter().any(|w| lower.contains(w)) { 1.0 } else { 0.0 };
+
+        // Negative emotions (sadness, anger, fear) - FR + EN
+        let negative_words = [
+            "hate", "sad", "bad", "angry", "fear", "scared", "hurt", "pain",
+            "triste", "mal", "peur", "colère", "fâché", "fâchée", "méchant", "nul",
+            "déteste", "horrible", "moche", "pleure", "pleurer", ":(", ":'("
+        ];
+        content[29] = if negative_words.iter().any(|w| lower.contains(w)) { -1.0 } else { 0.0 };
+
+        // Requests and needs - FR + EN
+        let request_words = [
+            "help", "please", "want", "need",
+            "aide", "s'il te plaît", "stp", "veux", "voudrais", "besoin", "peux"
+        ];
+        content[30] = if request_words.iter().any(|w| lower.contains(w)) { 0.5 } else { 0.0 };
+
+        // Questions and curiosity - FR + EN
+        let question_words = [
+            "why", "how", "what", "when", "where", "who",
+            "pourquoi", "comment", "quoi", "quand", "où", "qui", "est-ce"
+        ];
+        content[31] = if question_words.iter().any(|w| lower.contains(w)) { 0.8 } else { 0.0 };
 
         Self {
             content,
