@@ -22,6 +22,32 @@ struct RecentWord {
     heard_at: u64,
 }
 
+/// Words that are too common to be meaningful - ARIA shouldn't repeat these
+/// Like a baby learning to speak, she should focus on meaningful words
+const STOP_WORDS: &[&str] = &[
+    // French articles and pronouns
+    "le", "la", "les", "un", "une", "des", "du", "de", "au", "aux",
+    "je", "tu", "il", "elle", "on", "nous", "vous", "ils", "elles",
+    "me", "te", "se", "lui", "leur", "en", "y",
+    // French verbs (common forms)
+    "est", "suis", "es", "sont", "sommes", "êtes",
+    "ai", "as", "a", "ont", "avons", "avez",
+    "fait", "faire", "vais", "vas", "va", "vont",
+    // French prepositions and conjunctions
+    "et", "ou", "mais", "donc", "car", "ni", "que", "qui", "quoi",
+    "dans", "sur", "sous", "avec", "sans", "pour", "par", "chez",
+    "ce", "cette", "ces", "mon", "ma", "mes", "ton", "ta", "tes", "son", "sa", "ses",
+    // English articles and pronouns
+    "the", "a", "an", "is", "are", "am", "was", "were",
+    "i", "you", "he", "she", "it", "we", "they",
+    "my", "your", "his", "her", "its", "our", "their",
+    // English common words
+    "and", "or", "but", "so", "if", "then", "to", "of", "in", "on", "at",
+    "be", "have", "has", "had", "do", "does", "did",
+    // Very short words
+    "si", "ne", "pas", "plus", "très", "bien",
+];
+
 /// Global emotional state that accumulates over time
 /// Like a baby's mood that changes slowly
 #[derive(Clone, Debug, Default)]
@@ -378,8 +404,9 @@ impl Substrate {
 
             // Learn semantic associations: words that appear together become linked
             // Example: "Moka" and "chat" in the same message -> they become associated
+            // Filter out stop words - only meaningful words should be associated!
             let significant_words: Vec<&str> = words.iter()
-                .filter(|w| w.len() >= 3)
+                .filter(|w| w.len() >= 3 && !STOP_WORDS.contains(&w.to_lowercase().as_str()))
                 .copied()
                 .collect();
 
@@ -396,12 +423,15 @@ impl Substrate {
         }
 
         // Store words in short-term memory for echo/imitation
+        // Filter out stop words - ARIA should focus on meaningful words!
         {
             let mut recent = self.recent_words.write();
             for word in &words {
-                if word.len() >= 3 {  // Skip very short words
+                let lower_word = word.to_lowercase();
+                // Skip very short words AND stop words
+                if word.len() >= 3 && !STOP_WORDS.contains(&lower_word.as_str()) {
                     recent.push(RecentWord {
-                        word: word.to_lowercase(),
+                        word: lower_word,
                         vector: signal_vector,
                         heard_at: current_tick,
                     });

@@ -539,5 +539,25 @@ Toi: Bravo !
 
 ---
 
+### 2025-12-28 - Session 6d: Filtrage des stop words
+
+**Amélioration** : ARIA ne répète plus les mots vides !
+
+Les mots comme "suis", "est", "les", "que" dominaient les réponses. Maintenant ARIA se concentre sur les mots **significatifs**.
+
+**Stop words filtrés** (FR + EN) :
+- Articles : le, la, les, un, une, des, the, a, an...
+- Pronoms : je, tu, il, elle, nous, vous, I, you, he, she...
+- Verbes communs : est, suis, sont, ai, a, fait, is, are, have...
+- Prépositions : dans, sur, avec, pour, in, on, at, to...
+- Conjonctions : et, ou, mais, que, qui, and, or, but...
+
+**Résultat** :
+- ARIA dit "moka", "chat", "aria" au lieu de "suis...", "est..."
+- Les associations sont entre mots significatifs uniquement
+- C'est comme un bébé qui apprend d'abord les noms et les verbes importants
+
+---
+
 *Dernière mise à jour : 2025-12-28*
-*Version ARIA : 0.1.12*
+*Version ARIA : 0.1.13*
