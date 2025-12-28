@@ -128,14 +128,20 @@ async fn run_simple_mode() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Task to display expressions
+    // Task to display expressions - throttled to avoid spam
     let display_task = tokio::spawn(async move {
+        let mut last_print = std::time::Instant::now();
+        let throttle_duration = std::time::Duration::from_millis(500);
+
         while let Some(expression) = expr_rx.recv().await {
-            // Move cursor and print expression
-            print!("\r\x1B[K"); // Clear line
-            println!("  \x1B[36mARIA:\x1B[0m {}", expression);
-            print!("  \x1B[32mYou:\x1B[0m ");
-            io::stdout().flush().ok();
+            // Throttle: only print if enough time has passed
+            let now = std::time::Instant::now();
+            if now.duration_since(last_print) >= throttle_duration {
+                println!("\n  \x1B[36mARIA:\x1B[0m {}", expression);
+                io::stdout().flush().ok();
+                last_print = now;
+            }
+            // Ignore expressions that come too fast
         }
     });
 

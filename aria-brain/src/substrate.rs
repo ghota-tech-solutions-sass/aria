@@ -285,6 +285,11 @@ impl Substrate {
     }
 
     fn detect_emergence(&self, current_tick: u64) -> Vec<Signal> {
+        // Only check for emergence every 50 ticks (throttle output)
+        if current_tick % 50 != 0 {
+            return Vec::new();
+        }
+
         // Find cells with any meaningful activation (lowered threshold)
         let active_cells: Vec<_> = self.cells.iter()
             .filter(|entry| {
