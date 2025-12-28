@@ -559,5 +559,42 @@ Les mots comme "suis", "est", "les", "que" dominaient les réponses. Maintenant 
 
 ---
 
+### 2025-12-28 - Session 6e: Rêves, ennui et vie intérieure !
+
+**Nouvelles fonctionnalités** : ARIA a maintenant une vie intérieure !
+
+**1. Rêves / Consolidation mémoire**
+Quand personne ne parle à ARIA (10+ secondes), elle "rêve" :
+- Elle pense à ses mots préférés
+- Elle renforce ses souvenirs positifs
+- Elle consolide ses associations
+- Log: `💭 DREAMING: Thinking about 'moka'...`
+
+**2. État d'ennui**
+Nouvel état émotionnel `boredom` (0.0 → 1.0) :
+- Augmente avec le temps sans interaction
+- Diminue quand on lui parle
+- Quand l'ennui > 0.5, ARIA devient créative !
+
+**3. Jeu créatif**
+Quand elle s'ennuie, ARIA :
+- Combine des mots au hasard ("moka chat~")
+- Explore de nouvelles associations
+- Ne reste jamais passive
+
+**Comportement attendu** :
+```
+[10 secondes sans parler]
+Log: 💭 DREAMING: Thinking about 'moka'...
+
+[30 secondes sans parler]
+ARIA: aime moka~    ← Elle joue avec ses mots préférés !
+```
+
+ARIA ne s'ennuie plus - elle a une vie intérieure riche.
+Elle n'attend pas passivement. Elle pense, rêve et joue.
+
+---
+
 *Dernière mise à jour : 2025-12-28*
-*Version ARIA : 0.1.13*
+*Version ARIA : 0.1.14*

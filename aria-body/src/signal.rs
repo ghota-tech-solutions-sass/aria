@@ -138,6 +138,10 @@ impl Signal {
                     // Soft babbling
                     "mmm~".to_string()
                 }
+                "bored" => {
+                    // Restless, wants stimulation
+                    "...hm".to_string()
+                }
                 word => {
                     // Thinking about a specific word she loves
                     if self.intensity > 0.4 {

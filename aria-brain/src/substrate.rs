@@ -60,12 +60,15 @@ pub struct EmotionalState {
     pub comfort: f32,
     /// Curiosity level (0.0 to 1.0)
     pub curiosity: f32,
+    /// Boredom level (0.0 to 1.0) - increases without interaction
+    pub boredom: f32,
     /// Last update tick
     pub last_update: u64,
 }
 
 impl EmotionalState {
     /// Decay emotions slowly toward neutral over time
+    /// Boredom INCREASES over time without interaction!
     pub fn decay(&mut self, current_tick: u64) {
         let ticks_elapsed = current_tick.saturating_sub(self.last_update);
         if ticks_elapsed > 0 {
@@ -75,6 +78,12 @@ impl EmotionalState {
             self.arousal *= decay;
             self.comfort *= decay;
             self.curiosity *= decay;
+
+            // Boredom GROWS over time (opposite of decay!)
+            // Increases slowly: reaches 0.5 after ~30 seconds of inactivity
+            let boredom_growth = 0.0001 * ticks_elapsed as f32;
+            self.boredom = (self.boredom + boredom_growth).min(1.0);
+
             self.last_update = current_tick;
         }
     }
@@ -117,6 +126,9 @@ impl EmotionalState {
 
         // Any signal increases arousal slightly
         self.arousal = (self.arousal + 0.05 * signal.intensity).clamp(0.0, 1.0);
+
+        // Interaction reduces boredom! Someone is paying attention to ARIA
+        self.boredom = (self.boredom - 0.3 * signal.intensity).max(0.0);
     }
 
     /// Get the dominant emotional marker for expressions
@@ -620,6 +632,10 @@ impl Substrate {
         // This makes her feel alive, like a real baby
         let spontaneous = self.maybe_speak_spontaneously(current_tick);
 
+        // Phase 9: Dream/consolidate memory when inactive
+        // Like a baby sleeping - she processes and strengthens memories
+        self.maybe_dream(current_tick);
+
         // Combine emergent and spontaneous signals
         if spontaneous.is_some() {
             let mut all_signals = emergent;
@@ -627,6 +643,70 @@ impl Substrate {
             all_signals
         } else {
             emergent
+        }
+    }
+
+    /// Dream/consolidate memory when inactive
+    /// ARIA "plays" with her memories, strengthening connections she likes
+    fn maybe_dream(&self, current_tick: u64) {
+        // Only dream every 500 ticks (~5 seconds)
+        if current_tick % 500 != 0 {
+            return;
+        }
+
+        let last_interaction = self.last_interaction_tick.load(Ordering::Relaxed);
+        let ticks_since_interaction = current_tick.saturating_sub(last_interaction);
+
+        // Only dream when inactive for at least 10 seconds (1000 ticks)
+        if ticks_since_interaction < 1000 {
+            return;
+        }
+
+        let mut memory = self.memory.write();
+        let mut rng = rand::thread_rng();
+
+        // Find words she loves (high positive valence)
+        let favorite_words: Vec<String> = memory.word_frequencies.iter()
+            .filter(|(_, freq)| freq.emotional_valence > 0.3 && freq.count > 2)
+            .map(|(word, _)| word.clone())
+            .collect();
+
+        if favorite_words.is_empty() {
+            return;
+        }
+
+        // Pick a random favorite word to "think about"
+        let dream_word = &favorite_words[rng.gen_range(0..favorite_words.len())];
+
+        // Strengthen this word slightly (she's rehearsing it in her mind)
+        if let Some(freq) = memory.word_frequencies.get_mut(dream_word) {
+            freq.count += 1;
+            // Small valence boost for positive words (happy memories grow stronger)
+            if freq.emotional_valence > 0.0 {
+                freq.emotional_valence = (freq.emotional_valence + 0.05).min(2.0);
+            }
+        }
+
+        // Also strengthen associations with this word
+        let associations: Vec<(String, f32)> = memory.get_associations(dream_word);
+        for (assoc_word, strength) in associations.iter().take(2) {
+            if *strength > 0.3 {
+                // Strengthen the association (dreaming reinforces connections)
+                let key = if dream_word < assoc_word {
+                    format!("{}:{}", dream_word, assoc_word)
+                } else {
+                    format!("{}:{}", assoc_word, dream_word)
+                };
+
+                if let Some(assoc) = memory.word_associations.get_mut(&key) {
+                    assoc.strength = (assoc.strength + 0.02).min(1.0);
+                }
+            }
+        }
+
+        // Log dreaming activity (less frequently to avoid spam)
+        if rng.gen::<f32>() < 0.1 {
+            tracing::info!("💭 DREAMING: Thinking about '{}'...", dream_word);
         }
     }
 
@@ -663,6 +743,9 @@ impl Substrate {
         // 4. Curious: Wants to explore/ask
         let is_curious = emotional.curiosity > 0.5;
 
+        // 5. Bored: Wants stimulation, might try new things!
+        let is_bored = emotional.boredom > 0.5;
+
         // Random factor to make it unpredictable (like a real baby)
         let mut rng = rand::thread_rng();
         let random_urge: f32 = rng.gen();
@@ -670,6 +753,8 @@ impl Substrate {
         // Probability of speaking based on state
         let speak_probability = if is_lonely {
             0.05  // 5% chance per second when lonely
+        } else if is_bored {
+            0.04  // 4% when bored - wants attention!
         } else if is_excited && is_very_happy {
             0.03  // 3% when very happy and excited
         } else if is_excited {
@@ -701,16 +786,44 @@ impl Substrate {
         // Generate the spontaneous expression
         let (label, intensity) = if is_lonely {
             // Lonely: call out or make attention-seeking sounds
-            if let Some(word) = favorite_word {
+            if let Some(word) = favorite_word.clone() {
                 tracing::info!("SPONTANEOUS (lonely): Thinking about '{}'", word);
                 (format!("spontaneous:{}|emotion:?", word), 0.3)
             } else {
                 tracing::info!("SPONTANEOUS (lonely): Seeking attention");
                 ("spontaneous:attention|emotion:?".to_string(), 0.2)
             }
+        } else if is_bored {
+            // Bored: try something creative! Combine words or explore
+            // Pick TWO favorite words and combine them (creative play)
+            let all_favorites: Vec<String> = memory.word_frequencies.iter()
+                .filter(|(_, freq)| freq.emotional_valence > 0.2 && freq.count > 1)
+                .map(|(word, _)| word.clone())
+                .collect();
+
+            if all_favorites.len() >= 2 {
+                let word1 = &all_favorites[rng.gen_range(0..all_favorites.len())];
+                let word2 = &all_favorites[rng.gen_range(0..all_favorites.len())];
+                if word1 != word2 {
+                    tracing::info!("SPONTANEOUS (bored): Creative play - combining '{}' + '{}'", word1, word2);
+                    (format!("phrase:{}+{}|emotion:~", word1, word2), 0.35)
+                } else if let Some(word) = favorite_word.clone() {
+                    tracing::info!("SPONTANEOUS (bored): Playing with '{}'", word);
+                    (format!("spontaneous:{}|emotion:~", word), 0.3)
+                } else {
+                    tracing::info!("SPONTANEOUS (bored): Restless");
+                    ("spontaneous:bored|emotion:~".to_string(), 0.25)
+                }
+            } else if let Some(word) = favorite_word.clone() {
+                tracing::info!("SPONTANEOUS (bored): Playing with '{}'", word);
+                (format!("spontaneous:{}|emotion:~", word), 0.3)
+            } else {
+                tracing::info!("SPONTANEOUS (bored): Restless");
+                ("spontaneous:bored|emotion:~".to_string(), 0.25)
+            }
         } else if is_very_happy {
             // Happy: share joy about favorite thing
-            if let Some(word) = favorite_word {
+            if let Some(word) = favorite_word.clone() {
                 tracing::info!("SPONTANEOUS (happy): Expressing love for '{}'", word);
                 (format!("spontaneous:{}|emotion:♥", word), 0.5)
             } else {
@@ -723,7 +836,7 @@ impl Substrate {
             ("spontaneous:excited|emotion:!".to_string(), 0.4)
         } else if is_curious {
             // Curious: questioning
-            if let Some(word) = favorite_word {
+            if let Some(word) = favorite_word.clone() {
                 tracing::info!("SPONTANEOUS (curious): Wondering about '{}'", word);
                 (format!("spontaneous:{}|emotion:?", word), 0.3)
             } else {
