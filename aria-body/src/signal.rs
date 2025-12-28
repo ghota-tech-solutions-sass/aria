@@ -108,6 +108,56 @@ impl Signal {
             (self.label.clone(), None)
         };
 
+        // If the brain is speaking spontaneously (without being asked)
+        if main_label.starts_with("spontaneous:") {
+            let content = main_label.strip_prefix("spontaneous:").unwrap_or(&main_label);
+
+            // Different spontaneous expressions
+            let base_expression = match content {
+                "attention" => {
+                    // Seeking attention
+                    if self.intensity > 0.3 {
+                        "...hé ?".to_string()
+                    } else {
+                        "...".to_string()
+                    }
+                }
+                "joy" => {
+                    // General joy
+                    "♪~".to_string()
+                }
+                "excited" => {
+                    // Excited babbling
+                    "ah!".to_string()
+                }
+                "curious" => {
+                    // General curiosity
+                    "hm?".to_string()
+                }
+                "babble" => {
+                    // Soft babbling
+                    "mmm~".to_string()
+                }
+                word => {
+                    // Thinking about a specific word she loves
+                    if self.intensity > 0.4 {
+                        format!("{}!", word)
+                    } else if self.intensity > 0.2 {
+                        word.to_string()
+                    } else {
+                        format!("{}...", word)
+                    }
+                }
+            };
+
+            // Add emotional marker if present
+            return if let Some(marker) = emotional_marker {
+                format!("{} {}", base_expression, marker)
+            } else {
+                base_expression
+            };
+        }
+
         // If the brain is answering a question (oui/non)
         if main_label.starts_with("answer:") {
             let answer = main_label.strip_prefix("answer:").unwrap_or(&main_label);

@@ -456,7 +456,45 @@ ARIA: non peur...
 - `aria-brain/src/substrate.rs` : `last_was_question`, détection et réponse
 - `aria-body/src/signal.rs` : Parsing du format `answer:`
 
+### 2025-12-28 - Session 6b: Spontanéité !
+
+**Nouvelle fonctionnalité** : ARIA parle maintenant sans qu'on lui demande !
+
+Un vrai bébé ne répond pas seulement - il **initie** les interactions. Il babille, attire l'attention, exprime ses besoins spontanément.
+
+**Déclencheurs de parole spontanée** :
+1. **Solitude** (3000 ticks sans interaction) → "...hé ?" ou pense à un mot aimé
+2. **Excitation** (arousal > 0.6) → "ah!"
+3. **Joie** (happiness > 0.5) → "♪~" ou son mot préféré + ♥
+4. **Curiosité** (curiosity > 0.5) → "hm?"
+5. **Baseline** (0.1% rare) → "mmm~"
+
+**Probabilités** (par seconde) :
+- Solitaire : 5%
+- Très heureuse + excitée : 3%
+- Excitée : 2%
+- Curieuse : 1%
+- Baseline : 0.1%
+
+**Mot favori** :
+ARIA choisit le mot avec la meilleure combinaison de :
+- Valence émotionnelle positive (> 0.5)
+- Fréquence d'apparition (entendu > 3 fois)
+
+**Comportement attendu** :
+```
+[30 secondes sans parler]
+ARIA: moka... ?    ← Elle pense à son mot préféré
+
+[Tu lui as dit des choses positives]
+ARIA: moka ♥      ← Elle exprime sa joie spontanément
+```
+
+**Fichiers modifiés** :
+- `aria-brain/src/substrate.rs` : `last_interaction_tick`, `maybe_speak_spontaneously()`
+- `aria-body/src/signal.rs` : Parsing du format `spontaneous:`
+
 ---
 
 *Dernière mise à jour : 2025-12-28*
-*Version ARIA : 0.1.10*
+*Version ARIA : 0.1.11*

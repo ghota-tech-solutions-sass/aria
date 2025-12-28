@@ -170,6 +170,9 @@ pub struct Substrate {
 
     /// Was the last signal a question? (for responding with oui/non)
     last_was_question: RwLock<bool>,
+
+    /// Last tick when someone talked to ARIA (for spontaneity)
+    last_interaction_tick: AtomicU64,
 }
 
 /// An attractor in semantic space
@@ -238,6 +241,7 @@ impl Substrate {
             recent_words: RwLock::new(Vec::new()),
             emotional_state: RwLock::new(EmotionalState::default()),
             last_was_question: RwLock::new(false),
+            last_interaction_tick: AtomicU64::new(0),
         }
     }
 
@@ -261,6 +265,9 @@ impl Substrate {
         };
 
         let current_tick = self.tick.load(Ordering::Relaxed);
+
+        // Record this interaction for spontaneity tracking
+        self.last_interaction_tick.store(current_tick, Ordering::Relaxed);
 
         // Detect if this is a question (ends with ? or has question marker)
         let is_question = signal.label.ends_with('?')
@@ -511,7 +518,131 @@ impl Substrate {
             self.natural_selection();
         }
 
-        emergent
+        // Phase 8: Spontaneous expression - ARIA speaks without being asked!
+        // This makes her feel alive, like a real baby
+        let spontaneous = self.maybe_speak_spontaneously(current_tick);
+
+        // Combine emergent and spontaneous signals
+        if spontaneous.is_some() {
+            let mut all_signals = emergent;
+            all_signals.extend(spontaneous);
+            all_signals
+        } else {
+            emergent
+        }
+    }
+
+    /// Maybe generate a spontaneous expression
+    /// ARIA might speak on her own if:
+    /// - It's been a while since someone talked to her (lonely)
+    /// - She's excited/aroused (wants to share)
+    /// - She's thinking about a word she loves
+    fn maybe_speak_spontaneously(&self, current_tick: u64) -> Option<Signal> {
+        // Only check every 100 ticks (~1 second) to avoid spam
+        if current_tick % 100 != 0 {
+            return None;
+        }
+
+        let last_interaction = self.last_interaction_tick.load(Ordering::Relaxed);
+        let ticks_since_interaction = current_tick.saturating_sub(last_interaction);
+
+        // Get emotional state
+        let emotional = self.emotional_state.read();
+
+        // Different triggers for spontaneous speech:
+
+        // 1. Lonely: No interaction for 30+ seconds (3000 ticks)
+        //    ARIA might call out or babble to get attention
+        let lonely_threshold = 3000;
+        let is_lonely = ticks_since_interaction > lonely_threshold;
+
+        // 2. Excited: High arousal, wants to express
+        let is_excited = emotional.arousal > 0.6;
+
+        // 3. Happy: Wants to share joy
+        let is_very_happy = emotional.happiness > 0.5;
+
+        // 4. Curious: Wants to explore/ask
+        let is_curious = emotional.curiosity > 0.5;
+
+        // Random factor to make it unpredictable (like a real baby)
+        let mut rng = rand::thread_rng();
+        let random_urge: f32 = rng.gen();
+
+        // Probability of speaking based on state
+        let speak_probability = if is_lonely {
+            0.05  // 5% chance per second when lonely
+        } else if is_excited && is_very_happy {
+            0.03  // 3% when very happy and excited
+        } else if is_excited {
+            0.02  // 2% when just excited
+        } else if is_curious {
+            0.01  // 1% when curious
+        } else {
+            0.001 // 0.1% baseline (very rare)
+        };
+
+        if random_urge > speak_probability {
+            return None;
+        }
+
+        // ARIA wants to speak! What does she say?
+        let memory = self.memory.read();
+
+        // Find a word she loves (high positive valence)
+        let favorite_word = memory.word_frequencies.iter()
+            .filter(|(_, freq)| freq.emotional_valence > 0.5 && freq.count > 3)
+            .max_by(|(_, a), (_, b)| {
+                // Prefer words with high valence AND frequency
+                let score_a = a.emotional_valence * (a.count as f32).sqrt();
+                let score_b = b.emotional_valence * (b.count as f32).sqrt();
+                score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(word, _)| word.clone());
+
+        // Generate the spontaneous expression
+        let (label, intensity) = if is_lonely {
+            // Lonely: call out or make attention-seeking sounds
+            if let Some(word) = favorite_word {
+                tracing::info!("SPONTANEOUS (lonely): Thinking about '{}'", word);
+                (format!("spontaneous:{}|emotion:?", word), 0.3)
+            } else {
+                tracing::info!("SPONTANEOUS (lonely): Seeking attention");
+                ("spontaneous:attention|emotion:?".to_string(), 0.2)
+            }
+        } else if is_very_happy {
+            // Happy: share joy about favorite thing
+            if let Some(word) = favorite_word {
+                tracing::info!("SPONTANEOUS (happy): Expressing love for '{}'", word);
+                (format!("spontaneous:{}|emotion:♥", word), 0.5)
+            } else {
+                tracing::info!("SPONTANEOUS (happy): General joy");
+                ("spontaneous:joy|emotion:♥".to_string(), 0.4)
+            }
+        } else if is_excited {
+            // Excited: energetic babbling
+            tracing::info!("SPONTANEOUS (excited): Energetic expression");
+            ("spontaneous:excited|emotion:!".to_string(), 0.4)
+        } else if is_curious {
+            // Curious: questioning
+            if let Some(word) = favorite_word {
+                tracing::info!("SPONTANEOUS (curious): Wondering about '{}'", word);
+                (format!("spontaneous:{}|emotion:?", word), 0.3)
+            } else {
+                tracing::info!("SPONTANEOUS (curious): General curiosity");
+                ("spontaneous:curious|emotion:?".to_string(), 0.3)
+            }
+        } else {
+            // Rare baseline: soft babbling
+            tracing::info!("SPONTANEOUS: Soft babbling");
+            ("spontaneous:babble|emotion:~".to_string(), 0.2)
+        };
+
+        // Create the signal
+        let mut signal = Signal::from_vector([0.0; 8], label);
+        signal.intensity = intensity;
+
+        Some(signal)
     }
 
     fn propagate_internal_signals(&self) {
