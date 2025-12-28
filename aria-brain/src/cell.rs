@@ -58,6 +58,7 @@ impl DNA {
     }
 
     /// Sexual reproduction with another DNA (crossover + mutation)
+    #[allow(dead_code)]
     pub fn reproduce_with(&self, other: &DNA) -> DNA {
         let mut rng = rand::thread_rng();
         let crossover_point = rng.gen_range(0..8);
@@ -80,6 +81,7 @@ impl DNA {
     }
 
     /// Calculate similarity with another DNA (0.0 = different, 1.0 = identical)
+    #[allow(dead_code)]
     pub fn similarity(&self, other: &DNA) -> f32 {
         let threshold_sim: f32 = self.thresholds.iter()
             .zip(other.thresholds.iter())
@@ -238,15 +240,26 @@ impl Cell {
     fn process_inbox(&mut self) {
         for signal in self.inbox.drain(..) {
             // Integrate signal into internal state
+            // Amplify the effect - babies need strong reactions!
             for (i, s) in signal.content.iter().enumerate() {
                 if i < 8 {
                     let reaction = self.dna.reactions[i];
-                    self.state[i] += s * signal.intensity * reaction;
+                    // Amplify by 10x to make reactions more visible
+                    self.state[i] += s * signal.intensity * reaction * 10.0;
                 }
             }
 
-            // Gain a bit of energy from interactions
-            self.energy += signal.intensity * 0.01;
+            // Also copy signal directly to higher state dimensions
+            // This ensures the signal "echoes" through the cell
+            for (i, s) in signal.content.iter().enumerate() {
+                if i < 8 {
+                    self.state[i + 8] += s * signal.intensity * 5.0;
+                    self.state[i + 16] += s * signal.intensity * 2.5;
+                }
+            }
+
+            // Gain energy from interactions
+            self.energy += signal.intensity * 0.05;
 
             // Strengthen connection if it exists
             for conn in &mut self.connections {
@@ -258,11 +271,12 @@ impl Cell {
             }
         }
 
-        // Normalize state to prevent explosion
+        // Softer normalization - allow states up to 5.0
         let norm: f32 = self.state.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if norm > 1.0 {
+        if norm > 5.0 {
+            let scale = 5.0 / norm;
             for s in &mut self.state {
-                *s /= norm;
+                *s *= scale;
             }
         }
     }
@@ -312,6 +326,7 @@ impl Cell {
     }
 
     /// Calculate semantic distance to a position
+    #[allow(dead_code)]
     pub fn distance_to(&self, other: &[f32; 16]) -> f32 {
         self.position.iter()
             .zip(other.iter())

@@ -151,8 +151,15 @@ async fn evolution_loop(
 
     loop {
         // 1. Receive incoming perceptions (non-blocking)
+        // Immediate emergence check for each signal
         while let Ok(signal) = perception.try_recv() {
-            substrate.inject_signal(signal);
+            let immediate_emergence = substrate.inject_signal(signal);
+            for em_signal in immediate_emergence {
+                info!("IMMEDIATE EMERGENCE! intensity: {:.3}", em_signal.intensity);
+                if em_signal.intensity > 0.01 {
+                    let _ = expression.send(em_signal);
+                }
+            }
         }
 
         // 2. One tick of life
@@ -160,18 +167,19 @@ async fn evolution_loop(
 
         // 3. Send emergent expressions (lowered threshold for baby ARIA)
         for signal in emergent_signals {
-            info!("Emergent signal detected! intensity: {}", signal.intensity);
-            if signal.intensity > 0.05 {
+            info!("EMERGENCE! intensity: {:.3}, label: {}", signal.intensity, signal.label);
+            // Send all emergent signals - even weak ones
+            if signal.intensity > 0.01 {
                 let _ = expression.send(signal);
             }
         }
 
-        // 4. Periodic stats
-        if tick - last_stats_tick >= 1000 {
+        // 4. Periodic stats (every 500 ticks = ~5 seconds)
+        if tick - last_stats_tick >= 500 {
             let stats = substrate.stats();
             info!(
-                "Tick {}: {} cells alive, energy: {:.2}, entropy: {:.4}, clusters: {}",
-                tick, stats.alive_cells, stats.total_energy, stats.entropy, stats.active_clusters
+                "Tick {}: {} cells, energy: {:.2}, entropy: {:.4}, emotion: {}",
+                tick, stats.alive_cells, stats.total_energy, stats.entropy, stats.dominant_emotion
             );
 
             // Update global stats in memory

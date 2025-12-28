@@ -169,6 +169,7 @@ impl LongTermMemory {
     }
 
     /// Remember an important moment
+    #[allow(dead_code)]
     pub fn remember(&mut self, trigger: &str, state: [f32; 32], intensity: f32, outcome: Outcome) {
         // Only remember significant moments
         if intensity > 0.3 {
@@ -272,6 +273,7 @@ impl LongTermMemory {
     }
 
     /// Create an association between stimulus and response
+    #[allow(dead_code)]
     pub fn associate(&mut self, stimulus: [f32; 16], response: [f32; 16], strength: f32) {
         let current_tick = self.stats.total_ticks;
 
@@ -320,6 +322,7 @@ impl LongTermMemory {
     }
 
     /// Learn a word meaning
+    #[allow(dead_code)]
     pub fn learn_word(&mut self, word: &str, vector: [f32; 8], example: &str) {
         if let Some(meaning) = self.vocabulary.get_mut(word) {
             // Update existing meaning
@@ -347,6 +350,7 @@ impl LongTermMemory {
     }
 
     /// Find response for a similar stimulus
+    #[allow(dead_code)]
     pub fn recall(&self, stimulus: &[f32; 16]) -> Option<([f32; 16], f32)> {
         let mut best_match: Option<(&Association, f32)> = None;
 

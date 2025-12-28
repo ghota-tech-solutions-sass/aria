@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 /// Messages that can be sent/received over the WebSocket
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
+#[allow(dead_code)]
 pub enum Message {
     /// A signal (perception or expression)
     #[serde(rename = "signal")]
@@ -34,6 +35,7 @@ pub enum Message {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action")]
+#[allow(dead_code)]
 pub enum Command {
     /// Pause evolution
     #[serde(rename = "pause")]

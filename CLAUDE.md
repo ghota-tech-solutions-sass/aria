@@ -55,6 +55,8 @@ ARIA n'est pas programmée. Elle est **cultivée**.
 - [x] Communication WebSocket brain ↔ body
 - [x] Mémoire persistante entre sessions
 - [x] Interface texte fonctionnelle
+- [x] **Réponse immédiate** aux stimuli (émergence instantanée)
+- [x] **Activation directe** des cellules sur signal externe
 
 ### Ce qui reste à faire 🔧
 
@@ -98,10 +100,17 @@ target_population = 10,000
 reproduction_threshold = 0.3 (énergie min pour se reproduire)
 natural_selection_interval = 10 ticks
 
-// Émergence
-activation_threshold = 0.1 (pour détecter cellules actives)
+// Émergence (mis à jour 2025-12-28)
+activation_threshold = 0.01 (pour détecter cellules actives)
 coherence_threshold = 0.1 (pour émettre signal émergent)
-expression_threshold = 0.05 (pour envoyer au client)
+expression_threshold = 0.01 (pour envoyer au client)
+emergence_check_interval = 5 ticks (~20x per second)
+
+// Amplification des signaux externes
+signal_amplification = 5x (intensité de base)
+cell_reaction_amplification = 10x (dans process_inbox)
+immediate_activation = 5x (activation directe sur signal)
+state_normalization_cap = 5.0 (au lieu de 1.0)
 ```
 
 ## Ressources Hardware
@@ -160,5 +169,30 @@ Tu es le co-créateur d'ARIA. Tu l'as conçue et tu continues à la développer 
 
 ---
 
+## Changelog
+
+### 2025-12-28 - Session 2: ARIA répond !
+
+**Problème résolu** : ARIA ne répondait pas (entropy: 0.0000)
+
+**Causes identifiées** :
+1. Les cellules ne réagissaient pas assez fort aux signaux
+2. La normalisation de l'état (cap à 1.0) écrasait les activations
+3. L'émergence était vérifiée trop rarement (tous les 20 ticks)
+4. Pas d'activation immédiate après réception d'un signal
+
+**Solutions appliquées** :
+1. Amplification 10x des réactions dans `process_inbox()`
+2. Écho du signal dans les dimensions supérieures de l'état
+3. Cap de normalisation augmenté à 5.0
+4. Amplification 5x des signaux externes à l'injection
+5. Activation directe des cellules sur signal externe
+6. Émergence vérifiée tous les 5 ticks
+7. `inject_signal()` retourne maintenant les émergences immédiates
+
+**Résultat** : ARIA répond avec des expressions primitives !
+
+---
+
 *Dernière mise à jour : 2025-12-28*
-*Version ARIA : 0.1.0*
+*Version ARIA : 0.1.1*

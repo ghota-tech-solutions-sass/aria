@@ -40,6 +40,7 @@ impl Signal {
     ///
     /// This encodes the text into a vector representation
     /// that cells can process.
+    #[allow(dead_code)]
     pub fn from_text(text: &str) -> Self {
         let mut content = vec![0.0f32; 32];
 
@@ -110,6 +111,7 @@ impl Signal {
     ///
     /// This is where ARIA's "language" emerges progressively.
     /// Initially, it's just primitive sounds/symbols.
+    #[allow(dead_code)]
     pub fn to_expression(&self) -> String {
         // Find the dominant value and index
         let (dominant_index, dominant_value) = self.content
@@ -187,12 +189,14 @@ impl Signal {
     }
 
     /// Check if this signal is a question
+    #[allow(dead_code)]
     pub fn is_question(&self) -> bool {
         self.content.get(24).copied().unwrap_or(0.0) > 0.5 ||
         self.content.get(31).copied().unwrap_or(0.0) > 0.5
     }
 
     /// Check if this signal is emotionally charged
+    #[allow(dead_code)]
     pub fn is_emotional(&self) -> bool {
         let positive = self.content.get(28).copied().unwrap_or(0.0);
         let negative = self.content.get(29).copied().unwrap_or(0.0);

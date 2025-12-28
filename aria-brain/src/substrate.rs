@@ -8,7 +8,6 @@ use crate::signal::Signal;
 use crate::memory::LongTermMemory;
 
 use dashmap::DashMap;
-use rayon::prelude::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use parking_lot::RwLock;
@@ -35,12 +34,14 @@ pub struct Substrate {
     /// Long-term memory reference
     memory: Arc<RwLock<LongTermMemory>>,
 
-    /// Global energy available
+    /// Global energy available (reserved for future use)
+    #[allow(dead_code)]
     global_energy: AtomicU64,
 }
 
 /// An attractor in semantic space
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct Attractor {
     pub position: [f32; 16],
     pub strength: f32,
@@ -96,32 +97,44 @@ impl Substrate {
         }
     }
 
-    /// Inject an external signal (perception)
-    pub fn inject_signal(&self, signal: Signal) {
+    /// Inject an external signal (perception) and return immediate emergence
+    pub fn inject_signal(&self, signal: Signal) -> Vec<Signal> {
         // Transform signal to fragments for cells
+        // Amplify external signals - they're important!
         let fragment = SignalFragment {
             source_id: 0, // External source
             content: signal.to_vector(),
-            intensity: signal.intensity,
+            intensity: signal.intensity * 5.0,  // 5x amplification for external input
         };
 
         // Get semantic position of the signal
         let target_position = signal.semantic_position();
 
+        tracing::info!("Signal received: '{}' intensity={:.2}", signal.label, fragment.intensity);
+
         // Distribute to ALL cells (external signals are broadcast)
-        // Intensity decreases with semantic distance
+        // Minimal attenuation - we want all cells to "hear" external input
         self.cells.iter_mut().for_each(|mut entry| {
             let cell = entry.value_mut();
             let distance = semantic_distance(&cell.position, &target_position);
 
-            // All cells receive external signals, but with distance-based attenuation
+            // Very mild attenuation - all cells get at least 20% of original
             let mut attenuated_fragment = fragment.clone();
-            attenuated_fragment.intensity = fragment.intensity / (1.0 + distance * 0.5);
+            let attenuation = (1.0 / (1.0 + distance * 0.1)).max(0.2);
+            attenuated_fragment.intensity = fragment.intensity * attenuation;
 
-            cell.receive(attenuated_fragment);
+            cell.receive(attenuated_fragment.clone());
 
             // External signals also give energy boost (attention/arousal)
-            cell.energy = (cell.energy + 0.01 * fragment.intensity).min(1.5);
+            cell.energy = (cell.energy + 0.05 * fragment.intensity).min(1.5);
+
+            // IMMEDIATE ACTIVATION: External signals directly activate cells
+            // This makes ARIA respond faster
+            for (i, s) in attenuated_fragment.content.iter().enumerate() {
+                if i < 8 {
+                    cell.state[i] += s * attenuated_fragment.intensity * 5.0;
+                }
+            }
         });
 
         // Create a temporary attractor
@@ -143,6 +156,10 @@ impl Substrate {
                 buffer.remove(0);
             }
         }
+
+        // IMMEDIATE RESPONSE: Check for emergence right after signal injection
+        let current_tick = self.tick.load(Ordering::Relaxed);
+        self.detect_emergence(current_tick)
     }
 
     /// One tick of life
@@ -151,8 +168,9 @@ impl Substrate {
 
         let mut new_cells: Vec<Cell> = Vec::new();
         let mut dead_cells: Vec<u64> = Vec::new();
-        let mut connection_requests: Vec<(u64, u64)> = Vec::new();
-        let mut emitted_signals: Vec<([f32; 8], [f32; 16], f32)> = Vec::new();
+        // Reserved for future use
+        let _connection_requests: Vec<(u64, u64)> = Vec::new();
+        let _emitted_signals: Vec<([f32; 8], [f32; 16], f32)> = Vec::new();
 
         // Phase 1: Each cell lives (parallel)
         self.cells.iter_mut().for_each(|mut entry| {
@@ -169,8 +187,8 @@ impl Substrate {
                 CellAction::Connect => {
                     // Will create connection later
                 }
-                CellAction::Signal(content) => {
-                    // Collect emitted signals
+                CellAction::Signal(_content) => {
+                    // Collect emitted signals (TODO: process)
                 }
                 CellAction::Move(direction) => {
                     // Apply movement
@@ -285,22 +303,22 @@ impl Substrate {
     }
 
     fn detect_emergence(&self, current_tick: u64) -> Vec<Signal> {
-        // Only check for emergence every 50 ticks (throttle output)
-        if current_tick % 50 != 0 {
+        // Check for emergence every 5 ticks (~20x per second) - more responsive
+        if current_tick % 5 != 0 {
             return Vec::new();
         }
 
-        // Find cells with any meaningful activation (lowered threshold)
+        // Find cells with ANY activation (very low threshold)
         let active_cells: Vec<_> = self.cells.iter()
             .filter(|entry| {
                 let cell = entry.value();
-                cell.state.iter().map(|x| x.abs()).sum::<f32>() > 0.1
+                cell.state.iter().map(|x| x.abs()).sum::<f32>() > 0.01
             })
             .take(1000) // Limit for performance
             .collect();
 
         // Need at least a few active cells
-        if active_cells.len() < 3 {
+        if active_cells.is_empty() {
             return Vec::new();
         }
 
