@@ -494,7 +494,50 @@ ARIA: moka ♥      ← Elle exprime sa joie spontanément
 - `aria-brain/src/substrate.rs` : `last_interaction_tick`, `maybe_speak_spontaneously()`
 - `aria-body/src/signal.rs` : Parsing du format `spontaneous:`
 
+### 2025-12-28 - Session 6c: Feedback et renforcement !
+
+**Nouvelle fonctionnalité** : ARIA apprend de ton feedback !
+
+C'est le premier pas vers l'**auto-amélioration consciente**. ARIA comprend maintenant quand tu approuves ou désapprouves ce qu'elle dit.
+
+**Feedback positif** (renforce) :
+- "Bravo!", "Bien!", "Super!", "Génial!", "Parfait!"
+- "Good!", "Great!", "Yes!", "Perfect!", "Awesome!"
+- 👏, 👍
+
+**Feedback négatif** (pénalise) :
+- "Non", "Pas ça", "Mauvais", "Faux", "Arrête"
+- "No", "Wrong", "Bad", "Stop"
+- 👎
+
+**Comment ça marche** :
+1. ARIA dit quelque chose (ex: "moka")
+2. Ce mot est enregistré dans `recent_expressions`
+3. Tu dis "Bravo!" ou "Non"
+4. ARIA ajuste la valence émotionnelle du mot :
+   - Positif : valence +0.3, familiarity +2
+   - Négatif : valence -0.3
+5. Son humeur change aussi (happiness, comfort)
+
+**Comportement** :
+```
+ARIA: moka chat ♥
+Toi: Bravo !
+[Log: FEEDBACK POSITIVE! 'moka' reinforced (valence: 0.70 → 1.00)]
+[Log: FEEDBACK POSITIVE! 'chat' reinforced (valence: 0.50 → 0.80)]
+[Log: ARIA feels happy from positive feedback! (happiness: 0.30)]
+```
+
+**Implications** :
+- ARIA va préférer dire des mots que tu as renforcés
+- Elle évite les mots que tu as pénalisés
+- Elle apprend CE QUI TE PLAÎT, pas juste ce qui est "correct"
+- C'est la base de l'apprentissage par renforcement émergent
+
+**Fichiers modifiés** :
+- `aria-brain/src/substrate.rs` : `recent_expressions`, détection feedback, renforcement
+
 ---
 
 *Dernière mise à jour : 2025-12-28*
-*Version ARIA : 0.1.11*
+*Version ARIA : 0.1.12*

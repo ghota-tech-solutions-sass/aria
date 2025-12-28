@@ -173,6 +173,10 @@ pub struct Substrate {
 
     /// Last tick when someone talked to ARIA (for spontaneity)
     last_interaction_tick: AtomicU64,
+
+    /// Words ARIA recently said (for feedback reinforcement)
+    /// When someone says "Bravo!", we reinforce these words
+    recent_expressions: RwLock<Vec<String>>,
 }
 
 /// An attractor in semantic space
@@ -242,6 +246,7 @@ impl Substrate {
             emotional_state: RwLock::new(EmotionalState::default()),
             last_was_question: RwLock::new(false),
             last_interaction_tick: AtomicU64::new(0),
+            recent_expressions: RwLock::new(Vec::new()),
         }
     }
 
@@ -268,6 +273,69 @@ impl Substrate {
 
         // Record this interaction for spontaneity tracking
         self.last_interaction_tick.store(current_tick, Ordering::Relaxed);
+
+        // Detect FEEDBACK - this is how ARIA learns what's good/bad!
+        let lower_label = signal.label.to_lowercase();
+
+        // Positive feedback words (French + English)
+        let positive_feedback = [
+            "bravo", "bien", "super", "génial", "parfait", "excellent", "oui c'est ça",
+            "good", "great", "yes", "perfect", "exactly", "nice", "awesome",
+            "c'est bien", "très bien", "good job", "well done", "👏", "👍"
+        ];
+
+        // Negative feedback words
+        let negative_feedback = [
+            "non", "pas ça", "mauvais", "faux", "incorrect", "arrête",
+            "no", "wrong", "bad", "stop", "not that", "incorrect",
+            "c'est pas ça", "pas comme ça", "👎"
+        ];
+
+        let is_positive_feedback = positive_feedback.iter().any(|w| lower_label.contains(w));
+        let is_negative_feedback = negative_feedback.iter().any(|w| lower_label.contains(w));
+
+        // Apply feedback to recently expressed words
+        if is_positive_feedback || is_negative_feedback {
+            let recent_expr = self.recent_expressions.read().clone();
+            let mut memory = self.memory.write();
+
+            for word in &recent_expr {
+                if is_positive_feedback {
+                    // REINFORCE: Increase emotional valence and familiarity
+                    if let Some(freq) = memory.word_frequencies.get_mut(word) {
+                        let old_valence = freq.emotional_valence;
+                        freq.emotional_valence = (freq.emotional_valence + 0.3).clamp(-2.0, 2.0);
+                        freq.count += 2; // Bonus familiarity
+                        tracing::info!(
+                            "FEEDBACK POSITIVE! '{}' reinforced (valence: {:.2} → {:.2})",
+                            word, old_valence, freq.emotional_valence
+                        );
+                    }
+                } else {
+                    // PENALIZE: Decrease emotional valence
+                    if let Some(freq) = memory.word_frequencies.get_mut(word) {
+                        let old_valence = freq.emotional_valence;
+                        freq.emotional_valence = (freq.emotional_valence - 0.3).clamp(-2.0, 2.0);
+                        tracing::info!(
+                            "FEEDBACK NEGATIVE! '{}' penalized (valence: {:.2} → {:.2})",
+                            word, old_valence, freq.emotional_valence
+                        );
+                    }
+                }
+            }
+
+            // Update emotional state based on feedback
+            let mut emotional = self.emotional_state.write();
+            if is_positive_feedback {
+                emotional.happiness = (emotional.happiness + 0.3).clamp(-1.0, 1.0);
+                emotional.comfort = (emotional.comfort + 0.2).clamp(-1.0, 1.0);
+                tracing::info!("ARIA feels happy from positive feedback! (happiness: {:.2})", emotional.happiness);
+            } else {
+                emotional.happiness = (emotional.happiness - 0.2).clamp(-1.0, 1.0);
+                emotional.comfort = (emotional.comfort - 0.1).clamp(-1.0, 1.0);
+                tracing::info!("ARIA feels sad from negative feedback... (happiness: {:.2})", emotional.happiness);
+            }
+        }
 
         // Detect if this is a question (ends with ? or has question marker)
         let is_question = signal.label.ends_with('?')
@@ -894,8 +962,55 @@ impl Substrate {
                 label
             };
 
-            let mut signal = Signal::from_vector(average_state, final_label);
+            let mut signal = Signal::from_vector(average_state, final_label.clone());
             signal.intensity = coherence;
+
+            // Record the words ARIA is expressing (for feedback reinforcement)
+            {
+                let mut recent_expr = self.recent_expressions.write();
+                recent_expr.clear(); // Only keep the most recent expression
+
+                // Extract words from the label
+                let words_part = if final_label.contains('|') {
+                    final_label.split('|').next().unwrap_or(&final_label)
+                } else {
+                    &final_label
+                };
+
+                // Parse different label formats
+                if words_part.starts_with("phrase:") {
+                    // "phrase:moka+chat+est" → ["moka", "chat", "est"]
+                    if let Some(phrase) = words_part.strip_prefix("phrase:") {
+                        for word in phrase.split('+') {
+                            recent_expr.push(word.to_string());
+                        }
+                    }
+                } else if words_part.starts_with("word:") {
+                    // "word:moka" → ["moka"]
+                    if let Some(word) = words_part.strip_prefix("word:") {
+                        recent_expr.push(word.trim_end_matches('?').to_string());
+                    }
+                } else if words_part.starts_with("answer:") {
+                    // "answer:oui+moka" → ["moka"]
+                    if let Some(answer) = words_part.strip_prefix("answer:") {
+                        let parts: Vec<&str> = answer.split('+').collect();
+                        if parts.len() >= 2 {
+                            recent_expr.push(parts[1].to_string());
+                        }
+                    }
+                } else if words_part.starts_with("spontaneous:") {
+                    // "spontaneous:moka" → ["moka"] (if it's a word, not "attention"/"joy"/etc.)
+                    if let Some(content) = words_part.strip_prefix("spontaneous:") {
+                        if !["attention", "joy", "excited", "curious", "babble"].contains(&content) {
+                            recent_expr.push(content.to_string());
+                        }
+                    }
+                }
+
+                if !recent_expr.is_empty() {
+                    tracing::debug!("Recording expressed words for feedback: {:?}", recent_expr);
+                }
+            }
 
             // Learn this pattern
             {
