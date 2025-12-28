@@ -70,18 +70,36 @@ impl Signal {
 
     /// Convert to expression - ARIA's baby babbling
     pub fn to_expression(&self) -> String {
+        // Parse label for word and emotional marker
+        // Format: "word:moka|emotion:♥" or just "word:moka" or "emergence@123"
+        let (main_label, emotional_marker) = if let Some(pipe_pos) = self.label.find('|') {
+            let main = &self.label[..pipe_pos];
+            let emotion_part = &self.label[pipe_pos + 1..];
+            let marker = emotion_part.strip_prefix("emotion:").unwrap_or("");
+            (main.to_string(), if marker.is_empty() { None } else { Some(marker.to_string()) })
+        } else {
+            (self.label.clone(), None)
+        };
+
         // If the brain matched a known word, use it!
-        if self.label.starts_with("word:") {
-            let word = self.label.strip_prefix("word:").unwrap_or(&self.label);
+        if main_label.starts_with("word:") {
+            let word = main_label.strip_prefix("word:").unwrap_or(&main_label);
             // Add some baby-like variations
-            if self.intensity > 0.5 {
-                return format!("{}!", word.to_uppercase());
+            let base_expression = if self.intensity > 0.5 {
+                format!("{}!", word.to_uppercase())
             } else if self.intensity > 0.3 {
-                return word.to_string();
+                word.to_string()
             } else {
                 // Whisper/uncertain
-                return format!("{}...", word);
-            }
+                format!("{}...", word)
+            };
+
+            // Add emotional marker if present
+            return if let Some(marker) = emotional_marker {
+                format!("{} {}", base_expression, marker)
+            } else {
+                base_expression
+            };
         }
 
         // Vowels - the first sounds a baby makes
@@ -161,6 +179,11 @@ impl Signal {
         // Capitalize for very high intensity (like shouting)
         if self.intensity > 0.7 {
             expression = expression.to_uppercase();
+        }
+
+        // Add emotional marker if present (for babbling too)
+        if let Some(marker) = emotional_marker {
+            expression = format!("{} {}", expression, marker);
         }
 
         expression

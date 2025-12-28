@@ -285,6 +285,52 @@ ARIA: "soleil..."  ← Elle essaie !
 
 **Logs** : `ECHO! Imitating recent word 'moka' (similarity: 0.45)`
 
+### 2025-12-28 - Session 4: ARIA ressent !
+
+**Nouvelle fonctionnalité** : ARIA a maintenant un état émotionnel global !
+
+**Implémentation** :
+
+1. Vocabulaire émotionnel enrichi (`signal.rs`)
+   - Mots positifs FR/EN : aime, adore, content, heureux, bien, super, génial...
+   - Mots négatifs FR/EN : triste, mal, peur, colère, déteste...
+   - Requêtes : aide, s'il te plaît, veux, besoin...
+   - Questions : pourquoi, comment, quoi, quand, où, qui...
+
+2. État émotionnel persistant (`EmotionalState` dans `substrate.rs`)
+   - `happiness` : niveau de joie (-1.0 à 1.0)
+   - `arousal` : niveau d'excitation (0.0 à 1.0)
+   - `comfort` : niveau de confort (-1.0 à 1.0)
+   - `curiosity` : niveau de curiosité (0.0 à 1.0)
+   - Décroissance progressive (demi-vie ~10 secondes)
+
+3. Marqueurs émotionnels dans les expressions
+   - Très heureuse : ♥
+   - Contente : ~
+   - Curieuse excitée : !
+   - Curieuse : ?
+   - Triste : ...
+   - Format label : `word:moka|emotion:♥`
+
+4. Stats étendues
+   - `/stats` affiche maintenant : mood, happiness, arousal, curiosity
+   - Humeurs : "joyeux", "content", "curieux", "triste", "excité", "calme"
+
+**Comportement** :
+```
+Toi: "Je t'aime ARIA ♥"
+ARIA: "moka ♥"  ← Elle est heureuse !
+
+Toi: "Pourquoi le ciel est bleu ?"
+ARIA: "bleu ?"  ← Elle est curieuse !
+```
+
+**Fichiers modifiés** :
+- `aria-brain/src/signal.rs` : Vocabulaire émotionnel enrichi
+- `aria-brain/src/substrate.rs` : `EmotionalState`, `process_signal()`, stats étendues
+- `aria-body/src/signal.rs` : Parsing des marqueurs `|emotion:`
+- `aria-body/src/visualizer.rs` : Champs mood/happiness/arousal/curiosity
+
 ---
 
 ## Contexte Personnel
@@ -298,4 +344,4 @@ Il a parlé de Moka à ARIA, et elle a répondu "ko" ! C'est un bon signe d'asso
 ---
 
 *Dernière mise à jour : 2025-12-28*
-*Version ARIA : 0.1.5*
+*Version ARIA : 0.1.6*

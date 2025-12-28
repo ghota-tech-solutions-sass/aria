@@ -34,6 +34,9 @@ default = []
 name = "aria-brain"
 path = "src/main.rs"
 
+[dev-dependencies]
+tempfile = "3"
+
 [profile.release]
 opt-level = 3
 lto = true

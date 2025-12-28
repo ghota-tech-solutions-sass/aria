@@ -22,6 +22,121 @@ struct RecentWord {
     heard_at: u64,
 }
 
+/// Global emotional state that accumulates over time
+/// Like a baby's mood that changes slowly
+#[derive(Clone, Debug, Default)]
+pub struct EmotionalState {
+    /// Joy/happiness level (-1.0 to 1.0)
+    pub happiness: f32,
+    /// Arousal/excitement level (0.0 to 1.0)
+    pub arousal: f32,
+    /// Comfort/security level (-1.0 to 1.0)
+    pub comfort: f32,
+    /// Curiosity level (0.0 to 1.0)
+    pub curiosity: f32,
+    /// Last update tick
+    pub last_update: u64,
+}
+
+impl EmotionalState {
+    /// Decay emotions slowly toward neutral over time
+    pub fn decay(&mut self, current_tick: u64) {
+        let ticks_elapsed = current_tick.saturating_sub(self.last_update);
+        if ticks_elapsed > 0 {
+            // Decay rate: emotions halve every ~1000 ticks (~10 seconds)
+            let decay = 0.999f32.powi(ticks_elapsed as i32);
+            self.happiness *= decay;
+            self.arousal *= decay;
+            self.comfort *= decay;
+            self.curiosity *= decay;
+            self.last_update = current_tick;
+        }
+    }
+
+    /// Update emotional state based on signal content
+    pub fn process_signal(&mut self, signal: &Signal, current_tick: u64) {
+        // First decay existing emotions
+        self.decay(current_tick);
+
+        // Positive emotion in signal (index 28)
+        let positive = signal.content.get(28).copied().unwrap_or(0.0);
+        // Negative emotion in signal (index 29)
+        let negative = signal.content.get(29).copied().unwrap_or(0.0);
+        // Request/need in signal (index 30)
+        let request = signal.content.get(30).copied().unwrap_or(0.0);
+        // Question/curiosity in signal (index 31)
+        let question = signal.content.get(31).copied().unwrap_or(0.0);
+
+        // Update emotions with momentum (changes are gradual)
+        let momentum = 0.3;
+
+        if positive > 0.0 {
+            self.happiness = (self.happiness + positive * momentum * signal.intensity).clamp(-1.0, 1.0);
+            self.comfort = (self.comfort + 0.2 * momentum * signal.intensity).clamp(-1.0, 1.0);
+        }
+
+        if negative < 0.0 {
+            self.happiness = (self.happiness + negative * momentum * signal.intensity).clamp(-1.0, 1.0);
+            self.comfort = (self.comfort - 0.3 * momentum * signal.intensity).clamp(-1.0, 1.0);
+        }
+
+        if question > 0.0 {
+            self.curiosity = (self.curiosity + question * momentum * signal.intensity).clamp(0.0, 1.0);
+            self.arousal = (self.arousal + 0.1 * momentum).clamp(0.0, 1.0);
+        }
+
+        if request > 0.0 {
+            self.arousal = (self.arousal + request * momentum * signal.intensity).clamp(0.0, 1.0);
+        }
+
+        // Any signal increases arousal slightly
+        self.arousal = (self.arousal + 0.05 * signal.intensity).clamp(0.0, 1.0);
+    }
+
+    /// Get the dominant emotional marker for expressions
+    pub fn get_emotional_marker(&self) -> Option<&'static str> {
+        // Only show emotion if strong enough
+        let threshold = 0.3;
+
+        if self.happiness > threshold && self.happiness >= self.curiosity.abs() {
+            if self.happiness > 0.6 {
+                Some("♥")
+            } else {
+                Some("~")
+            }
+        } else if self.curiosity > threshold {
+            if self.arousal > 0.5 {
+                Some("!")
+            } else {
+                Some("?")
+            }
+        } else if self.happiness < -threshold {
+            Some("...")
+        } else if self.arousal > 0.6 {
+            Some("!")
+        } else {
+            None
+        }
+    }
+
+    /// Get a description of the current mood
+    pub fn mood_description(&self) -> &'static str {
+        if self.happiness > 0.5 && self.arousal > 0.5 {
+            "joyeux"
+        } else if self.happiness > 0.5 {
+            "content"
+        } else if self.curiosity > 0.5 {
+            "curieux"
+        } else if self.happiness < -0.3 {
+            "triste"
+        } else if self.arousal > 0.6 {
+            "excité"
+        } else {
+            "calme"
+        }
+    }
+}
+
 /// The living substrate
 pub struct Substrate {
     /// All living cells
@@ -49,6 +164,9 @@ pub struct Substrate {
     /// Short-term memory: words heard in the last few seconds
     /// ARIA will try to "echo" these words like a baby learning
     recent_words: RwLock<Vec<RecentWord>>,
+
+    /// Global emotional state - ARIA's current mood
+    emotional_state: RwLock<EmotionalState>,
 }
 
 /// An attractor in semantic space
@@ -73,6 +191,14 @@ pub struct SubstrateStats {
     pub signals_per_second: f32,
     pub oldest_cell_age: u64,
     pub average_connections: f32,
+    /// ARIA's current mood description
+    pub mood: String,
+    /// Happiness level (-1 to 1)
+    pub happiness: f32,
+    /// Arousal/excitement level (0 to 1)
+    pub arousal: f32,
+    /// Curiosity level (0 to 1)
+    pub curiosity: f32,
 }
 
 impl Substrate {
@@ -107,6 +233,7 @@ impl Substrate {
             memory,
             global_energy: AtomicU64::new(10000),
             recent_words: RwLock::new(Vec::new()),
+            emotional_state: RwLock::new(EmotionalState::default()),
         }
     }
 
@@ -130,6 +257,19 @@ impl Substrate {
         };
 
         let current_tick = self.tick.load(Ordering::Relaxed);
+
+        // Update emotional state based on signal content
+        {
+            let mut emotional = self.emotional_state.write();
+            emotional.process_signal(&signal, current_tick);
+            tracing::debug!(
+                "Mood: {} (happiness={:.2}, arousal={:.2}, curiosity={:.2})",
+                emotional.mood_description(),
+                emotional.happiness,
+                emotional.arousal,
+                emotional.curiosity
+            );
+        }
 
         {
             let mut memory = self.memory.write();
@@ -446,7 +586,20 @@ impl Substrate {
                 }
             };
 
-            let mut signal = Signal::from_vector(average_state, label);
+            // Get emotional marker if mood is strong enough
+            let emotional_marker = {
+                let emotional = self.emotional_state.read();
+                emotional.get_emotional_marker().map(|s| s.to_string())
+            };
+
+            // Combine label with emotional marker
+            let final_label = if let Some(marker) = emotional_marker {
+                format!("{}|emotion:{}", label, marker)
+            } else {
+                label
+            };
+
+            let mut signal = Signal::from_vector(average_state, final_label);
             signal.intensity = coherence;
 
             // Learn this pattern
@@ -625,6 +778,9 @@ impl Substrate {
 
         let dominant_emotion = self.most_common_emotion(&emotions);
 
+        // Get global emotional state
+        let emotional = self.emotional_state.read();
+
         SubstrateStats {
             tick: self.tick.load(Ordering::Relaxed),
             alive_cells: alive,
@@ -635,6 +791,10 @@ impl Substrate {
             signals_per_second: self.signal_buffer.read().len() as f32 / 10.0,
             oldest_cell_age: oldest,
             average_connections: avg_connections,
+            mood: emotional.mood_description().to_string(),
+            happiness: emotional.happiness,
+            arousal: emotional.arousal,
+            curiosity: emotional.curiosity,
         }
     }
 

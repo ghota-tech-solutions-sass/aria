@@ -36,6 +36,11 @@ pub struct BrainStats {
     pub active_clusters: usize,
     pub dominant_emotion: String,
     pub signals_per_second: f32,
+    // Emotional state (new in v0.1.6)
+    pub mood: String,
+    pub happiness: f32,
+    pub arousal: f32,
+    pub curiosity: f32,
 }
 
 impl AriaVisualizer {
