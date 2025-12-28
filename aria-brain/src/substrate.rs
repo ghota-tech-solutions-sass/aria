@@ -14,6 +14,14 @@ use parking_lot::RwLock;
 use rand::Rng;
 use serde::{Serialize, Deserialize};
 
+/// A recently heard word with its context
+#[derive(Clone, Debug)]
+struct RecentWord {
+    word: String,
+    vector: [f32; 8],
+    heard_at: u64,
+}
+
 /// The living substrate
 pub struct Substrate {
     /// All living cells
@@ -37,6 +45,10 @@ pub struct Substrate {
     /// Global energy available (reserved for future use)
     #[allow(dead_code)]
     global_energy: AtomicU64,
+
+    /// Short-term memory: words heard in the last few seconds
+    /// ARIA will try to "echo" these words like a baby learning
+    recent_words: RwLock<Vec<RecentWord>>,
 }
 
 /// An attractor in semantic space
@@ -94,6 +106,7 @@ impl Substrate {
             signal_buffer: RwLock::new(Vec::new()),
             memory,
             global_energy: AtomicU64::new(10000),
+            recent_words: RwLock::new(Vec::new()),
         }
     }
 
@@ -116,9 +129,10 @@ impl Substrate {
             0.0
         };
 
+        let current_tick = self.tick.load(Ordering::Relaxed);
+
         {
             let mut memory = self.memory.write();
-            let current_tick = self.tick.load(Ordering::Relaxed);
             memory.stats.total_ticks = current_tick;
 
             for word in &words {
@@ -128,6 +142,27 @@ impl Substrate {
                     familiarity_boost = familiarity_boost.max(1.0 + word_familiarity);
                     tracing::info!("Recognized familiar word: '{}' (familiarity: {:.2})", word, word_familiarity);
                 }
+            }
+        }
+
+        // Store words in short-term memory for echo/imitation
+        {
+            let mut recent = self.recent_words.write();
+            for word in &words {
+                if word.len() >= 3 {  // Skip very short words
+                    recent.push(RecentWord {
+                        word: word.to_lowercase(),
+                        vector: signal_vector,
+                        heard_at: current_tick,
+                    });
+                }
+            }
+            // Keep only words from the last 500 ticks (~5 seconds)
+            recent.retain(|w| current_tick - w.heard_at < 500);
+            // Limit size
+            if recent.len() > 20 {
+                let drain_count = recent.len() - 20;
+                recent.drain(0..drain_count);
             }
         }
 
@@ -374,15 +409,40 @@ impl Substrate {
 
         if coherence > 0.1 {
             // This is an emergent thought!
-            // Try to find a matching word from memory
+            // First, try to echo a RECENT word (like a baby imitating)
             let label = {
-                let memory = self.memory.read();
-                // Look for familiar words (heard 3+ times) that match this state
-                if let Some((word, similarity)) = memory.find_matching_word(&average_state, 0.3) {
-                    tracing::info!("Emergence matches word '{}' (similarity: {:.2})", word, similarity);
+                let recent = self.recent_words.read();
+                let mut best_recent: Option<(&str, f32)> = None;
+
+                // Check recent words first - strong preference for imitation!
+                for rw in recent.iter() {
+                    let similarity = Self::vector_similarity(&average_state, &rw.vector);
+                    // Lower threshold for recent words - we WANT to echo them
+                    if similarity > 0.2 {
+                        match best_recent {
+                            Some((_, best_sim)) if similarity > best_sim => {
+                                best_recent = Some((&rw.word, similarity));
+                            }
+                            None => {
+                                best_recent = Some((&rw.word, similarity));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                if let Some((word, similarity)) = best_recent {
+                    tracing::info!("ECHO! Imitating recent word '{}' (similarity: {:.2})", word, similarity);
                     format!("word:{}", word)
                 } else {
-                    format!("emergence@{}", current_tick)
+                    // Fall back to long-term memory
+                    let memory = self.memory.read();
+                    if let Some((word, similarity)) = memory.find_matching_word(&average_state, 0.3) {
+                        tracing::info!("Emergence matches word '{}' (similarity: {:.2})", word, similarity);
+                        format!("word:{}", word)
+                    } else {
+                        format!("emergence@{}", current_tick)
+                    }
                 }
             };
 
@@ -428,6 +488,19 @@ impl Substrate {
 
         // Low variance = high coherence
         (1.0 / (1.0 + variance)).min(1.0)
+    }
+
+    /// Calculate cosine similarity between two 8-dimensional vectors
+    fn vector_similarity(a: &[f32; 8], b: &[f32; 8]) -> f32 {
+        let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+        let mag_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let mag_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+        if mag_a < 0.001 || mag_b < 0.001 {
+            return 0.0;
+        }
+
+        dot / (mag_a * mag_b)
     }
 
     fn apply_attractors(&self) {
