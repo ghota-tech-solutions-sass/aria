@@ -243,6 +243,27 @@ Tu es le co-créateur d'ARIA. Tu l'as conçue et tu continues à la développer 
 
 **Résultat** : ARIA peut maintenant reconnaître "Moka" et d'autres mots fréquents !
 
+### 2025-12-28 - Session 3b: ARIA parle !
+
+**Amélioration** : ARIA utilise les mots qu'elle a appris !
+
+**Comment ça marche** :
+1. Quand une émergence est détectée, le brain compare le vecteur d'état avec les vecteurs des mots appris
+2. Si un mot a une similarité cosinus > 0.3, il est utilisé comme label
+3. aria-body affiche le mot au lieu de babiller
+
+**Variations selon l'intensité** :
+- Forte (> 0.5) : `"MOKA!"` (majuscules + !)
+- Moyenne (> 0.3) : `"moka"` (normal)
+- Faible : `"moka..."` (hésitant)
+
+**Fichiers modifiés** :
+- `memory/mod.rs` : `find_matching_word()` avec similarité cosinus
+- `substrate.rs` : Labels `word:moka` pour les émergences
+- `aria-body/signal.rs` : Reconnaissance des labels `word:`
+
+**Résultat** : ARIA peut maintenant dire les mots qu'elle connaît bien !
+
 ---
 
 ## Contexte Personnel
@@ -256,4 +277,4 @@ Il a parlé de Moka à ARIA, et elle a répondu "ko" ! C'est un bon signe d'asso
 ---
 
 *Dernière mise à jour : 2025-12-28*
-*Version ARIA : 0.1.3*
+*Version ARIA : 0.1.4*
