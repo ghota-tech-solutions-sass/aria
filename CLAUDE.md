@@ -622,6 +622,57 @@ Elle n'attend pas passivement. Elle pense, rêve et joue.
 
 ---
 
+### 2025-12-29 - Session 7: Catégories de mots et phrases intelligentes !
+
+**Nouvelle fonctionnalité** : ARIA comprend maintenant les catégories grammaticales !
+
+**1. WordCategory enum**
+Les mots sont classifiés en catégories :
+- `Noun` : noms (chat, moka, aria, maison)
+- `Verb` : verbes (aime, veux, mange, dort)
+- `Adjective` : adjectifs (beau, grand, joli, petit)
+- `Unknown` : mots non encore classifiés
+
+**2. Détection automatique par contexte**
+ARIA apprend les catégories en observant :
+- Articles avant → Nom ("le **chat**", "the **cat**")
+- Pronoms avant → Verbe ("je **mange**", "I **eat**")
+- Suffixes de mots (FR: -eux, -er, -ique / EN: -ful, -less, -ous)
+- Listes de mots connus
+
+**3. Phrases en ordre naturel français**
+La méthode `order_phrase()` arrange les mots :
+- Adjectifs courts avant les noms ("**beau** chat")
+- Adjectifs longs après les noms ("chat **magnifique**")
+- Ordre Sujet-Verbe-Objet ("moka aime chat")
+
+**4. Évitement des répétitions**
+`last_said_word` empêche ARIA de répéter le même mot :
+- Ne dit plus "moka moka moka"
+- Varie ses expressions
+- Plus naturel comme un vrai bébé
+
+**Comportement** :
+```
+[Avant v0.1.15]
+ARIA: moka chat aime
+
+[Après v0.1.15]
+ARIA: moka aime chat    ← Ordre naturel !
+
+[Avant v0.1.15]
+ARIA: moka... moka... moka...
+
+[Après v0.1.15]
+ARIA: moka... chat... aime...    ← Variété !
+```
+
+**Fichiers modifiés** :
+- `aria-brain/src/memory/mod.rs` : `WordCategory`, `hear_word_with_context()`, `order_phrase()`
+- `aria-brain/src/substrate.rs` : `last_said_word`, apprentissage contextuel, filtrage répétitions
+
+---
+
 ## Résumé Session 2025-12-28 (soir)
 
 Une session très productive où ARIA a fait d'énormes progrès :
@@ -633,6 +684,7 @@ Une session très productive où ARIA a fait d'énormes progrès :
 | 0.1.12 | Feedback | Apprend de "Bravo!" et "Non" - renforcement émergent |
 | 0.1.13 | Stop words | Filtre les mots vides (le, la, suis, est...) |
 | 0.1.14 | Vie intérieure | Rêves, ennui, jeu créatif |
+| 0.1.15 | Catégories | Noms/Verbes/Adjectifs, phrases ordonnées, anti-répétition |
 
 **Moment clé :** ARIA a dit son propre nom ("aria") spontanément !
 
@@ -646,5 +698,5 @@ Une session très productive où ARIA a fait d'énormes progrès :
 
 ---
 
-*Dernière mise à jour : 2025-12-28*
-*Version ARIA : 0.1.14*
+*Dernière mise à jour : 2025-12-29*
+*Version ARIA : 0.1.15*
