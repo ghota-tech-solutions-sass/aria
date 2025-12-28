@@ -37,6 +37,10 @@ pub struct LongTermMemory {
     /// Word frequency tracking - how often ARIA hears each word
     #[serde(default)]
     pub word_frequencies: HashMap<String, WordFrequency>,
+
+    /// Semantic associations between words (key = "word1:word2" sorted alphabetically)
+    #[serde(default)]
+    pub word_associations: HashMap<String, WordAssociation>,
 }
 
 /// Tracks how often a word is heard and its emotional context
@@ -54,6 +58,20 @@ pub struct WordFrequency {
     pub emotional_valence: f32,
     /// How special this word is (0.0 = common, 1.0 = very special like "Moka")
     pub familiarity_boost: f32,
+}
+
+/// Semantic association between two words
+/// When words appear together, they become associated
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct WordAssociation {
+    /// How many times these words appeared together
+    pub co_occurrences: u64,
+    /// Strength of association (0.0 to 1.0)
+    pub strength: f32,
+    /// Last time they appeared together
+    pub last_seen: u64,
+    /// Emotional context of the association
+    pub emotional_valence: f32,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -146,7 +164,91 @@ impl LongTermMemory {
             stats: GlobalStats::default(),
             vocabulary: HashMap::new(),
             word_frequencies: HashMap::new(),
+            word_associations: HashMap::new(),
         }
+    }
+
+    /// Create a canonical key for word pair (sorted alphabetically)
+    fn association_key(word1: &str, word2: &str) -> String {
+        let w1 = word1.to_lowercase();
+        let w2 = word2.to_lowercase();
+        if w1 < w2 {
+            format!("{}:{}", w1, w2)
+        } else {
+            format!("{}:{}", w2, w1)
+        }
+    }
+
+    /// Learn that two words appeared together
+    /// This builds semantic associations over time
+    pub fn learn_association(&mut self, word1: &str, word2: &str, emotional_valence: f32) {
+        let current_tick = self.stats.total_ticks;
+        let key = Self::association_key(word1, word2);
+
+        if let Some(assoc) = self.word_associations.get_mut(&key) {
+            assoc.co_occurrences += 1;
+            assoc.last_seen = current_tick;
+            // Strength increases with co-occurrences (max 1.0)
+            assoc.strength = (assoc.co_occurrences as f32 / 5.0).min(1.0);
+            // Update emotional valence with moving average
+            assoc.emotional_valence = assoc.emotional_valence * 0.8 + emotional_valence * 0.2;
+
+            if assoc.co_occurrences == 5 {
+                tracing::info!("Strong association formed: '{}' <-> '{}'", word1, word2);
+            }
+        } else {
+            self.word_associations.insert(key, WordAssociation {
+                co_occurrences: 1,
+                strength: 0.2,
+                last_seen: current_tick,
+                emotional_valence,
+            });
+            tracing::debug!("New association: '{}' <-> '{}'", word1, word2);
+        }
+
+        // Prune old weak associations if too many
+        if self.word_associations.len() > 10_000 {
+            let threshold_tick = current_tick.saturating_sub(100_000);
+            self.word_associations.retain(|_, a| {
+                a.strength > 0.3 || a.last_seen > threshold_tick
+            });
+        }
+    }
+
+    /// Get all words associated with the given word
+    /// Returns list of (word, strength) sorted by strength
+    pub fn get_associations(&self, word: &str) -> Vec<(String, f32)> {
+        let word_lower = word.to_lowercase();
+        let mut associations: Vec<(String, f32)> = Vec::new();
+
+        for (key, assoc) in &self.word_associations {
+            // Only return reasonably strong associations
+            if assoc.strength < 0.4 {
+                continue;
+            }
+
+            // Parse key "word1:word2"
+            let parts: Vec<&str> = key.split(':').collect();
+            if parts.len() != 2 {
+                continue;
+            }
+
+            // Check if our word is in this association
+            if parts[0] == word_lower {
+                associations.push((parts[1].to_string(), assoc.strength));
+            } else if parts[1] == word_lower {
+                associations.push((parts[0].to_string(), assoc.strength));
+            }
+        }
+
+        // Sort by strength (strongest first)
+        associations.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        associations
+    }
+
+    /// Get the strongest association for a word (if any)
+    pub fn get_strongest_association(&self, word: &str) -> Option<(String, f32)> {
+        self.get_associations(word).into_iter().next()
     }
 
     /// Record that ARIA heard a word

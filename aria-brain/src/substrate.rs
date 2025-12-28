@@ -283,6 +283,24 @@ impl Substrate {
                     tracing::info!("Recognized familiar word: '{}' (familiarity: {:.2})", word, word_familiarity);
                 }
             }
+
+            // Learn semantic associations: words that appear together become linked
+            // Example: "Moka" and "chat" in the same message -> they become associated
+            let significant_words: Vec<&str> = words.iter()
+                .filter(|w| w.len() >= 3)
+                .copied()
+                .collect();
+
+            // Create associations between all pairs of significant words
+            for i in 0..significant_words.len() {
+                for j in (i + 1)..significant_words.len() {
+                    memory.learn_association(
+                        significant_words[i],
+                        significant_words[j],
+                        emotional_valence
+                    );
+                }
+            }
         }
 
         // Store words in short-term memory for echo/imitation
@@ -573,13 +591,38 @@ impl Substrate {
 
                 if let Some((word, similarity)) = best_recent {
                     tracing::info!("ECHO! Imitating recent word '{}' (similarity: {:.2})", word, similarity);
-                    format!("word:{}", word)
+
+                    // Check for semantic associations - maybe add a related word!
+                    let memory = self.memory.read();
+                    if let Some((associated_word, assoc_strength)) = memory.get_strongest_association(word) {
+                        // Sometimes add the associated word (based on strength and randomness)
+                        let should_add_association = assoc_strength > 0.6 && coherence > 0.3;
+                        if should_add_association {
+                            tracing::info!("ASSOCIATION! '{}' -> '{}' (strength: {:.2})", word, associated_word, assoc_strength);
+                            format!("phrase:{}+{}", word, associated_word)
+                        } else {
+                            format!("word:{}", word)
+                        }
+                    } else {
+                        format!("word:{}", word)
+                    }
                 } else {
                     // Fall back to long-term memory
                     let memory = self.memory.read();
                     if let Some((word, similarity)) = memory.find_matching_word(&average_state, 0.3) {
                         tracing::info!("Emergence matches word '{}' (similarity: {:.2})", word, similarity);
-                        format!("word:{}", word)
+
+                        // Also check associations for long-term memory words
+                        if let Some((associated_word, assoc_strength)) = memory.get_strongest_association(&word) {
+                            if assoc_strength > 0.6 && coherence > 0.3 {
+                                tracing::info!("ASSOCIATION! '{}' -> '{}' (strength: {:.2})", word, associated_word, assoc_strength);
+                                format!("phrase:{}+{}", word, associated_word)
+                            } else {
+                                format!("word:{}", word)
+                            }
+                        } else {
+                            format!("word:{}", word)
+                        }
                     } else {
                         format!("emergence@{}", current_tick)
                     }

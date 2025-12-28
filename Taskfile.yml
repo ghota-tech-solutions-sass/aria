@@ -93,6 +93,11 @@ tasks:
     cmds:
       - curl -s http://{{.BRAIN_HOST}}:{{.BRAIN_PORT}}/words | jq '.words | map(select(.count >= 5))'
 
+  associations:
+    desc: Show semantic word associations
+    cmds:
+      - curl -s http://{{.BRAIN_HOST}}:{{.BRAIN_PORT}}/associations | jq .
+
   # DATA MANAGEMENT
   reset:
     desc: Reset ARIA memory (start fresh)

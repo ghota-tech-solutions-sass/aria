@@ -153,7 +153,33 @@ async fn main() {
             }))
         });
 
-    let routes = ws_route.or(health).or(stats).or(words);
+    // Associations endpoint - show semantic word associations
+    let memory_assoc = memory.clone();
+    let associations = warp::path("associations")
+        .map(move || {
+            let mem = memory_assoc.read();
+            let assoc_info: Vec<serde_json::Value> = mem.word_associations
+                .iter()
+                .filter(|(_, a)| a.strength >= 0.4)  // Only show meaningful associations
+                .map(|(key, assoc)| {
+                    let parts: Vec<&str> = key.split(':').collect();
+                    serde_json::json!({
+                        "word1": parts.get(0).unwrap_or(&""),
+                        "word2": parts.get(1).unwrap_or(&""),
+                        "strength": assoc.strength,
+                        "co_occurrences": assoc.co_occurrences,
+                        "emotional_valence": assoc.emotional_valence
+                    })
+                })
+                .collect();
+            warp::reply::json(&serde_json::json!({
+                "total_associations": mem.word_associations.len(),
+                "strong_associations": assoc_info.len(),
+                "associations": assoc_info
+            }))
+        });
+
+    let routes = ws_route.or(health).or(stats).or(words).or(associations);
 
     let port = std::env::var("ARIA_PORT")
         .ok()
@@ -164,6 +190,7 @@ async fn main() {
     info!("Health check on http://0.0.0.0:{}/health", port);
     info!("Stats on http://0.0.0.0:{}/stats", port);
     info!("Words on http://0.0.0.0:{}/words", port);
+    info!("Associations on http://0.0.0.0:{}/associations", port);
     println!();
     println!("🧒 ARIA is waiting for her first interaction...");
     println!();

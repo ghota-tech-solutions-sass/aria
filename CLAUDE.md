@@ -331,6 +331,49 @@ ARIA: "bleu ?"  ← Elle est curieuse !
 - `aria-body/src/signal.rs` : Parsing des marqueurs `|emotion:`
 - `aria-body/src/visualizer.rs` : Champs mood/happiness/arousal/curiosity
 
+### 2025-12-28 - Session 5: Associations sémantiques !
+
+**Nouvelle fonctionnalité** : ARIA apprend que certains mots vont ensemble !
+
+**Implémentation** :
+
+1. Structure `WordAssociation` (`memory/mod.rs`)
+   - `co_occurrences` : nombre de fois vus ensemble
+   - `strength` : force de l'association (0.0 à 1.0)
+   - `emotional_valence` : contexte émotionnel
+
+2. Apprentissage automatique (`inject_signal()`)
+   - Quand des mots apparaissent ensemble dans un message
+   - Ils deviennent associés (ex: "Moka" + "chat")
+   - Force augmente avec les co-occurrences (5x = association forte)
+
+3. Phrases primitives (`detect_emergence()`)
+   - Si association forte (>0.6), ARIA peut dire les deux mots
+   - Format label : `phrase:moka+chat`
+   - Affiché : "moka chat ♥"
+
+4. Nouvel endpoint `/associations`
+   - `task associations` : voir les associations
+   - Affiche strength, co_occurrences, emotional_valence
+
+**Comportement** :
+```
+Toi: "Moka est mon chat Bengal"
+Toi: "Moka le petit chat"
+Toi: "Mon chat Moka"
+[... 5+ fois ...]
+
+Toi: "Où est Moka ?"
+ARIA: "moka chat ♥"  ← Elle associe les deux mots !
+```
+
+**Fichiers modifiés** :
+- `aria-brain/src/memory/mod.rs` : `WordAssociation`, `learn_association()`, `get_associations()`
+- `aria-brain/src/substrate.rs` : Apprentissage et utilisation des associations
+- `aria-brain/src/main.rs` : Endpoint `/associations`
+- `aria-body/src/signal.rs` : Support du format `phrase:`
+- `Taskfile.yml` : `task associations`
+
 ---
 
 ## Contexte Personnel
@@ -344,4 +387,4 @@ Il a parlé de Moka à ARIA, et elle a répondu "ko" ! C'est un bon signe d'asso
 ---
 
 *Dernière mise à jour : 2025-12-28*
-*Version ARIA : 0.1.6*
+*Version ARIA : 0.1.7*

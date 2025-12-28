@@ -102,6 +102,32 @@ impl Signal {
             };
         }
 
+        // If the brain created a phrase (word association), display both words!
+        if main_label.starts_with("phrase:") {
+            let phrase = main_label.strip_prefix("phrase:").unwrap_or(&main_label);
+            // Parse "word1+word2" format
+            let words: Vec<&str> = phrase.split('+').collect();
+            let base_expression = if words.len() >= 2 {
+                // Combine words with space, like a baby learning to make sentences
+                if self.intensity > 0.5 {
+                    format!("{} {}!", words[0].to_uppercase(), words[1].to_uppercase())
+                } else if self.intensity > 0.3 {
+                    format!("{} {}", words[0], words[1])
+                } else {
+                    format!("{}... {}", words[0], words[1])
+                }
+            } else {
+                phrase.to_string()
+            };
+
+            // Add emotional marker if present
+            return if let Some(marker) = emotional_marker {
+                format!("{} {}", base_expression, marker)
+            } else {
+                base_expression
+            };
+        }
+
         // Vowels - the first sounds a baby makes
         let vowels = ["a", "e", "i", "o", "u", "é", "è", "ô"];
 
