@@ -9,6 +9,26 @@ use std::path::Path;
 use std::fs;
 use std::collections::HashMap;
 
+/// Word category - approximate grammatical role
+/// ARIA learns these by observing context patterns
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Copy)]
+pub enum WordCategory {
+    /// Names, objects (chat, moka, aria, maison)
+    Noun,
+    /// Actions (aime, veux, mange, dort)
+    Verb,
+    /// Descriptions (beau, grand, joli, petit)
+    Adjective,
+    /// Unknown or mixed usage
+    Unknown,
+}
+
+impl Default for WordCategory {
+    fn default() -> Self {
+        WordCategory::Unknown
+    }
+}
+
 /// Long-term memory - persisted to disk
 #[derive(Serialize, Deserialize)]
 pub struct LongTermMemory {
@@ -58,6 +78,13 @@ pub struct WordFrequency {
     pub emotional_valence: f32,
     /// How special this word is (0.0 = common, 1.0 = very special like "Moka")
     pub familiarity_boost: f32,
+    /// Grammatical category (learned from context)
+    #[serde(default)]
+    pub category: WordCategory,
+    /// Confidence scores for each category (noun, verb, adjective)
+    /// Used for probabilistic classification
+    #[serde(default)]
+    pub category_scores: [f32; 3], // [noun, verb, adjective]
 }
 
 /// Semantic association between two words
@@ -247,6 +274,7 @@ impl LongTermMemory {
     }
 
     /// Get the strongest association for a word (if any)
+    #[allow(dead_code)]
     pub fn get_strongest_association(&self, word: &str) -> Option<(String, f32)> {
         self.get_associations(word).into_iter().next()
     }
@@ -256,9 +284,17 @@ impl LongTermMemory {
         self.get_associations(word).into_iter().take(n).collect()
     }
 
-    /// Record that ARIA heard a word
+    /// Record that ARIA heard a word with context for category learning
+    /// preceding_word: word that came before (for category detection)
     /// Returns the familiarity level (0.0 = new word, 1.0+ = very familiar)
-    pub fn hear_word(&mut self, word: &str, context_vector: [f32; 8], emotional_valence: f32) -> f32 {
+    pub fn hear_word_with_context(
+        &mut self,
+        word: &str,
+        context_vector: [f32; 8],
+        emotional_valence: f32,
+        preceding_word: Option<&str>,
+        following_word: Option<&str>,
+    ) -> f32 {
         let current_tick = self.stats.total_ticks;
         let word_lower = word.to_lowercase();
 
@@ -266,6 +302,13 @@ impl LongTermMemory {
         if word_lower.len() < 3 && !["moi", "toi", "oui", "non"].contains(&word_lower.as_str()) {
             return 0.0;
         }
+
+        // Detect category hints from context
+        let category_hint = Self::detect_category_from_context(
+            &word_lower,
+            preceding_word,
+            following_word,
+        );
 
         if let Some(freq) = self.word_frequencies.get_mut(&word_lower) {
             freq.count += 1;
@@ -279,16 +322,48 @@ impl LongTermMemory {
             // Update emotional valence
             freq.emotional_valence = freq.emotional_valence * 0.9 + emotional_valence * 0.1;
 
+            // Update category scores
+            if let Some(cat) = category_hint {
+                let idx = match cat {
+                    WordCategory::Noun => 0,
+                    WordCategory::Verb => 1,
+                    WordCategory::Adjective => 2,
+                    WordCategory::Unknown => return freq.familiarity_boost,
+                };
+                freq.category_scores[idx] += 0.3;
+                // Normalize
+                let total: f32 = freq.category_scores.iter().sum();
+                if total > 0.0 {
+                    for score in &mut freq.category_scores {
+                        *score /= total;
+                    }
+                }
+                // Update category if one dominates
+                freq.category = Self::dominant_category(&freq.category_scores);
+            }
+
             // Calculate familiarity boost based on frequency
-            // Words heard 10+ times get a significant boost
             freq.familiarity_boost = (freq.count as f32 / 10.0).min(2.0);
 
-            tracing::debug!("Word '{}' heard {} times (familiarity: {:.2})",
-                word_lower, freq.count, freq.familiarity_boost);
+            tracing::debug!("Word '{}' heard {} times (familiarity: {:.2}, category: {:?})",
+                word_lower, freq.count, freq.familiarity_boost, freq.category);
 
             freq.familiarity_boost
         } else {
             // New word!
+            let mut category_scores = [0.0; 3];
+            let category = if let Some(cat) = category_hint {
+                match cat {
+                    WordCategory::Noun => category_scores[0] = 1.0,
+                    WordCategory::Verb => category_scores[1] = 1.0,
+                    WordCategory::Adjective => category_scores[2] = 1.0,
+                    WordCategory::Unknown => {}
+                }
+                cat
+            } else {
+                WordCategory::Unknown
+            };
+
             self.word_frequencies.insert(word_lower.clone(), WordFrequency {
                 count: 1,
                 first_heard: current_tick,
@@ -296,11 +371,204 @@ impl LongTermMemory {
                 learned_vector: context_vector,
                 emotional_valence,
                 familiarity_boost: 0.0,
+                category,
+                category_scores,
             });
 
-            tracing::info!("New word learned: '{}'", word_lower);
+            tracing::info!("New word learned: '{}' (category: {:?})", word_lower, category);
             0.0
         }
+    }
+
+    /// Backward compatible version without context
+    #[allow(dead_code)]
+    pub fn hear_word(&mut self, word: &str, context_vector: [f32; 8], emotional_valence: f32) -> f32 {
+        self.hear_word_with_context(word, context_vector, emotional_valence, None, None)
+    }
+
+    /// Detect word category from context patterns
+    fn detect_category_from_context(
+        word: &str,
+        preceding: Option<&str>,
+        _following: Option<&str>,
+    ) -> Option<WordCategory> {
+        let word_lower = word.to_lowercase();
+        let preceding_lower = preceding.map(|w| w.to_lowercase());
+
+        // Articles before → NOUN
+        let articles = ["le", "la", "les", "un", "une", "des", "mon", "ma", "mes",
+                        "ton", "ta", "tes", "son", "sa", "ses", "ce", "cette", "ces",
+                        "the", "a", "an", "my", "your", "his", "her"];
+        if let Some(ref p) = preceding_lower {
+            if articles.contains(&p.as_str()) {
+                return Some(WordCategory::Noun);
+            }
+        }
+
+        // Pronouns before → VERB
+        let pronouns = ["je", "tu", "il", "elle", "on", "nous", "vous", "ils", "elles",
+                        "j'", "i", "you", "he", "she", "we", "they"];
+        if let Some(ref p) = preceding_lower {
+            if pronouns.contains(&p.as_str()) {
+                return Some(WordCategory::Verb);
+            }
+        }
+
+        // Common adjective endings (French)
+        let adj_suffixes = ["eux", "euse", "if", "ive", "ant", "ent", "ique",
+                            "able", "ible", "al", "el", "ful", "less", "ous"];
+        for suffix in adj_suffixes {
+            if word_lower.ends_with(suffix) && word_lower.len() > suffix.len() + 2 {
+                return Some(WordCategory::Adjective);
+            }
+        }
+
+        // Common verb endings (French)
+        let verb_suffixes = ["er", "ir", "re", "ait", "ais", "ons", "ez", "ent"];
+        for suffix in verb_suffixes {
+            if word_lower.ends_with(suffix) && word_lower.len() > suffix.len() + 1 {
+                return Some(WordCategory::Verb);
+            }
+        }
+
+        // If "très" or "plus" before → likely ADJECTIVE
+        if let Some(ref p) = preceding_lower {
+            if ["très", "plus", "moins", "si", "trop", "assez", "very", "so", "too"].contains(&p.as_str()) {
+                return Some(WordCategory::Adjective);
+            }
+        }
+
+        // Known patterns: words that are almost always nouns
+        let known_nouns = ["chat", "moka", "aria", "papa", "mama", "ami", "maison",
+                          "chien", "oiseau", "soleil", "lune", "eau", "pain"];
+        if known_nouns.contains(&word_lower.as_str()) {
+            return Some(WordCategory::Noun);
+        }
+
+        // Known verbs
+        let known_verbs = ["aime", "veux", "peux", "suis", "est", "fait", "mange",
+                          "dort", "joue", "love", "want", "need", "like"];
+        if known_verbs.contains(&word_lower.as_str()) {
+            return Some(WordCategory::Verb);
+        }
+
+        // Known adjectives
+        let known_adjs = ["beau", "belle", "grand", "petit", "joli", "mignon",
+                         "gentil", "méchant", "bon", "mauvais", "beautiful", "good", "bad"];
+        if known_adjs.contains(&word_lower.as_str()) {
+            return Some(WordCategory::Adjective);
+        }
+
+        None
+    }
+
+    /// Get the dominant category from scores
+    fn dominant_category(scores: &[f32; 3]) -> WordCategory {
+        let threshold = 0.5; // Need > 50% confidence
+        if scores[0] > threshold && scores[0] > scores[1] && scores[0] > scores[2] {
+            WordCategory::Noun
+        } else if scores[1] > threshold && scores[1] > scores[0] && scores[1] > scores[2] {
+            WordCategory::Verb
+        } else if scores[2] > threshold && scores[2] > scores[0] && scores[2] > scores[1] {
+            WordCategory::Adjective
+        } else {
+            WordCategory::Unknown
+        }
+    }
+
+    /// Get category for a word
+    pub fn get_word_category(&self, word: &str) -> WordCategory {
+        self.word_frequencies
+            .get(&word.to_lowercase())
+            .map(|f| f.category)
+            .unwrap_or(WordCategory::Unknown)
+    }
+
+    /// Build a natural phrase from words using grammatical knowledge
+    /// Returns words in natural French order
+    pub fn order_phrase(&self, words: &[&str]) -> Vec<String> {
+        if words.is_empty() {
+            return vec![];
+        }
+        if words.len() == 1 {
+            return vec![words[0].to_string()];
+        }
+
+        // Get categories
+        let categorized: Vec<(&str, WordCategory)> = words.iter()
+            .map(|w| (*w, self.get_word_category(w)))
+            .collect();
+
+        // Separate by category
+        let mut nouns: Vec<&str> = vec![];
+        let mut verbs: Vec<&str> = vec![];
+        let mut adjs: Vec<&str> = vec![];
+        let mut others: Vec<&str> = vec![];
+
+        for (word, cat) in &categorized {
+            match cat {
+                WordCategory::Noun => nouns.push(word),
+                WordCategory::Verb => verbs.push(word),
+                WordCategory::Adjective => adjs.push(word),
+                WordCategory::Unknown => others.push(word),
+            }
+        }
+
+        // Build phrase in natural order
+        // French: Subject (Noun) + Verb + Object (Noun)
+        // Or: Adjective + Noun (for short adjectives)
+        // Or: Noun + Adjective (for long adjectives)
+        let mut result = vec![];
+
+        // If we have adj + noun: short adj before, long adj after
+        if !adjs.is_empty() && !nouns.is_empty() && verbs.is_empty() {
+            let adj = adjs[0];
+            let noun = nouns[0];
+            // Short adjectives go before in French (beau, bon, grand, petit, etc.)
+            let short_adjs = ["beau", "bon", "grand", "petit", "gros", "jeune", "vieux",
+                             "bel", "belle", "joli", "jolie", "mauvais", "nouveau"];
+            if short_adjs.contains(&adj.to_lowercase().as_str()) || adj.len() <= 5 {
+                result.push(adj.to_string());
+                result.push(noun.to_string());
+            } else {
+                result.push(noun.to_string());
+                result.push(adj.to_string());
+            }
+            // Add remaining words
+            for noun in nouns.iter().skip(1) {
+                result.push(noun.to_string());
+            }
+            for adj in adjs.iter().skip(1) {
+                result.push(adj.to_string());
+            }
+        }
+        // If we have noun + verb: Subject-Verb order
+        else if !nouns.is_empty() && !verbs.is_empty() {
+            result.push(nouns[0].to_string()); // Subject
+            result.push(verbs[0].to_string()); // Verb
+            // Add remaining nouns as objects
+            for noun in nouns.iter().skip(1) {
+                result.push(noun.to_string());
+            }
+            // Add adjectives at end
+            for adj in &adjs {
+                result.push(adj.to_string());
+            }
+        }
+        // Default: keep original order but move verbs after first noun
+        else {
+            // Just return in original order for now
+            result = words.iter().map(|s| s.to_string()).collect();
+        }
+
+        // Add others at the end
+        for other in &others {
+            if !result.contains(&other.to_string()) {
+                result.push(other.to_string());
+            }
+        }
+
+        result
     }
 
     /// Get the familiarity level for a word (0.0 = unknown, 1.0+ = familiar)

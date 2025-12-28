@@ -215,6 +215,9 @@ pub struct Substrate {
     /// Words ARIA recently said (for feedback reinforcement)
     /// When someone says "Bravo!", we reinforce these words
     recent_expressions: RwLock<Vec<String>>,
+
+    /// Last word ARIA said (to avoid immediate repetition)
+    last_said_word: RwLock<Option<String>>,
 }
 
 /// An attractor in semantic space
@@ -285,6 +288,7 @@ impl Substrate {
             last_was_question: RwLock::new(false),
             last_interaction_tick: AtomicU64::new(0),
             recent_expressions: RwLock::new(Vec::new()),
+            last_said_word: RwLock::new(None),
         }
     }
 
@@ -405,8 +409,18 @@ impl Substrate {
             let mut memory = self.memory.write();
             memory.stats.total_ticks = current_tick;
 
-            for word in &words {
-                let word_familiarity = memory.hear_word(word, signal_vector, emotional_valence);
+            // Learn words with context for category detection
+            for (i, word) in words.iter().enumerate() {
+                let preceding = if i > 0 { Some(words[i - 1]) } else { None };
+                let following = if i + 1 < words.len() { Some(words[i + 1]) } else { None };
+
+                let word_familiarity = memory.hear_word_with_context(
+                    word,
+                    signal_vector,
+                    emotional_valence,
+                    preceding,
+                    following,
+                );
                 if word_familiarity > 0.5 {
                     // Familiar word! Boost the signal
                     familiarity_boost = familiarity_boost.max(1.0 + word_familiarity);
@@ -930,13 +944,24 @@ impl Substrate {
             // Check if this is a response to a question
             let was_question = *self.last_was_question.read();
 
+            // Get the last word ARIA said (to avoid immediate repetition)
+            let last_word = self.last_said_word.read().clone();
+
             // First, try to echo a RECENT word (like a baby imitating)
             let label = {
                 let recent = self.recent_words.read();
                 let mut best_recent: Option<(&str, f32)> = None;
 
                 // Check recent words first - strong preference for imitation!
+                // But skip the last word we said to avoid repetition
                 for rw in recent.iter() {
+                    // Skip if this is the same word we just said
+                    if let Some(ref last) = last_word {
+                        if rw.word.to_lowercase() == last.to_lowercase() {
+                            continue;
+                        }
+                    }
+
                     let similarity = Self::vector_similarity(&average_state, &rw.vector);
                     // Lower threshold for recent words - we WANT to echo them
                     if similarity > 0.2 {
@@ -982,23 +1007,33 @@ impl Substrate {
                         let associations = memory.get_top_associations(word, 2);
 
                         // Build phrase based on how many strong associations we have
+                        // Filter out the last said word and duplicates
                         let strong_assocs: Vec<_> = associations.iter()
-                            .filter(|(_, strength)| *strength > 0.8 || (*strength > 0.6 && coherence > 0.15))
+                            .filter(|(assoc_word, strength)| {
+                                let is_duplicate = last_word.as_ref()
+                                    .map(|lw| lw.to_lowercase() == assoc_word.to_lowercase())
+                                    .unwrap_or(false);
+                                !is_duplicate && (*strength > 0.8 || (*strength > 0.6 && coherence > 0.15))
+                            })
                             .collect();
 
                         if strong_assocs.len() >= 2 {
-                            // 3-word phrase! word + assoc1 + assoc2
+                            // 3-word phrase! Use order_phrase for natural order
                             let (assoc1, str1) = &strong_assocs[0];
                             let (assoc2, str2) = &strong_assocs[1];
-                            tracing::info!("TRIPLE! '{}' -> '{}' + '{}' (strengths: {:.2}, {:.2})",
-                                word, assoc1, assoc2, str1, str2);
-                            format!("phrase:{}+{}+{}", word, assoc1, assoc2)
+                            let words_to_order: Vec<&str> = vec![word, assoc1.as_str(), assoc2.as_str()];
+                            let ordered = memory.order_phrase(&words_to_order);
+                            tracing::info!("TRIPLE! {:?} (strengths: {:.2}, {:.2}, ordered: {:?})",
+                                words_to_order, str1, str2, ordered);
+                            format!("phrase:{}", ordered.join("+"))
                         } else if strong_assocs.len() == 1 {
-                            // 2-word phrase
+                            // 2-word phrase with natural order
                             let (assoc1, str1) = &strong_assocs[0];
-                            tracing::info!("ASSOCIATION! '{}' -> '{}' (strength: {:.2}, coherence: {:.2})",
-                                word, assoc1, str1, coherence);
-                            format!("phrase:{}+{}", word, assoc1)
+                            let words_to_order: Vec<&str> = vec![word, assoc1.as_str()];
+                            let ordered = memory.order_phrase(&words_to_order);
+                            tracing::info!("ASSOCIATION! {:?} -> {:?} (strength: {:.2}, coherence: {:.2})",
+                                words_to_order, ordered, str1, coherence);
+                            format!("phrase:{}", ordered.join("+"))
                         } else {
                             format!("word:{}", word)
                         }
@@ -1006,7 +1041,16 @@ impl Substrate {
                 } else {
                     // Fall back to long-term memory
                     let memory = self.memory.read();
-                    if let Some((word, similarity)) = memory.find_matching_word(&average_state, 0.3) {
+
+                    // Find a word that's not the same as last said word
+                    let matching_word = memory.find_matching_word(&average_state, 0.3)
+                        .filter(|(word, _)| {
+                            last_word.as_ref()
+                                .map(|lw| lw.to_lowercase() != word.to_lowercase())
+                                .unwrap_or(true)
+                        });
+
+                    if let Some((word, similarity)) = matching_word {
                         tracing::info!("Emergence matches word '{}' (similarity: {:.2})", word, similarity);
 
                         // If this was a question, respond with oui/non based on word valence!
@@ -1029,20 +1073,29 @@ impl Substrate {
                             // Normal flow: check associations for long-term memory words
                             let associations = memory.get_top_associations(&word, 2);
                             let strong_assocs: Vec<_> = associations.iter()
-                                .filter(|(_, strength)| *strength > 0.8 || (*strength > 0.6 && coherence > 0.15))
+                                .filter(|(assoc_word, strength)| {
+                                    let is_duplicate = last_word.as_ref()
+                                        .map(|lw| lw.to_lowercase() == assoc_word.to_lowercase())
+                                        .unwrap_or(false);
+                                    !is_duplicate && (*strength > 0.8 || (*strength > 0.6 && coherence > 0.15))
+                                })
                                 .collect();
 
                             if strong_assocs.len() >= 2 {
                                 let (assoc1, str1) = &strong_assocs[0];
                                 let (assoc2, str2) = &strong_assocs[1];
-                                tracing::info!("TRIPLE! '{}' -> '{}' + '{}' (strengths: {:.2}, {:.2})",
-                                    word, assoc1, assoc2, str1, str2);
-                                format!("phrase:{}+{}+{}", word, assoc1, assoc2)
+                                let words_to_order: Vec<&str> = vec![word.as_str(), assoc1.as_str(), assoc2.as_str()];
+                                let ordered = memory.order_phrase(&words_to_order);
+                                tracing::info!("TRIPLE! {:?} -> {:?} (strengths: {:.2}, {:.2})",
+                                    words_to_order, ordered, str1, str2);
+                                format!("phrase:{}", ordered.join("+"))
                             } else if strong_assocs.len() == 1 {
                                 let (assoc1, str1) = &strong_assocs[0];
-                                tracing::info!("ASSOCIATION! '{}' -> '{}' (strength: {:.2})",
-                                    word, assoc1, str1);
-                                format!("phrase:{}+{}", word, assoc1)
+                                let words_to_order: Vec<&str> = vec![word.as_str(), assoc1.as_str()];
+                                let ordered = memory.order_phrase(&words_to_order);
+                                tracing::info!("ASSOCIATION! {:?} -> {:?} (strength: {:.2})",
+                                    words_to_order, ordered, str1);
+                                format!("phrase:{}", ordered.join("+"))
                             } else {
                                 format!("word:{}", word)
                             }
@@ -1152,6 +1205,11 @@ impl Substrate {
 
                 if !recent_expr.is_empty() {
                     tracing::debug!("Recording expressed words for feedback: {:?}", recent_expr);
+
+                    // Update last_said_word to avoid repetition
+                    // Use the first word as the "main" word
+                    let mut last_said = self.last_said_word.write();
+                    *last_said = recent_expr.first().cloned();
                 }
             }
 
