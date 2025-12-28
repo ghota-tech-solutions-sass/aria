@@ -70,6 +70,20 @@ impl Signal {
 
     /// Convert to expression - ARIA's baby babbling
     pub fn to_expression(&self) -> String {
+        // If the brain matched a known word, use it!
+        if self.label.starts_with("word:") {
+            let word = self.label.strip_prefix("word:").unwrap_or(&self.label);
+            // Add some baby-like variations
+            if self.intensity > 0.5 {
+                return format!("{}!", word.to_uppercase());
+            } else if self.intensity > 0.3 {
+                return word.to_string();
+            } else {
+                // Whisper/uncertain
+                return format!("{}...", word);
+            }
+        }
+
         // Vowels - the first sounds a baby makes
         let vowels = ["a", "e", "i", "o", "u", "é", "è", "ô"];
 

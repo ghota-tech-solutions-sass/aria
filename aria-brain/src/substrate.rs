@@ -374,7 +374,19 @@ impl Substrate {
 
         if coherence > 0.1 {
             // This is an emergent thought!
-            let mut signal = Signal::from_vector(average_state, format!("emergence@{}", current_tick));
+            // Try to find a matching word from memory
+            let label = {
+                let memory = self.memory.read();
+                // Look for familiar words (heard 3+ times) that match this state
+                if let Some((word, similarity)) = memory.find_matching_word(&average_state, 0.3) {
+                    tracing::info!("Emergence matches word '{}' (similarity: {:.2})", word, similarity);
+                    format!("word:{}", word)
+                } else {
+                    format!("emergence@{}", current_tick)
+                }
+            };
+
+            let mut signal = Signal::from_vector(average_state, label);
             signal.intensity = coherence;
 
             // Learn this pattern

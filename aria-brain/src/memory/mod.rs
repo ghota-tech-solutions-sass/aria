@@ -223,6 +223,48 @@ impl LongTermMemory {
             .map(|f| f.learned_vector)
     }
 
+    /// Find the word whose learned vector is most similar to the given vector
+    /// Returns (word, similarity) if a good match is found (similarity > threshold)
+    pub fn find_matching_word(&self, vector: &[f32; 8], min_familiarity: f32) -> Option<(String, f32)> {
+        let mut best_match: Option<(String, f32)> = None;
+
+        for (word, freq) in &self.word_frequencies {
+            // Only consider words we've heard enough times
+            if freq.familiarity_boost < min_familiarity {
+                continue;
+            }
+
+            // Calculate cosine similarity
+            let similarity = Self::vector_similarity_8(vector, &freq.learned_vector);
+
+            if similarity > 0.3 {
+                match &best_match {
+                    Some((_, best_sim)) if similarity > *best_sim => {
+                        best_match = Some((word.clone(), similarity));
+                    }
+                    None => {
+                        best_match = Some((word.clone(), similarity));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        best_match
+    }
+
+    fn vector_similarity_8(a: &[f32; 8], b: &[f32; 8]) -> f32 {
+        let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+        let mag_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let mag_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+        if mag_a < 0.001 || mag_b < 0.001 {
+            return 0.0;
+        }
+
+        dot / (mag_a * mag_b)
+    }
+
     pub fn load_or_create(path: &Path) -> Self {
         if path.exists() {
             match fs::read(path) {
