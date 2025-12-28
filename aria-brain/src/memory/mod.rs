@@ -251,6 +251,11 @@ impl LongTermMemory {
         self.get_associations(word).into_iter().next()
     }
 
+    /// Get the top N associations for a word
+    pub fn get_top_associations(&self, word: &str, n: usize) -> Vec<(String, f32)> {
+        self.get_associations(word).into_iter().take(n).collect()
+    }
+
     /// Record that ARIA heard a word
     /// Returns the familiarity level (0.0 = new word, 1.0+ = very familiar)
     pub fn hear_word(&mut self, word: &str, context_vector: [f32; 8], emotional_valence: f32) -> f32 {

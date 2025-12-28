@@ -407,7 +407,23 @@ Toi: "Moka"
 ARIA: "moka chat ♥"  ← Elle sait que Moka = amour !
 ```
 
+### 2025-12-28 - Session 5c: Phrases de 3 mots !
+
+**Amélioration** : ARIA peut maintenant combiner 3 mots associés !
+
+Si elle connaît `moka→chat` ET `moka→aime`, elle dira "moka chat aime" !
+
+**Implémentation** :
+- `get_top_associations(word, n)` : récupère les N meilleures associations
+- `detect_emergence` : construit des phrases de 2 ou 3 mots
+- `aria-body` : affiche "mot1 mot2 mot3" pour les triplets
+
+**Logs** :
+```
+TRIPLE! 'moka' -> 'chat' + 'est' (strengths: 1.00, 0.80)
+```
+
 ---
 
 *Dernière mise à jour : 2025-12-28*
-*Version ARIA : 0.1.8*
+*Version ARIA : 0.1.9*

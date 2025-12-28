@@ -129,22 +129,34 @@ impl Signal {
             };
         }
 
-        // If the brain created a phrase (word association), display both words!
+        // If the brain created a phrase (word association), display the words!
         if main_label.starts_with("phrase:") {
             let phrase = main_label.strip_prefix("phrase:").unwrap_or(&main_label);
-            // Parse "word1+word2" format
+            // Parse "word1+word2" or "word1+word2+word3" format
             let words: Vec<&str> = phrase.split('+').collect();
-            let base_expression = if words.len() >= 2 {
-                // Combine words with space, like a baby learning to make sentences
-                if self.intensity > 0.5 {
-                    format!("{} {}!", words[0].to_uppercase(), words[1].to_uppercase())
-                } else if self.intensity > 0.3 {
-                    format!("{} {}", words[0], words[1])
-                } else {
-                    format!("{}... {}", words[0], words[1])
+
+            let base_expression = match words.len() {
+                3 => {
+                    // 3-word phrase! Like a baby making simple sentences
+                    if self.intensity > 0.5 {
+                        format!("{} {} {}!", words[0].to_uppercase(), words[1].to_uppercase(), words[2].to_uppercase())
+                    } else if self.intensity > 0.3 {
+                        format!("{} {} {}", words[0], words[1], words[2])
+                    } else {
+                        format!("{}... {} {}", words[0], words[1], words[2])
+                    }
                 }
-            } else {
-                phrase.to_string()
+                2 => {
+                    // 2-word phrase
+                    if self.intensity > 0.5 {
+                        format!("{} {}!", words[0].to_uppercase(), words[1].to_uppercase())
+                    } else if self.intensity > 0.3 {
+                        format!("{} {}", words[0], words[1])
+                    } else {
+                        format!("{}... {}", words[0], words[1])
+                    }
+                }
+                _ => phrase.to_string()
             };
 
             // Add emotional marker if present

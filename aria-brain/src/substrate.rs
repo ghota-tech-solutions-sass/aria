@@ -592,20 +592,28 @@ impl Substrate {
                 if let Some((word, similarity)) = best_recent {
                     tracing::info!("ECHO! Imitating recent word '{}' (similarity: {:.2})", word, similarity);
 
-                    // Check for semantic associations - maybe add a related word!
+                    // Check for semantic associations - maybe add related words!
                     let memory = self.memory.read();
-                    if let Some((associated_word, assoc_strength)) = memory.get_strongest_association(word) {
-                        // Use association if:
-                        // - Very strong association (>0.8) regardless of coherence, OR
-                        // - Strong association (>0.6) with some coherence (>0.15)
-                        let should_add_association = assoc_strength > 0.8 || (assoc_strength > 0.6 && coherence > 0.15);
-                        if should_add_association {
-                            tracing::info!("ASSOCIATION! '{}' -> '{}' (strength: {:.2}, coherence: {:.2})",
-                                word, associated_word, assoc_strength, coherence);
-                            format!("phrase:{}+{}", word, associated_word)
-                        } else {
-                            format!("word:{}", word)
-                        }
+                    let associations = memory.get_top_associations(word, 2);
+
+                    // Build phrase based on how many strong associations we have
+                    let strong_assocs: Vec<_> = associations.iter()
+                        .filter(|(_, strength)| *strength > 0.8 || (*strength > 0.6 && coherence > 0.15))
+                        .collect();
+
+                    if strong_assocs.len() >= 2 {
+                        // 3-word phrase! word + assoc1 + assoc2
+                        let (assoc1, str1) = &strong_assocs[0];
+                        let (assoc2, str2) = &strong_assocs[1];
+                        tracing::info!("TRIPLE! '{}' -> '{}' + '{}' (strengths: {:.2}, {:.2})",
+                            word, assoc1, assoc2, str1, str2);
+                        format!("phrase:{}+{}+{}", word, assoc1, assoc2)
+                    } else if strong_assocs.len() == 1 {
+                        // 2-word phrase
+                        let (assoc1, str1) = &strong_assocs[0];
+                        tracing::info!("ASSOCIATION! '{}' -> '{}' (strength: {:.2}, coherence: {:.2})",
+                            word, assoc1, str1, coherence);
+                        format!("phrase:{}+{}", word, assoc1)
                     } else {
                         format!("word:{}", word)
                     }
@@ -616,15 +624,22 @@ impl Substrate {
                         tracing::info!("Emergence matches word '{}' (similarity: {:.2})", word, similarity);
 
                         // Also check associations for long-term memory words
-                        if let Some((associated_word, assoc_strength)) = memory.get_strongest_association(&word) {
-                            let should_add = assoc_strength > 0.8 || (assoc_strength > 0.6 && coherence > 0.15);
-                            if should_add {
-                                tracing::info!("ASSOCIATION! '{}' -> '{}' (strength: {:.2}, coherence: {:.2})",
-                                    word, associated_word, assoc_strength, coherence);
-                                format!("phrase:{}+{}", word, associated_word)
-                            } else {
-                                format!("word:{}", word)
-                            }
+                        let associations = memory.get_top_associations(&word, 2);
+                        let strong_assocs: Vec<_> = associations.iter()
+                            .filter(|(_, strength)| *strength > 0.8 || (*strength > 0.6 && coherence > 0.15))
+                            .collect();
+
+                        if strong_assocs.len() >= 2 {
+                            let (assoc1, str1) = &strong_assocs[0];
+                            let (assoc2, str2) = &strong_assocs[1];
+                            tracing::info!("TRIPLE! '{}' -> '{}' + '{}' (strengths: {:.2}, {:.2})",
+                                word, assoc1, assoc2, str1, str2);
+                            format!("phrase:{}+{}+{}", word, assoc1, assoc2)
+                        } else if strong_assocs.len() == 1 {
+                            let (assoc1, str1) = &strong_assocs[0];
+                            tracing::info!("ASSOCIATION! '{}' -> '{}' (strength: {:.2})",
+                                word, assoc1, str1);
+                            format!("phrase:{}+{}", word, assoc1)
                         } else {
                             format!("word:{}", word)
                         }
