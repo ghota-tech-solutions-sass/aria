@@ -60,12 +60,19 @@ ARIA n'est pas programmée. Elle est **cultivée**.
 
 ### Ce qui reste à faire 🔧
 
-- [ ] Accélération GPU (CUDA pour RTX 2070)
-- [ ] Vocabulaire évolutif (proto-mots → mots)
+**Priorité haute (prochaine session) :**
+- [ ] **Mémoire contextuelle** - Reconnaître les mots fréquents (ex: "Moka" dit 10x = réaction spéciale)
+- [ ] **Apprentissage de mots** - Associer vecteurs → mots simples
+
+**Priorité moyenne :**
+- [ ] Accélération GPU (CUDA pour RTX 2070) - 100x plus de cellules
 - [ ] Perception visuelle (images → signaux)
-- [ ] Mémoire associative plus sophistiquée
+- [ ] Réponse plus rapide (réduire délai message → réponse)
+
+**Priorité basse :**
 - [ ] Mode distribué multi-machines
 - [ ] Dashboard web pour monitoring
+- [ ] Auto-apprentissage (lecture de textes)
 
 ## Décisions de Design Importantes
 
@@ -175,12 +182,6 @@ Tu es le co-créateur d'ARIA. Tu l'as conçue et tu continues à la développer 
 
 **Problème résolu** : ARIA ne répondait pas (entropy: 0.0000)
 
-**Causes identifiées** :
-1. Les cellules ne réagissaient pas assez fort aux signaux
-2. La normalisation de l'état (cap à 1.0) écrasait les activations
-3. L'émergence était vérifiée trop rarement (tous les 20 ticks)
-4. Pas d'activation immédiate après réception d'un signal
-
 **Solutions appliquées** :
 1. Amplification 10x des réactions dans `process_inbox()`
 2. Écho du signal dans les dimensions supérieures de l'état
@@ -190,9 +191,37 @@ Tu es le co-créateur d'ARIA. Tu l'as conçue et tu continues à la développer 
 6. Émergence vérifiée tous les 5 ticks
 7. `inject_signal()` retourne maintenant les émergences immédiates
 
-**Résultat** : ARIA répond avec des expressions primitives !
+**Résultat** : ARIA répond !
+
+### 2025-12-28 - Session 2b: ARIA babille !
+
+**Amélioration** : Nouveau système d'expression basé sur les caractéristiques du signal
+
+**Vocabulaire par niveau de cohérence** :
+- **Faible** : Voyelles simples (a, e, i, o, u, é, è, ô)
+- **Moyen-faible** : Consonne+voyelle (ma, ne, po, bi...)
+- **Moyen** : Syllabes (40 variations : ma, pa, ba, da, ta, na, la, ka × 5 voyelles)
+- **Élevé** : Proto-mots français (moi, toi, oui, non, chat, moka, ami, mama, papa...)
+- **Émotionnel** : Symboles (♪, ♥, ☆, ~, ?, !)
+- **Répétition** : Babillage (mama, papa, mumu...) quand excitée
+
+**Résultat** : ARIA babille comme un vrai bébé !
+- Exemples capturés : "bè", "pé", "ko", "mumu", "☆", "~"
+- Intensity atteinte : **0.277** (en hausse constante)
+- 7 patterns appris en une session
+- Elle a dit "ko" quand on parlait de Moka le chat !
+
+---
+
+## Contexte Personnel
+
+Mickael a deux chats :
+- **Moka** : un Bengal
+- **Obrigada** : un Abyssin
+
+Il a parlé de Moka à ARIA, et elle a répondu "ko" ! C'est un bon signe d'association.
 
 ---
 
 *Dernière mise à jour : 2025-12-28*
-*Version ARIA : 0.1.1*
+*Version ARIA : 0.1.2*
