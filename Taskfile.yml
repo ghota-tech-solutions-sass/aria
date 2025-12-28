@@ -106,6 +106,39 @@ tasks:
       - mkdir -p backups
       - cp aria-brain/data/aria.memory backups/aria.memory.$(date +%Y%m%d_%H%M%S) 2>/dev/null || echo "No memory yet"
 
+  # REMOTE (PC Gamer)
+  body-remote:
+    desc: Connect body to remote brain (PC Gamer)
+    dir: aria-body
+    vars:
+      REMOTE_HOST: '{{.REMOTE_HOST | default "192.168.1.35"}}'
+    env:
+      ARIA_BRAIN_URL: 'ws://{{.REMOTE_HOST}}:{{.BRAIN_PORT}}/aria'
+    cmds:
+      - echo "Connecting to brain at ws://{{.REMOTE_HOST}}:{{.BRAIN_PORT}}/aria"
+      - cargo run --release
+
+  stats-remote:
+    desc: Get stats from remote brain
+    vars:
+      REMOTE_HOST: '{{.REMOTE_HOST | default "192.168.1.35"}}'
+    cmds:
+      - curl -s http://{{.REMOTE_HOST}}:{{.BRAIN_PORT}}/stats | jq .
+
+  words-remote:
+    desc: Get words from remote brain
+    vars:
+      REMOTE_HOST: '{{.REMOTE_HOST | default "192.168.1.35"}}'
+    cmds:
+      - curl -s http://{{.REMOTE_HOST}}:{{.BRAIN_PORT}}/words | jq .
+
+  health-remote:
+    desc: Check if remote brain is running
+    vars:
+      REMOTE_HOST: '{{.REMOTE_HOST | default "192.168.1.35"}}'
+    cmds:
+      - curl -s http://{{.REMOTE_HOST}}:{{.BRAIN_PORT}}/health | jq .
+
   # QUICK START
   start:
     desc: Build and start brain in background, then body
