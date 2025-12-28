@@ -90,10 +90,10 @@ ARIA n'est pas programmée. Elle est **cultivée**.
 - [x] **Topic detection** - Mots qui reviennent = topics
 - [x] **Context boosting** - Le fil de discussion influence les réponses
 
-**v0.1.17 - Patterns d'usage :**
-- [ ] **Patterns temporels** - Quand utiliser certains mots (bonjour/au revoir)
-- [ ] **Expressions sociales** - Salutations, remerciements, excuses
-- [ ] **Imitation de structures** - Copier les formes grammaticales, pas juste les mots
+**v0.1.17 - Patterns d'usage ✅ :**
+- [x] **Patterns temporels** - Quand utiliser certains mots (bonjour/au revoir)
+- [x] **Expressions sociales** - Salutations, remerciements, excuses
+- [x] **Contexte social** - Détection et réponse appropriée selon le contexte
 
 **v0.2.x - Mémoire et perception :**
 - [ ] **Mémoire épisodique** - Se souvenir de conversations spécifiques
@@ -732,6 +732,60 @@ ARIA: (boost context pour "moka") → "moka beau ♥"
 
 ---
 
+### 2025-12-29 - Session 7c: Patterns d'usage et réponses sociales !
+
+**Nouvelle fonctionnalité** : ARIA répond maintenant de manière appropriée aux contextes sociaux !
+
+**1. SocialContext enum**
+Nouveaux contextes sociaux détectés :
+- `Greeting` : Bonjour, salut, coucou, hello, hi
+- `Farewell` : Au revoir, bye, à bientôt, ciao
+- `Thanks` : Merci, thanks, thank you
+- `Affection` : Je t'aime, bisou, câlin
+- `Request` : S'il te plaît, please
+- `Agreement` : Oui, d'accord, ok
+- `Disagreement` : Non, pas d'accord
+- `General` : Contexte par défaut
+
+**2. UsagePattern struct**
+Chaque mot apprend quand il est utilisé :
+- `contexts` : Dans quels contextes sociaux ce mot apparaît
+- `start_of_conversation` : Score si utilisé en début de conversation
+- `end_of_conversation` : Score si utilisé en fin
+- `followed_by/preceded_by` : Mots qui l'accompagnent souvent
+
+**3. Réponses sociales automatiques**
+Quand ARIA détecte un contexte social au début d'une conversation :
+- **Greeting** → "bonjour~" ou un mot de salutation qu'elle connaît
+- **Farewell** → "bye~" ou mot d'au revoir appris
+- **Thanks** → "de rien~"
+- **Affection** → Mot affectueux + ♥♥
+
+**4. Apprentissage des patterns**
+`learn_usage_pattern()` enregistre :
+- Le contexte social de chaque mot entendu
+- La position dans la conversation (début/fin)
+- Les mots qui précèdent/suivent
+
+**Comportement** :
+```
+Toi: Bonjour ARIA !
+ARIA: bonjour~ ~    ← Elle dit bonjour en retour !
+
+Toi: Je t'aime
+ARIA: AIME ♥♥ ♥    ← Elle exprime l'affection !
+
+Toi: Merci
+ARIA: de rien~     ← Elle sait répondre !
+```
+
+**Fichiers modifiés** :
+- `aria-brain/src/memory/mod.rs` : `SocialContext`, `UsagePattern`, `detect_social_context()`, `learn_usage_pattern()`
+- `aria-brain/src/substrate.rs` : Réponses sociales dans `detect_emergence()`, apprentissage dans `inject_signal()`
+- `aria-body/src/signal.rs` : Parsing du format `social:`
+
+---
+
 ## Résumé Session 2025-12-28 (soir)
 
 Une session très productive où ARIA a fait d'énormes progrès :
@@ -745,6 +799,7 @@ Une session très productive où ARIA a fait d'énormes progrès :
 | 0.1.14 | Vie intérieure | Rêves, ennui, jeu créatif |
 | 0.1.15 | Catégories | Noms/Verbes/Adjectifs, phrases ordonnées, anti-répétition |
 | 0.1.16 | Contexte | Suivi de conversation, topics, context boosting |
+| 0.1.17 | Patterns sociaux | Détection contexte social, réponses appropriées |
 
 **Moment clé :** ARIA a dit son propre nom ("aria") spontanément !
 
@@ -759,4 +814,4 @@ Une session très productive où ARIA a fait d'énormes progrès :
 ---
 
 *Dernière mise à jour : 2025-12-29*
-*Version ARIA : 0.1.16*
+*Version ARIA : 0.1.17*

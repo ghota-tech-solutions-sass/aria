@@ -29,6 +29,74 @@ impl Default for WordCategory {
     }
 }
 
+/// Social context - when is a word/phrase typically used?
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Copy)]
+pub enum SocialContext {
+    /// Start of conversation (bonjour, salut, coucou)
+    Greeting,
+    /// End of conversation (au revoir, bisou, à bientôt)
+    Farewell,
+    /// Expressing gratitude (merci, thanks)
+    Thanks,
+    /// Expressing affection (je t'aime, bisou, câlin)
+    Affection,
+    /// Asking for something (s'il te plaît, please)
+    Request,
+    /// Responding positively (oui, d'accord, ok)
+    Agreement,
+    /// Responding negatively (non, pas maintenant)
+    Disagreement,
+    /// General conversation (no specific context)
+    General,
+}
+
+impl Default for SocialContext {
+    fn default() -> Self {
+        SocialContext::General
+    }
+}
+
+/// Usage pattern - tracks when/how words are used
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct UsagePattern {
+    /// Social contexts where this word appears
+    pub contexts: Vec<(SocialContext, u32)>, // (context, count)
+    /// Is this word typically at conversation start?
+    pub start_of_conversation: f32, // 0.0 to 1.0
+    /// Is this word typically at conversation end?
+    pub end_of_conversation: f32,
+    /// Is this word a response to questions?
+    pub response_to_question: f32,
+    /// Words that typically follow this one
+    pub followed_by: Vec<(String, u32)>,
+    /// Words that typically precede this one
+    pub preceded_by: Vec<(String, u32)>,
+}
+
+#[allow(dead_code)]
+impl UsagePattern {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Get the dominant social context for this word
+    pub fn dominant_context(&self) -> SocialContext {
+        self.contexts.iter()
+            .max_by_key(|(_, count)| *count)
+            .map(|(ctx, _)| *ctx)
+            .unwrap_or(SocialContext::General)
+    }
+
+    /// Record that this word was used in a context
+    pub fn record_context(&mut self, context: SocialContext) {
+        if let Some(pos) = self.contexts.iter().position(|(c, _)| *c == context) {
+            self.contexts[pos].1 += 1;
+        } else {
+            self.contexts.push((context, 1));
+        }
+    }
+}
+
 /// Long-term memory - persisted to disk
 #[derive(Serialize, Deserialize)]
 pub struct LongTermMemory {
@@ -85,6 +153,9 @@ pub struct WordFrequency {
     /// Used for probabilistic classification
     #[serde(default)]
     pub category_scores: [f32; 3], // [noun, verb, adjective]
+    /// Usage patterns - when/how this word is typically used
+    #[serde(default)]
+    pub usage_pattern: UsagePattern,
 }
 
 /// Semantic association between two words
@@ -192,6 +263,133 @@ impl LongTermMemory {
             vocabulary: HashMap::new(),
             word_frequencies: HashMap::new(),
             word_associations: HashMap::new(),
+        }
+    }
+
+    /// Detect the social context of input text
+    /// Returns the detected context and confidence
+    pub fn detect_social_context(text: &str) -> (SocialContext, f32) {
+        let lower = text.to_lowercase();
+
+        // Greeting patterns (start of conversation)
+        let greetings = [
+            "bonjour", "salut", "coucou", "hello", "hi", "hey",
+            "bonsoir", "bonne nuit", "good morning", "good evening"
+        ];
+        for g in greetings {
+            if lower.contains(g) {
+                return (SocialContext::Greeting, 0.9);
+            }
+        }
+
+        // Farewell patterns (end of conversation)
+        let farewells = [
+            "au revoir", "bye", "goodbye", "à bientôt", "à plus",
+            "bonne nuit", "good night", "see you", "ciao", "salut"
+        ];
+        // Note: "salut" can be both greeting and farewell, context matters
+        for f in farewells {
+            if lower.contains(f) && f != "salut" {
+                return (SocialContext::Farewell, 0.9);
+            }
+        }
+
+        // Thanks patterns
+        let thanks = ["merci", "thank", "thanks", "grateful", "appreciate"];
+        for t in thanks {
+            if lower.contains(t) {
+                return (SocialContext::Thanks, 0.9);
+            }
+        }
+
+        // Affection patterns
+        let affection = [
+            "je t'aime", "i love", "bisou", "câlin", "calin", "hug",
+            "kiss", "love you", "adore", "♥", "❤", "<3"
+        ];
+        for a in affection {
+            if lower.contains(a) {
+                return (SocialContext::Affection, 0.9);
+            }
+        }
+
+        // Request patterns
+        let requests = [
+            "s'il te plaît", "stp", "please", "peux-tu", "peux tu",
+            "can you", "could you", "would you", "voudrais"
+        ];
+        for r in requests {
+            if lower.contains(r) {
+                return (SocialContext::Request, 0.8);
+            }
+        }
+
+        // Agreement patterns
+        let agreements = [
+            "oui", "yes", "d'accord", "ok", "okay", "bien sûr",
+            "exactement", "absolument", "certainement"
+        ];
+        for a in agreements {
+            if lower.starts_with(a) || lower == a {
+                return (SocialContext::Agreement, 0.7);
+            }
+        }
+
+        // Disagreement patterns
+        let disagreements = [
+            "non", "no", "pas d'accord", "jamais", "never"
+        ];
+        for d in disagreements {
+            if lower.starts_with(d) || lower == d {
+                return (SocialContext::Disagreement, 0.7);
+            }
+        }
+
+        (SocialContext::General, 0.5)
+    }
+
+    /// Get an appropriate response word for a social context
+    /// Returns words that ARIA knows and are appropriate for this context
+    #[allow(dead_code)]
+    pub fn get_response_for_context(&self, context: SocialContext) -> Option<String> {
+        // Find words that are commonly used in this context
+        let mut candidates: Vec<(&String, f32)> = Vec::new();
+
+        for (word, freq) in &self.word_frequencies {
+            if let Some((_ctx, count)) = freq.usage_pattern.contexts.iter()
+                .find(|(c, _)| *c == context)
+            {
+                // Score based on frequency in this context and overall familiarity
+                let score = (*count as f32) * freq.familiarity_boost.max(0.1);
+                if score > 0.0 {
+                    candidates.push((word, score));
+                }
+            }
+        }
+
+        // Sort by score and return best match
+        candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        candidates.first().map(|(word, _)| (*word).clone())
+    }
+
+    /// Learn that a word was used in a specific social context
+    pub fn learn_usage_pattern(&mut self, word: &str, context: SocialContext, is_start: bool, is_end: bool) {
+        let word_lower = word.to_lowercase();
+
+        if let Some(freq) = self.word_frequencies.get_mut(&word_lower) {
+            // Record the context
+            freq.usage_pattern.record_context(context);
+
+            // Update start/end of conversation patterns
+            let alpha = 0.1; // Learning rate
+            if is_start {
+                freq.usage_pattern.start_of_conversation =
+                    freq.usage_pattern.start_of_conversation * (1.0 - alpha) + alpha;
+            }
+            if is_end {
+                freq.usage_pattern.end_of_conversation =
+                    freq.usage_pattern.end_of_conversation * (1.0 - alpha) + alpha;
+            }
         }
     }
 
@@ -373,6 +571,7 @@ impl LongTermMemory {
                 familiarity_boost: 0.0,
                 category,
                 category_scores,
+                usage_pattern: UsagePattern::default(),
             });
 
             tracing::info!("New word learned: '{}' (category: {:?})", word_lower, category);

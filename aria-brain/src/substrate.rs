@@ -38,6 +38,8 @@ struct ConversationExchange {
     tick: u64,
 }
 
+use crate::memory::SocialContext;
+
 /// Conversation context - tracks the flow of discussion
 /// ARIA can now follow a conversation thread!
 #[derive(Clone, Debug, Default)]
@@ -50,6 +52,10 @@ struct ConversationContext {
     in_conversation: bool,
     /// Last exchange tick
     last_exchange_tick: u64,
+    /// Current social context (greeting, farewell, etc.)
+    current_social_context: SocialContext,
+    /// Exchange count in current conversation
+    exchange_count: u32,
 }
 
 impl ConversationContext {
@@ -61,17 +67,20 @@ impl ConversationContext {
     }
 
     /// Add a new input to the conversation
-    fn add_input(&mut self, input: &str, words: Vec<String>, emotional_tone: f32, tick: u64) {
+    fn add_input(&mut self, input: &str, words: Vec<String>, emotional_tone: f32, tick: u64, social_context: SocialContext) {
         // Check if this is a new conversation or continuation
         if tick.saturating_sub(self.last_exchange_tick) > Self::CONVERSATION_TIMEOUT {
             // New conversation! Clear old context
             self.exchanges.clear();
             self.topic_words.clear();
+            self.exchange_count = 0;
             tracing::info!("NEW CONVERSATION started");
         }
 
         self.in_conversation = true;
         self.last_exchange_tick = tick;
+        self.current_social_context = social_context;
+        self.exchange_count += 1;
 
         // Create new exchange
         let exchange = ConversationExchange {
@@ -164,6 +173,16 @@ impl ConversationContext {
         }
         let sum: f32 = self.exchanges.iter().map(|e| e.emotional_tone).sum();
         sum / self.exchanges.len() as f32
+    }
+
+    /// Check if we're at the start of a conversation (first 1-2 exchanges)
+    fn is_conversation_start(&self) -> bool {
+        self.exchange_count <= 2
+    }
+
+    /// Get current social context
+    fn get_social_context(&self) -> SocialContext {
+        self.current_social_context
     }
 }
 
@@ -465,17 +484,28 @@ impl Substrate {
         // Record this interaction for spontaneity tracking
         self.last_interaction_tick.store(current_tick, Ordering::Relaxed);
 
+        // Detect social context of input
+        let (social_context, context_confidence) = LongTermMemory::detect_social_context(&signal.label);
+
         // Add to conversation context - ARIA now follows the discussion!
-        {
+        let (is_conversation_start, current_context) = {
             let significant_words: Vec<String> = words.iter()
                 .filter(|w| w.len() >= 3 && !STOP_WORDS.contains(&w.to_lowercase().as_str()))
                 .map(|w| w.to_lowercase())
                 .collect();
 
             let mut conversation = self.conversation.write();
-            conversation.add_input(&signal.label, significant_words, emotional_valence, current_tick);
+            conversation.add_input(&signal.label, significant_words, emotional_valence, current_tick, social_context);
 
-            // Log conversation state
+            let is_start = conversation.is_conversation_start();
+            let ctx = conversation.get_social_context();
+
+            // Log conversation state with social context
+            if context_confidence > 0.7 {
+                tracing::info!("SOCIAL CONTEXT: {:?} (confidence: {:.2}), Exchange #{}",
+                    social_context, context_confidence, conversation.exchange_count);
+            }
+
             if !conversation.topic_words.is_empty() {
                 let topics: Vec<&str> = conversation.topic_words.iter()
                     .take(3)
@@ -483,6 +513,18 @@ impl Substrate {
                     .collect();
                 tracing::info!("CONVERSATION: Topics = {:?}, Exchanges = {}",
                     topics, conversation.exchanges.len());
+            }
+
+            (is_start, ctx)
+        };
+
+        // Learn usage patterns for words in this message
+        {
+            let mut memory = self.memory.write();
+            for word in &words {
+                if word.len() >= 3 && !STOP_WORDS.contains(&word.to_lowercase().as_str()) {
+                    memory.learn_usage_pattern(word, current_context, is_conversation_start, false);
+                }
             }
         }
 
@@ -1119,6 +1161,87 @@ impl Substrate {
 
             // Get conversation context for boosting relevant words
             let context_words = self.conversation.read().get_context_words();
+
+            // Get social context - is this a greeting, farewell, etc.?
+            let social_context = self.conversation.read().get_social_context();
+            let is_conversation_start = self.conversation.read().is_conversation_start();
+
+            // SOCIAL CONTEXT RESPONSES - respond appropriately to greetings, etc.
+            // Only on first 1-2 exchanges when social context is clear
+            if is_conversation_start && social_context != SocialContext::General {
+                let social_response = match social_context {
+                    SocialContext::Greeting => {
+                        // Find a greeting word ARIA knows or use default
+                        let memory = self.memory.read();
+                        if let Some(response) = memory.get_response_for_context(SocialContext::Greeting) {
+                            Some(format!("social:greeting:{}", response))
+                        } else {
+                            Some("social:greeting:bonjour".to_string())
+                        }
+                    }
+                    SocialContext::Farewell => {
+                        let memory = self.memory.read();
+                        if let Some(response) = memory.get_response_for_context(SocialContext::Farewell) {
+                            Some(format!("social:farewell:{}", response))
+                        } else {
+                            Some("social:farewell:bye".to_string())
+                        }
+                    }
+                    SocialContext::Thanks => {
+                        // ARIA says "de rien" or similar
+                        Some("social:thanks:derien".to_string())
+                    }
+                    SocialContext::Affection => {
+                        // Respond with affection!
+                        let memory = self.memory.read();
+                        if let Some(response) = memory.get_response_for_context(SocialContext::Affection) {
+                            Some(format!("social:affection:{}", response))
+                        } else {
+                            Some("social:affection:aime".to_string())
+                        }
+                    }
+                    _ => None,
+                };
+
+                if let Some(response_label) = social_response {
+                    tracing::info!("SOCIAL RESPONSE: Context={:?} -> {}", social_context, response_label);
+
+                    // Add emotional marker for social responses
+                    let emotional_marker = match social_context {
+                        SocialContext::Affection => Some("♥"),
+                        SocialContext::Greeting => Some("~"),
+                        _ => None,
+                    };
+
+                    let final_label = if let Some(marker) = emotional_marker {
+                        format!("{}|emotion:{}", response_label, marker)
+                    } else {
+                        response_label
+                    };
+
+                    let mut signal = Signal::from_vector(average_state, final_label.clone());
+                    signal.intensity = coherence.max(0.4); // Ensure social responses are visible
+
+                    // Record what we said for anti-repetition
+                    {
+                        let words_said: Vec<String> = final_label
+                            .split('|').next().unwrap_or("")
+                            .split(':').last().unwrap_or("")
+                            .split('+')
+                            .map(|s| s.to_string())
+                            .collect();
+
+                        if let Some(word) = words_said.first() {
+                            *self.last_said_word.write() = Some(word.clone());
+                        }
+                    }
+
+                    // Record in conversation
+                    self.conversation.write().add_response(&final_label);
+
+                    return vec![signal];
+                }
+            }
 
             // First, try to echo a RECENT word (like a baby imitating)
             // Now with CONTEXT BOOSTING - words in current conversation get priority!

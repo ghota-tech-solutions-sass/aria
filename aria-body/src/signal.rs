@@ -108,6 +108,70 @@ impl Signal {
             (self.label.clone(), None)
         };
 
+        // If the brain is responding to a social context (greeting, farewell, etc.)
+        if main_label.starts_with("social:") {
+            // Format: social:greeting:bonjour or social:farewell:bye
+            let parts: Vec<&str> = main_label.split(':').collect();
+            let (context_type, word) = if parts.len() >= 3 {
+                (parts[1], parts[2])
+            } else if parts.len() >= 2 {
+                (parts[1], "")
+            } else {
+                ("general", "")
+            };
+
+            let base_expression = match context_type {
+                "greeting" => {
+                    // Greeting response - friendly!
+                    if word.is_empty() {
+                        "bonjour!".to_string()
+                    } else if self.intensity > 0.5 {
+                        format!("{}!", word.to_uppercase())
+                    } else {
+                        format!("{}~", word)
+                    }
+                }
+                "farewell" => {
+                    // Saying goodbye
+                    if word.is_empty() {
+                        "bye...".to_string()
+                    } else if self.intensity > 0.5 {
+                        format!("{}!", word)
+                    } else {
+                        format!("{}~", word)
+                    }
+                }
+                "thanks" => {
+                    // Responding to thanks
+                    if word == "derien" {
+                        "de rien~".to_string()
+                    } else if word.is_empty() {
+                        "~".to_string()
+                    } else {
+                        format!("{}~", word)
+                    }
+                }
+                "affection" => {
+                    // Expressing love back
+                    if word.is_empty() {
+                        "♥".to_string()
+                    } else if self.intensity > 0.5 {
+                        format!("{} ♥♥", word.to_uppercase())
+                    } else {
+                        format!("{} ♥", word)
+                    }
+                }
+                _ => word.to_string(),
+            };
+
+            // Add emotional marker if present
+            return if let Some(marker) = emotional_marker {
+                format!("{} {}", base_expression, marker)
+            } else {
+                base_expression
+            };
+        }
+
         // If the brain is speaking spontaneously (without being asked)
         if main_label.starts_with("spontaneous:") {
             let content = main_label.strip_prefix("spontaneous:").unwrap_or(&main_label);
