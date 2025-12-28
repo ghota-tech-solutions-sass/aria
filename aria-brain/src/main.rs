@@ -86,10 +86,18 @@ async fn main() {
             if let Err(e) = mem.save(std::path::Path::new("data/aria.memory")) {
                 warn!("Failed to save memory: {}", e);
             } else {
-                info!("Memory saved ({} memories, {} patterns)",
+                let familiar_words: Vec<_> = mem.get_familiar_words(0.5)
+                    .iter()
+                    .map(|(w, f)| format!("{}({})", w, f.count))
+                    .collect();
+                info!("Memory saved ({} memories, {} patterns, {} words known)",
                     mem.memories.len(),
-                    mem.learned_patterns.len()
+                    mem.learned_patterns.len(),
+                    mem.word_frequencies.len()
                 );
+                if !familiar_words.is_empty() {
+                    info!("Familiar words: {}", familiar_words.join(", "));
+                }
             }
         }
     });
@@ -123,7 +131,29 @@ async fn main() {
             warp::reply::json(&s)
         });
 
-    let routes = ws_route.or(health).or(stats);
+    // Words endpoint - show known words
+    let memory_words = memory.clone();
+    let words = warp::path("words")
+        .map(move || {
+            let mem = memory_words.read();
+            let words_info: Vec<serde_json::Value> = mem.word_frequencies
+                .iter()
+                .map(|(word, freq)| {
+                    serde_json::json!({
+                        "word": word,
+                        "count": freq.count,
+                        "familiarity": freq.familiarity_boost,
+                        "emotional_valence": freq.emotional_valence
+                    })
+                })
+                .collect();
+            warp::reply::json(&serde_json::json!({
+                "total_words": mem.word_frequencies.len(),
+                "words": words_info
+            }))
+        });
+
+    let routes = ws_route.or(health).or(stats).or(words);
 
     let port = std::env::var("ARIA_PORT")
         .ok()
@@ -133,6 +163,7 @@ async fn main() {
     info!("WebSocket ready on ws://0.0.0.0:{}/aria", port);
     info!("Health check on http://0.0.0.0:{}/health", port);
     info!("Stats on http://0.0.0.0:{}/stats", port);
+    info!("Words on http://0.0.0.0:{}/words", port);
     println!();
     println!("🧒 ARIA is waiting for her first interaction...");
     println!();

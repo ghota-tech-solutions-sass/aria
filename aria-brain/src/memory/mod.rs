@@ -33,6 +33,27 @@ pub struct LongTermMemory {
     /// Vocabulary learned (emergent language)
     #[serde(default)]
     pub vocabulary: HashMap<String, WordMeaning>,
+
+    /// Word frequency tracking - how often ARIA hears each word
+    #[serde(default)]
+    pub word_frequencies: HashMap<String, WordFrequency>,
+}
+
+/// Tracks how often a word is heard and its emotional context
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct WordFrequency {
+    /// How many times this word was heard
+    pub count: u64,
+    /// First time heard (tick)
+    pub first_heard: u64,
+    /// Last time heard (tick)
+    pub last_heard: u64,
+    /// Average vector representation (learned from context)
+    pub learned_vector: [f32; 8],
+    /// Emotional associations (positive = 1.0, negative = -1.0)
+    pub emotional_valence: f32,
+    /// How special this word is (0.0 = common, 1.0 = very special like "Moka")
+    pub familiarity_boost: f32,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -124,7 +145,82 @@ impl LongTermMemory {
             memories: Vec::new(),
             stats: GlobalStats::default(),
             vocabulary: HashMap::new(),
+            word_frequencies: HashMap::new(),
         }
+    }
+
+    /// Record that ARIA heard a word
+    /// Returns the familiarity level (0.0 = new word, 1.0+ = very familiar)
+    pub fn hear_word(&mut self, word: &str, context_vector: [f32; 8], emotional_valence: f32) -> f32 {
+        let current_tick = self.stats.total_ticks;
+        let word_lower = word.to_lowercase();
+
+        // Skip very short words (articles, etc.) unless they're special
+        if word_lower.len() < 3 && !["moi", "toi", "oui", "non"].contains(&word_lower.as_str()) {
+            return 0.0;
+        }
+
+        if let Some(freq) = self.word_frequencies.get_mut(&word_lower) {
+            freq.count += 1;
+            freq.last_heard = current_tick;
+
+            // Update learned vector with exponential moving average
+            for (i, v) in context_vector.iter().enumerate() {
+                freq.learned_vector[i] = freq.learned_vector[i] * 0.9 + v * 0.1;
+            }
+
+            // Update emotional valence
+            freq.emotional_valence = freq.emotional_valence * 0.9 + emotional_valence * 0.1;
+
+            // Calculate familiarity boost based on frequency
+            // Words heard 10+ times get a significant boost
+            freq.familiarity_boost = (freq.count as f32 / 10.0).min(2.0);
+
+            tracing::debug!("Word '{}' heard {} times (familiarity: {:.2})",
+                word_lower, freq.count, freq.familiarity_boost);
+
+            freq.familiarity_boost
+        } else {
+            // New word!
+            self.word_frequencies.insert(word_lower.clone(), WordFrequency {
+                count: 1,
+                first_heard: current_tick,
+                last_heard: current_tick,
+                learned_vector: context_vector,
+                emotional_valence,
+                familiarity_boost: 0.0,
+            });
+
+            tracing::info!("New word learned: '{}'", word_lower);
+            0.0
+        }
+    }
+
+    /// Get the familiarity level for a word (0.0 = unknown, 1.0+ = familiar)
+    #[allow(dead_code)]
+    pub fn get_familiarity(&self, word: &str) -> f32 {
+        let word_lower = word.to_lowercase();
+        self.word_frequencies
+            .get(&word_lower)
+            .map(|f| f.familiarity_boost)
+            .unwrap_or(0.0)
+    }
+
+    /// Get all words with high familiarity (ARIA knows these well)
+    pub fn get_familiar_words(&self, min_familiarity: f32) -> Vec<(&String, &WordFrequency)> {
+        self.word_frequencies
+            .iter()
+            .filter(|(_, freq)| freq.familiarity_boost >= min_familiarity)
+            .collect()
+    }
+
+    /// Get the learned vector for a word (if known)
+    #[allow(dead_code)]
+    pub fn get_word_vector(&self, word: &str) -> Option<[f32; 8]> {
+        let word_lower = word.to_lowercase();
+        self.word_frequencies
+            .get(&word_lower)
+            .map(|f| f.learned_vector)
     }
 
     pub fn load_or_create(path: &Path) -> Self {

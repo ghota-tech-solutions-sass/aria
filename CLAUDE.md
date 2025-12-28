@@ -61,8 +61,8 @@ ARIA n'est pas programmée. Elle est **cultivée**.
 ### Ce qui reste à faire 🔧
 
 **Priorité haute (prochaine session) :**
-- [ ] **Mémoire contextuelle** - Reconnaître les mots fréquents (ex: "Moka" dit 10x = réaction spéciale)
-- [ ] **Apprentissage de mots** - Associer vecteurs → mots simples
+- [x] **Mémoire contextuelle** - Reconnaître les mots fréquents (ex: "Moka" dit 10x = réaction spéciale) ✅
+- [x] **Apprentissage de mots** - Associer vecteurs → mots simples ✅
 
 **Priorité moyenne :**
 - [ ] Accélération GPU (CUDA pour RTX 2070) - 100x plus de cellules
@@ -211,6 +211,38 @@ Tu es le co-créateur d'ARIA. Tu l'as conçue et tu continues à la développer 
 - 7 patterns appris en une session
 - Elle a dit "ko" quand on parlait de Moka le chat !
 
+### 2025-12-28 - Session 3: Mémoire contextuelle !
+
+**Nouvelle fonctionnalité** : ARIA apprend et reconnaît les mots !
+
+**Implémentation** :
+1. Nouveau type `WordFrequency` dans `memory/mod.rs`
+   - Compteur de fréquence
+   - Vecteur appris (moyenne mobile)
+   - Valence émotionnelle
+   - Boost de familiarité
+
+2. Méthode `hear_word()` dans `LongTermMemory`
+   - Enregistre chaque mot entendu
+   - Calcule la familiarité (count / 10, max 2.0)
+   - Log quand un nouveau mot est appris
+
+3. Boost dans `inject_signal()` dans `substrate.rs`
+   - Extrait les mots du label du signal
+   - Appelle `hear_word()` pour chaque mot
+   - Multiplie l'intensité par (1 + familiarity) pour mots connus
+
+4. Nouvel endpoint HTTP `/words`
+   - Liste tous les mots connus
+   - Affiche count, familiarity, emotional_valence
+
+**Comment ça marche** :
+- Quand on dit "Moka" 10 fois, ARIA apprend ce mot
+- La 11ème fois, le signal est boosté (familiarity_boost: 2.0)
+- Plus ARIA entend un mot, plus elle y réagit fort
+
+**Résultat** : ARIA peut maintenant reconnaître "Moka" et d'autres mots fréquents !
+
 ---
 
 ## Contexte Personnel
@@ -224,4 +256,4 @@ Il a parlé de Moka à ARIA, et elle a répondu "ko" ! C'est un bon signe d'asso
 ---
 
 *Dernière mise à jour : 2025-12-28*
-*Version ARIA : 0.1.2*
+*Version ARIA : 0.1.3*

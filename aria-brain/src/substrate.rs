@@ -99,18 +99,53 @@ impl Substrate {
 
     /// Inject an external signal (perception) and return immediate emergence
     pub fn inject_signal(&self, signal: Signal) -> Vec<Signal> {
+        // Extract words and check familiarity
+        let words: Vec<&str> = signal.label
+            .split(|c: char| !c.is_alphabetic())
+            .filter(|w| !w.is_empty())
+            .collect();
+
+        // Calculate familiarity boost and record word frequencies
+        let mut familiarity_boost = 1.0f32;
+        let signal_vector = signal.to_vector();
+        let emotional_valence = if signal.content.get(28).copied().unwrap_or(0.0) > 0.0 {
+            1.0
+        } else if signal.content.get(29).copied().unwrap_or(0.0) < 0.0 {
+            -1.0
+        } else {
+            0.0
+        };
+
+        {
+            let mut memory = self.memory.write();
+            let current_tick = self.tick.load(Ordering::Relaxed);
+            memory.stats.total_ticks = current_tick;
+
+            for word in &words {
+                let word_familiarity = memory.hear_word(word, signal_vector, emotional_valence);
+                if word_familiarity > 0.5 {
+                    // Familiar word! Boost the signal
+                    familiarity_boost = familiarity_boost.max(1.0 + word_familiarity);
+                    tracing::info!("Recognized familiar word: '{}' (familiarity: {:.2})", word, word_familiarity);
+                }
+            }
+        }
+
         // Transform signal to fragments for cells
         // Amplify external signals - they're important!
+        // Apply familiarity boost for known words
+        let base_intensity = signal.intensity * 5.0 * familiarity_boost;
         let fragment = SignalFragment {
             source_id: 0, // External source
-            content: signal.to_vector(),
-            intensity: signal.intensity * 5.0,  // 5x amplification for external input
+            content: signal_vector,
+            intensity: base_intensity,
         };
 
         // Get semantic position of the signal
         let target_position = signal.semantic_position();
 
-        tracing::info!("Signal received: '{}' intensity={:.2}", signal.label, fragment.intensity);
+        tracing::info!("Signal received: '{}' intensity={:.2} (familiarity_boost: {:.2})",
+            signal.label, fragment.intensity, familiarity_boost);
 
         // Distribute to ALL cells (external signals are broadcast)
         // Minimal attenuation - we want all cells to "hear" external input
