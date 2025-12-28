@@ -145,7 +145,13 @@ async fn run_simple_mode() -> Result<(), Box<dyn std::error::Error>> {
         io::stdout().flush()?;
 
         let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
+        let bytes_read = io::stdin().read_line(&mut input)?;
+
+        // EOF reached (e.g., piped input exhausted)
+        if bytes_read == 0 {
+            break;
+        }
+
         let input = input.trim();
 
         if input == "/quit" || input == "/exit" {

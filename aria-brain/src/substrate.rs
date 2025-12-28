@@ -108,15 +108,20 @@ impl Substrate {
         // Get semantic position of the signal
         let target_position = signal.semantic_position();
 
-        // Distribute to nearby cells
+        // Distribute to ALL cells (external signals are broadcast)
+        // Intensity decreases with semantic distance
         self.cells.iter_mut().for_each(|mut entry| {
             let cell = entry.value_mut();
             let distance = semantic_distance(&cell.position, &target_position);
 
-            // Cells close to the signal's meaning receive it
-            if distance < 1.0 {
-                cell.receive(fragment.clone());
-            }
+            // All cells receive external signals, but with distance-based attenuation
+            let mut attenuated_fragment = fragment.clone();
+            attenuated_fragment.intensity = fragment.intensity / (1.0 + distance * 0.5);
+
+            cell.receive(attenuated_fragment);
+
+            // External signals also give energy boost (attention/arousal)
+            cell.energy = (cell.energy + 0.01 * fragment.intensity).min(1.5);
         });
 
         // Create a temporary attractor
@@ -280,15 +285,17 @@ impl Substrate {
     }
 
     fn detect_emergence(&self, current_tick: u64) -> Vec<Signal> {
-        // Find cells with high activation
+        // Find cells with any meaningful activation (lowered threshold)
         let active_cells: Vec<_> = self.cells.iter()
             .filter(|entry| {
                 let cell = entry.value();
-                cell.state.iter().map(|x| x.abs()).sum::<f32>() > 1.0
+                cell.state.iter().map(|x| x.abs()).sum::<f32>() > 0.1
             })
+            .take(1000) // Limit for performance
             .collect();
 
-        if active_cells.len() < 5 {
+        // Need at least a few active cells
+        if active_cells.len() < 3 {
             return Vec::new();
         }
 
@@ -304,10 +311,10 @@ impl Substrate {
             *a /= n;
         }
 
-        // Check coherence
+        // Check coherence (lowered threshold for baby ARIA)
         let coherence = self.calculate_cluster_coherence(&active_cells);
 
-        if coherence > 0.5 {
+        if coherence > 0.1 {
             // This is an emergent thought!
             let mut signal = Signal::from_vector(average_state, format!("emergence@{}", current_tick));
             signal.intensity = coherence;

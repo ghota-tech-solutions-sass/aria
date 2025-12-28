@@ -158,9 +158,10 @@ async fn evolution_loop(
         // 2. One tick of life
         let emergent_signals = substrate.tick();
 
-        // 3. Send emergent expressions
+        // 3. Send emergent expressions (lowered threshold for baby ARIA)
         for signal in emergent_signals {
-            if signal.intensity > 0.3 {
+            info!("Emergent signal detected! intensity: {}", signal.intensity);
+            if signal.intensity > 0.05 {
                 let _ = expression.send(signal);
             }
         }
