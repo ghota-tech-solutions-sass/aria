@@ -1,0 +1,27 @@
+[package]
+name = "aria-body"
+version = "0.1.0"
+edition = "2021"
+description = "ARIA Body - The interface for human-ARIA interaction"
+authors = ["Ghota Tech Solutions"]
+license = "MIT"
+
+[dependencies]
+tokio = { version = "1.35", features = ["full"] }
+tokio-tungstenite = "0.21"
+futures-util = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+crossterm = "0.27"
+ratatui = "0.25"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = "0.4"
+
+[[bin]]
+name = "aria-body"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = true

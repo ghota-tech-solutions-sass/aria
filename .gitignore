@@ -1,0 +1,30 @@
+# Rust
+/target/
+**/target/
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# ARIA data (optional - you may want to keep memory)
+# aria-brain/data/
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
