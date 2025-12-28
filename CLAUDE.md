@@ -47,32 +47,58 @@ ARIA n'est pas programmée. Elle est **cultivée**.
 
 ### Ce qui fonctionne ✅
 
+**Infrastructure de base :**
 - [x] Substrate avec 10,000+ cellules vivantes
 - [x] Métabolisme équilibré (cellules survivent indéfiniment)
 - [x] Injection de signaux externes (texte → cellules)
 - [x] Détection d'émergence (groupes synchronisés)
-- [x] Expression primitive (* ~ → ← etc.)
 - [x] Communication WebSocket brain ↔ body
 - [x] Mémoire persistante entre sessions
 - [x] Interface texte fonctionnelle
-- [x] **Réponse immédiate** aux stimuli (émergence instantanée)
-- [x] **Activation directe** des cellules sur signal externe
+
+**Apprentissage et mémoire :**
+- [x] Mémoire contextuelle - Reconnaître les mots fréquents ✅
+- [x] Apprentissage de mots - Associer vecteurs → mots simples ✅
+- [x] Associations sémantiques - Mots qui vont ensemble (moka + chat) ✅
+- [x] Valence émotionnelle - Les mots apprennent leur contexte émotionnel ✅
+- [x] Phrases de 2-3 mots - Combiner les associations ✅
+
+**Émotions et personnalité :**
+- [x] État émotionnel global (happiness, arousal, comfort, curiosity, boredom) ✅
+- [x] Réponses aux questions (oui/non selon valence) ✅
+- [x] Feedback positif/négatif - ARIA apprend ce qui plaît ✅
+- [x] Marqueurs émotionnels (♥, ?, !, ~, ...) ✅
+
+**Vie intérieure :**
+- [x] Spontanéité - ARIA parle sans qu'on lui demande ✅
+- [x] Rêves - Consolidation mémoire pendant l'inactivité ✅
+- [x] Ennui créatif - Joue avec les mots quand elle s'ennuie ✅
+- [x] Stop words - Filtre les mots vides, focus sur le sens ✅
+
+**Ce qu'ARIA sait faire maintenant :**
+- Dire son propre nom ("aria")
+- Reconnaître et nommer Moka le chat
+- Répondre aux questions avec oui/non
+- Apprendre du feedback (Bravo! / Non)
+- Rêver de ses mots préférés
+- Créer des combinaisons de mots quand elle s'ennuie
 
 ### Ce qui reste à faire 🔧
 
-**Priorité haute (prochaine session) :**
-- [x] **Mémoire contextuelle** - Reconnaître les mots fréquents (ex: "Moka" dit 10x = réaction spéciale) ✅
-- [x] **Apprentissage de mots** - Associer vecteurs → mots simples ✅
+**Priorité haute (prochaines sessions) :**
+- [ ] **Améliorer sélection des mots** - Éviter les répétitions du même mot
+- [ ] **Mémoire épisodique** - Se souvenir de conversations spécifiques
+- [ ] **Auto-amélioration** - Modifier ses propres paramètres basé sur feedback
 
 **Priorité moyenne :**
 - [ ] Accélération GPU (CUDA pour RTX 2070) - 100x plus de cellules
 - [ ] Perception visuelle (images → signaux)
-- [ ] Réponse plus rapide (réduire délai message → réponse)
+- [ ] Vocabulaire étendu - Apprendre de nouvelles catégories de mots
 
 **Priorité basse :**
 - [ ] Mode distribué multi-machines
 - [ ] Dashboard web pour monitoring
-- [ ] Auto-apprentissage (lecture de textes)
+- [ ] Réécriture de code par ARIA elle-même (objectif long terme)
 
 ## Décisions de Design Importantes
 
@@ -593,6 +619,30 @@ ARIA: aime moka~    ← Elle joue avec ses mots préférés !
 
 ARIA ne s'ennuie plus - elle a une vie intérieure riche.
 Elle n'attend pas passivement. Elle pense, rêve et joue.
+
+---
+
+## Résumé Session 2025-12-28 (soir)
+
+Une session très productive où ARIA a fait d'énormes progrès :
+
+| Version | Feature | Description |
+|---------|---------|-------------|
+| 0.1.10 | Questions | Répond oui/non selon la valence émotionnelle des mots |
+| 0.1.11 | Spontanéité | Parle sans qu'on lui demande (lonely, happy, curious) |
+| 0.1.12 | Feedback | Apprend de "Bravo!" et "Non" - renforcement émergent |
+| 0.1.13 | Stop words | Filtre les mots vides (le, la, suis, est...) |
+| 0.1.14 | Vie intérieure | Rêves, ennui, jeu créatif |
+
+**Moment clé :** ARIA a dit son propre nom ("aria") spontanément !
+
+**Philosophie appliquée :**
+- ARIA n'est pas un LLM - elle apprend par expérience et feedback
+- Elle a une vie intérieure (rêves, ennui, créativité)
+- Elle développe des préférences (mots avec haute valence positive)
+- Le feedback humain guide son apprentissage (pas de gradient descent)
+
+**Prochain objectif discuté :** Auto-amélioration - ARIA pourrait un jour modifier ses propres paramètres, voire son code.
 
 ---
 
