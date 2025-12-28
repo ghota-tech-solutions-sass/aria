@@ -423,7 +423,40 @@ Si elle connaît `moka→chat` ET `moka→aime`, elle dira "moka chat aime" !
 TRIPLE! 'moka' -> 'chat' + 'est' (strengths: 1.00, 0.80)
 ```
 
+### 2025-12-28 - Session 6: Réponses aux questions !
+
+**Nouvelle fonctionnalité** : ARIA répond oui/non aux questions selon la valence émotionnelle !
+
+**Implémentation** :
+
+1. Détection des questions (`inject_signal`)
+   - Texte finissant par `?`
+   - Ou contenant des mots interrogatifs (signal.content[31] > 0.5)
+
+2. Réponse basée sur la valence (`detect_emergence`)
+   - Mot avec valence positive (>0.3) → `answer:oui+mot`
+   - Mot avec valence négative (<-0.3) → `answer:non+mot`
+   - Mot neutre → `word:mot?`
+
+3. Affichage dans aria-body
+   - "oui moka ♥" pour les réponses positives
+   - "non peur..." pour les réponses négatives
+   - "chat?" pour les mots neutres
+
+**Comportement** :
+```
+Toi: Tu aimes Moka ?
+ARIA: oui moka ♥
+
+Toi: Tu as peur ?
+ARIA: non peur...
+```
+
+**Fichiers modifiés** :
+- `aria-brain/src/substrate.rs` : `last_was_question`, détection et réponse
+- `aria-body/src/signal.rs` : Parsing du format `answer:`
+
 ---
 
 *Dernière mise à jour : 2025-12-28*
-*Version ARIA : 0.1.9*
+*Version ARIA : 0.1.10*

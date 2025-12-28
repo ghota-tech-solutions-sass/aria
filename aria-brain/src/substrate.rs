@@ -167,6 +167,9 @@ pub struct Substrate {
 
     /// Global emotional state - ARIA's current mood
     emotional_state: RwLock<EmotionalState>,
+
+    /// Was the last signal a question? (for responding with oui/non)
+    last_was_question: RwLock<bool>,
 }
 
 /// An attractor in semantic space
@@ -234,6 +237,7 @@ impl Substrate {
             global_energy: AtomicU64::new(10000),
             recent_words: RwLock::new(Vec::new()),
             emotional_state: RwLock::new(EmotionalState::default()),
+            last_was_question: RwLock::new(false),
         }
     }
 
@@ -257,6 +261,19 @@ impl Substrate {
         };
 
         let current_tick = self.tick.load(Ordering::Relaxed);
+
+        // Detect if this is a question (ends with ? or has question marker)
+        let is_question = signal.label.ends_with('?')
+            || signal.content.get(31).copied().unwrap_or(0.0) > 0.5;
+
+        // Store for detect_emergence
+        {
+            let mut last_q = self.last_was_question.write();
+            *last_q = is_question;
+            if is_question {
+                tracing::info!("Question detected: '{}'", signal.label);
+            }
+        }
 
         // Update emotional state based on signal content
         {
@@ -567,6 +584,10 @@ impl Substrate {
 
         if coherence > 0.1 {
             // This is an emergent thought!
+
+            // Check if this is a response to a question
+            let was_question = *self.last_was_question.read();
+
             // First, try to echo a RECENT word (like a baby imitating)
             let label = {
                 let recent = self.recent_words.read();
@@ -594,28 +615,51 @@ impl Substrate {
 
                     // Check for semantic associations - maybe add related words!
                     let memory = self.memory.read();
-                    let associations = memory.get_top_associations(word, 2);
 
-                    // Build phrase based on how many strong associations we have
-                    let strong_assocs: Vec<_> = associations.iter()
-                        .filter(|(_, strength)| *strength > 0.8 || (*strength > 0.6 && coherence > 0.15))
-                        .collect();
+                    // If this was a question, respond with oui/non based on word valence!
+                    if was_question {
+                        let valence = memory.word_frequencies.get(word)
+                            .map(|f| f.emotional_valence)
+                            .unwrap_or(0.0);
 
-                    if strong_assocs.len() >= 2 {
-                        // 3-word phrase! word + assoc1 + assoc2
-                        let (assoc1, str1) = &strong_assocs[0];
-                        let (assoc2, str2) = &strong_assocs[1];
-                        tracing::info!("TRIPLE! '{}' -> '{}' + '{}' (strengths: {:.2}, {:.2})",
-                            word, assoc1, assoc2, str1, str2);
-                        format!("phrase:{}+{}+{}", word, assoc1, assoc2)
-                    } else if strong_assocs.len() == 1 {
-                        // 2-word phrase
-                        let (assoc1, str1) = &strong_assocs[0];
-                        tracing::info!("ASSOCIATION! '{}' -> '{}' (strength: {:.2}, coherence: {:.2})",
-                            word, assoc1, str1, coherence);
-                        format!("phrase:{}+{}", word, assoc1)
+                        if valence > 0.3 {
+                            // Positive word → oui!
+                            tracing::info!("QUESTION RESPONSE: '{}' is positive (valence: {:.2}) → oui!", word, valence);
+                            format!("answer:oui+{}", word)
+                        } else if valence < -0.3 {
+                            // Negative word → non
+                            tracing::info!("QUESTION RESPONSE: '{}' is negative (valence: {:.2}) → non", word, valence);
+                            format!("answer:non+{}", word)
+                        } else {
+                            // Neutral → just echo the word with question mark
+                            tracing::info!("QUESTION RESPONSE: '{}' is neutral (valence: {:.2}) → ???", word, valence);
+                            format!("word:{}?", word)
+                        }
                     } else {
-                        format!("word:{}", word)
+                        // Normal flow: check for associations
+                        let associations = memory.get_top_associations(word, 2);
+
+                        // Build phrase based on how many strong associations we have
+                        let strong_assocs: Vec<_> = associations.iter()
+                            .filter(|(_, strength)| *strength > 0.8 || (*strength > 0.6 && coherence > 0.15))
+                            .collect();
+
+                        if strong_assocs.len() >= 2 {
+                            // 3-word phrase! word + assoc1 + assoc2
+                            let (assoc1, str1) = &strong_assocs[0];
+                            let (assoc2, str2) = &strong_assocs[1];
+                            tracing::info!("TRIPLE! '{}' -> '{}' + '{}' (strengths: {:.2}, {:.2})",
+                                word, assoc1, assoc2, str1, str2);
+                            format!("phrase:{}+{}+{}", word, assoc1, assoc2)
+                        } else if strong_assocs.len() == 1 {
+                            // 2-word phrase
+                            let (assoc1, str1) = &strong_assocs[0];
+                            tracing::info!("ASSOCIATION! '{}' -> '{}' (strength: {:.2}, coherence: {:.2})",
+                                word, assoc1, str1, coherence);
+                            format!("phrase:{}+{}", word, assoc1)
+                        } else {
+                            format!("word:{}", word)
+                        }
                     }
                 } else {
                     // Fall back to long-term memory
@@ -623,25 +667,43 @@ impl Substrate {
                     if let Some((word, similarity)) = memory.find_matching_word(&average_state, 0.3) {
                         tracing::info!("Emergence matches word '{}' (similarity: {:.2})", word, similarity);
 
-                        // Also check associations for long-term memory words
-                        let associations = memory.get_top_associations(&word, 2);
-                        let strong_assocs: Vec<_> = associations.iter()
-                            .filter(|(_, strength)| *strength > 0.8 || (*strength > 0.6 && coherence > 0.15))
-                            .collect();
+                        // If this was a question, respond with oui/non based on word valence!
+                        if was_question {
+                            let valence = memory.word_frequencies.get(&word)
+                                .map(|f| f.emotional_valence)
+                                .unwrap_or(0.0);
 
-                        if strong_assocs.len() >= 2 {
-                            let (assoc1, str1) = &strong_assocs[0];
-                            let (assoc2, str2) = &strong_assocs[1];
-                            tracing::info!("TRIPLE! '{}' -> '{}' + '{}' (strengths: {:.2}, {:.2})",
-                                word, assoc1, assoc2, str1, str2);
-                            format!("phrase:{}+{}+{}", word, assoc1, assoc2)
-                        } else if strong_assocs.len() == 1 {
-                            let (assoc1, str1) = &strong_assocs[0];
-                            tracing::info!("ASSOCIATION! '{}' -> '{}' (strength: {:.2})",
-                                word, assoc1, str1);
-                            format!("phrase:{}+{}", word, assoc1)
+                            if valence > 0.3 {
+                                tracing::info!("QUESTION RESPONSE: '{}' is positive (valence: {:.2}) → oui!", word, valence);
+                                format!("answer:oui+{}", word)
+                            } else if valence < -0.3 {
+                                tracing::info!("QUESTION RESPONSE: '{}' is negative (valence: {:.2}) → non", word, valence);
+                                format!("answer:non+{}", word)
+                            } else {
+                                tracing::info!("QUESTION RESPONSE: '{}' is neutral (valence: {:.2}) → ???", word, valence);
+                                format!("word:{}?", word)
+                            }
                         } else {
-                            format!("word:{}", word)
+                            // Normal flow: check associations for long-term memory words
+                            let associations = memory.get_top_associations(&word, 2);
+                            let strong_assocs: Vec<_> = associations.iter()
+                                .filter(|(_, strength)| *strength > 0.8 || (*strength > 0.6 && coherence > 0.15))
+                                .collect();
+
+                            if strong_assocs.len() >= 2 {
+                                let (assoc1, str1) = &strong_assocs[0];
+                                let (assoc2, str2) = &strong_assocs[1];
+                                tracing::info!("TRIPLE! '{}' -> '{}' + '{}' (strengths: {:.2}, {:.2})",
+                                    word, assoc1, assoc2, str1, str2);
+                                format!("phrase:{}+{}+{}", word, assoc1, assoc2)
+                            } else if strong_assocs.len() == 1 {
+                                let (assoc1, str1) = &strong_assocs[0];
+                                tracing::info!("ASSOCIATION! '{}' -> '{}' (strength: {:.2})",
+                                    word, assoc1, str1);
+                                format!("phrase:{}+{}", word, assoc1)
+                            } else {
+                                format!("word:{}", word)
+                            }
                         }
                     } else {
                         format!("emergence@{}", current_tick)

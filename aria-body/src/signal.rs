@@ -108,6 +108,59 @@ impl Signal {
             (self.label.clone(), None)
         };
 
+        // If the brain is answering a question (oui/non)
+        if main_label.starts_with("answer:") {
+            let answer = main_label.strip_prefix("answer:").unwrap_or(&main_label);
+            let parts: Vec<&str> = answer.split('+').collect();
+
+            let (response, word) = if parts.len() >= 2 {
+                (parts[0], parts[1])
+            } else {
+                (answer, "")
+            };
+
+            // Format based on yes/no response
+            let base_expression = if response == "oui" {
+                if self.intensity > 0.5 {
+                    if word.is_empty() {
+                        "OUI!".to_string()
+                    } else {
+                        format!("OUI {} ♥", word.to_uppercase())
+                    }
+                } else {
+                    if word.is_empty() {
+                        "oui!".to_string()
+                    } else {
+                        format!("oui {} ♥", word)
+                    }
+                }
+            } else if response == "non" {
+                if self.intensity > 0.5 {
+                    if word.is_empty() {
+                        "NON!".to_string()
+                    } else {
+                        format!("NON {}...", word.to_uppercase())
+                    }
+                } else {
+                    if word.is_empty() {
+                        "non...".to_string()
+                    } else {
+                        format!("non {}...", word)
+                    }
+                }
+            } else {
+                // Unknown answer type
+                format!("{}?", word)
+            };
+
+            // Add emotional marker if present
+            return if let Some(marker) = emotional_marker {
+                format!("{} {}", base_expression, marker)
+            } else {
+                base_expression
+            };
+        }
+
         // If the brain matched a known word, use it!
         if main_label.starts_with("word:") {
             let word = main_label.strip_prefix("word:").unwrap_or(&main_label);
