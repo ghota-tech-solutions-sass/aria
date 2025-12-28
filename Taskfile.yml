@@ -1,8 +1,3 @@
-# ARIA - Taskfile
-# https://taskfile.dev
-#
-# Install: sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b ~/.local/bin
-
 version: '3'
 
 vars:
@@ -11,40 +6,29 @@ vars:
   BRAIN_URL: 'ws://{{.BRAIN_HOST}}:{{.BRAIN_PORT}}/aria'
 
 tasks:
-  # ============================================
-  # INSTALLATION
-  # ============================================
-
-  install:
-    desc: Install Rust and dependencies
+  default:
+    desc: Show available tasks
     cmds:
-      - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-      - echo "Restart your terminal or run: source ~/.cargo/env"
+      - task --list
 
-  # ============================================
   # BUILD
-  # ============================================
-
   build:
     desc: Build both brain and body in release mode
-    deps: [build:brain, build:body]
+    deps: [build-brain, build-body]
 
-  build:brain:
+  build-brain:
     desc: Build the brain (substrate)
     dir: aria-brain
     cmds:
       - cargo build --release
 
-  build:body:
+  build-body:
     desc: Build the body (interface)
     dir: aria-body
     cmds:
       - cargo build --release
 
-  # ============================================
   # RUN
-  # ============================================
-
   brain:
     desc: Start the brain (run this first)
     dir: aria-brain
@@ -54,59 +38,22 @@ tasks:
       - cargo run --release
 
   body:
-    desc: Start the body interface (simple mode)
+    desc: Start the body interface
     dir: aria-body
     env:
       ARIA_BRAIN_URL: '{{.BRAIN_URL}}'
     cmds:
       - cargo run --release
 
-  body:visual:
-    desc: Start the body interface (visual TUI mode)
+  body-visual:
+    desc: Start the body in visual TUI mode
     dir: aria-body
     env:
       ARIA_BRAIN_URL: '{{.BRAIN_URL}}'
     cmds:
       - cargo run --release -- --visual
 
-  # ============================================
-  # DEVELOPMENT
-  # ============================================
-
-  dev:brain:
-    desc: Run brain in development mode (with debug info)
-    dir: aria-brain
-    env:
-      RUST_LOG: debug
-      ARIA_PORT: '{{.BRAIN_PORT}}'
-    cmds:
-      - cargo run
-
-  dev:body:
-    desc: Run body in development mode
-    dir: aria-body
-    env:
-      RUST_LOG: debug
-      ARIA_BRAIN_URL: '{{.BRAIN_URL}}'
-    cmds:
-      - cargo run
-
-  watch:brain:
-    desc: Watch and rebuild brain on changes
-    dir: aria-brain
-    cmds:
-      - cargo watch -x 'build --release'
-
-  watch:body:
-    desc: Watch and rebuild body on changes
-    dir: aria-body
-    cmds:
-      - cargo watch -x 'build --release'
-
-  # ============================================
-  # TESTING & CHECKS
-  # ============================================
-
+  # TESTING
   test:
     desc: Run all tests
     cmds:
@@ -119,108 +66,51 @@ tasks:
       - cd aria-brain && cargo check
       - cd aria-body && cargo check
 
-  clippy:
-    desc: Run clippy linter
-    cmds:
-      - cd aria-brain && cargo clippy
-      - cd aria-body && cargo clippy
-
   fmt:
     desc: Format all code
     cmds:
       - cd aria-brain && cargo fmt
       - cd aria-body && cargo fmt
 
-  # ============================================
   # MONITORING
-  # ============================================
-
   health:
     desc: Check if brain is running
     cmds:
-      - curl -s http://{{.BRAIN_HOST}}:{{.BRAIN_PORT}}/health | jq .
+      - curl -s http://{{.BRAIN_HOST}}:{{.BRAIN_PORT}}/health
 
   stats:
     desc: Get brain statistics
     cmds:
-      - curl -s http://{{.BRAIN_HOST}}:{{.BRAIN_PORT}}/stats | jq .
+      - curl -s http://{{.BRAIN_HOST}}:{{.BRAIN_PORT}}/stats
 
-  logs:
-    desc: Tail brain logs (if running with output redirect)
-    cmds:
-      - tail -f /tmp/brain.log 2>/dev/null || echo "No log file. Run brain with: task brain > /tmp/brain.log 2>&1"
-
-  # ============================================
   # DATA MANAGEMENT
-  # ============================================
-
   reset:
-    desc: Reset ARIA's memory (start fresh)
-    prompt: This will delete ARIA's memory. Are you sure?
+    desc: Reset ARIA memory (start fresh)
     cmds:
       - rm -f aria-brain/data/aria.memory
-      - echo "Memory cleared. ARIA will start fresh."
+      - echo "Memory cleared"
 
   backup:
-    desc: Backup ARIA's memory
+    desc: Backup ARIA memory
     cmds:
       - mkdir -p backups
-      - cp aria-brain/data/aria.memory backups/aria.memory.$(date +%Y%m%d_%H%M%S) 2>/dev/null || echo "No memory to backup yet"
-      - echo "Backup created in backups/"
+      - cp aria-brain/data/aria.memory backups/aria.memory.$(date +%Y%m%d_%H%M%S) 2>/dev/null || echo "No memory yet"
 
-  restore:
-    desc: Restore latest backup
-    cmds:
-      - ls -t backups/aria.memory.* 2>/dev/null | head -1 | xargs -I {} cp {} aria-brain/data/aria.memory
-      - echo "Latest backup restored"
-
-  # ============================================
-  # NETWORK (multi-machine setup)
-  # ============================================
-
-  brain:remote:
-    desc: Start brain accessible from network
-    dir: aria-brain
-    env:
-      ARIA_PORT: '{{.BRAIN_PORT}}'
-    cmds:
-      - echo "Brain will be accessible at ws://$(hostname -I | awk '{print $1}'):{{.BRAIN_PORT}}/aria"
-      - cargo run --release
-
-  connect:
-    desc: Connect to a remote brain (set BRAIN_HOST first)
-    cmds:
-      - echo "Connecting to {{.BRAIN_URL}}"
-      - cd aria-body && ARIA_BRAIN_URL={{.BRAIN_URL}} cargo run --release
-
-  # ============================================
   # QUICK START
-  # ============================================
-
   start:
-    desc: Quick start - build and run brain in background, then body
+    desc: Build and start brain in background, then body
     cmds:
-      - task: build
-      - echo "Starting brain in background..."
-      - cd aria-brain && (cargo run --release > /tmp/brain.log 2>&1 &)
+      - task build
+      - echo "Starting brain..."
+      - cd aria-brain && cargo run --release &
       - sleep 3
-      - task: health
-      - echo ""
-      - echo "Starting body... Talk to ARIA!"
-      - task: body
+      - task health
+      - echo "Starting body..."
+      - task body
 
   stop:
     desc: Stop all ARIA processes
     cmds:
-      - pkill -f "aria-brain" 2>/dev/null || true
-      - pkill -f "aria-body" 2>/dev/null || true
+      - pkill -f aria-brain || true
+      - pkill -f aria-body || true
       - echo "ARIA stopped"
-
-  # ============================================
-  # HELP
-  # ============================================
-
-  default:
-    desc: Show available tasks
-    cmds:
-      - task --list
