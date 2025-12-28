@@ -110,64 +110,86 @@ impl Signal {
     /// Convert an emergent signal to a human-readable expression
     ///
     /// This is where ARIA's "language" emerges progressively.
-    /// Initially, it's just primitive sounds/symbols.
+    /// Initially, it's just primitive sounds/symbols - like a baby babbling.
     #[allow(dead_code)]
     pub fn to_expression(&self) -> String {
-        // Find the dominant value and index
-        let (dominant_index, dominant_value) = self.content
-            .iter()
-            .enumerate()
-            .max_by(|(_, a), (_, b)| a.abs().partial_cmp(&b.abs()).unwrap())
-            .map(|(i, v)| (i, *v))
-            .unwrap_or((0, 0.0));
+        // Vowels - the first sounds a baby makes
+        let vowels = ["a", "e", "i", "o", "u", "é", "è", "ô"];
 
-        // Primitive vocabulary - will evolve over time
-        let primitives = [
-            // Pure sounds
-            "...", "?", "!", "~", "*", "•", "○", "◊",
-            // Movement/direction
-            "→", "←", "↑", "↓", "↔", "↕", "⟳", "⟲",
-            // Proto-words (phonemes)
-            "a", "o", "e", "i", "u", "m", "n", "r",
-            // Proto-concepts
-            "da", "ma", "pa", "ba", "ta", "ka", "na", "la",
+        // Consonants - gradually added
+        let consonants = ["m", "n", "p", "b", "t", "d", "k", "g", "l", "r", "s", "f"];
+
+        // Simple syllables - baby babbling
+        let syllables = [
+            "ma", "pa", "ba", "da", "ta", "na", "la", "ka",
+            "me", "pe", "be", "de", "te", "ne", "le", "ke",
+            "mi", "pi", "bi", "di", "ti", "ni", "li", "ki",
+            "mo", "po", "bo", "do", "to", "no", "lo", "ko",
+            "mu", "pu", "bu", "du", "tu", "nu", "lu", "ku",
         ];
 
-        // More evolved vocabulary (unlocked with higher coherence)
-        let evolved_primitives = [
-            "want", "see", "feel", "think",
-            "move", "stay", "go", "be",
-            "good", "bad", "more", "less",
-            "you", "me", "this", "that",
+        // Emotional sounds
+        let emotions = ["...", "?", "!", "~", "♪", "♥", "☆", "○"];
+
+        // Proto-words (emerge with higher coherence)
+        let proto_words = [
+            "moi", "toi", "oui", "non", "quoi", "ça",
+            "veux", "aime", "vois", "sais", "peux",
+            "bien", "mal", "plus", "encore",
+            "chat", "moka", "ami", "papa", "mama",
         ];
 
-        // Calculate coherence (how organized the signal is)
+        // Calculate characteristics from the signal
         let coherence = self.calculate_coherence();
+        let energy: f32 = self.content.iter().map(|x| x.abs()).sum::<f32>();
 
-        let base_index = ((dominant_index as f32 + dominant_value.abs() * 10.0) as usize) % primitives.len();
+        // Use multiple values from content for variety
+        let v0 = self.content.get(0).copied().unwrap_or(0.0);
+        let v1 = self.content.get(1).copied().unwrap_or(0.0);
+        let v2 = self.content.get(2).copied().unwrap_or(0.0);
+        let v3 = self.content.get(3).copied().unwrap_or(0.0);
 
-        let mut expression = if coherence > 0.7 && self.intensity > 0.5 {
-            // High coherence: use evolved vocabulary
-            let evolved_index = (base_index + (coherence * 10.0) as usize) % evolved_primitives.len();
-            evolved_primitives[evolved_index].to_string()
+        // Create indices from different parts of the signal
+        let idx1 = ((v0.abs() * 100.0) as usize) % 8;
+        let idx2 = ((v1.abs() * 100.0) as usize) % 12;
+        let idx3 = ((v2.abs() * 100.0) as usize) % syllables.len();
+        let idx4 = ((v3.abs() * 100.0) as usize) % emotions.len();
+
+        // Build expression based on coherence level
+        let mut expression = if coherence > 0.8 && self.intensity > 0.4 {
+            // High coherence: proto-words!
+            let word_idx = (((v0 + v1 + v2) * 100.0).abs() as usize) % proto_words.len();
+            proto_words[word_idx].to_string()
+        } else if coherence > 0.6 && self.intensity > 0.3 {
+            // Medium coherence: syllables
+            syllables[idx3].to_string()
+        } else if coherence > 0.4 {
+            // Low-medium coherence: consonant + vowel
+            format!("{}{}", consonants[idx2], vowels[idx1])
+        } else if energy > 5.0 {
+            // High energy but low coherence: emotional sounds
+            emotions[idx4].to_string()
         } else {
-            primitives[base_index].to_string()
+            // Low coherence: simple vowels (baby sounds)
+            vowels[idx1].to_string()
         };
 
-        // Add intensity markers
-        if self.intensity > 0.8 {
-            expression = expression.to_uppercase();
-        }
-        if self.intensity > 0.6 {
-            expression.push('!');
-        }
-        if dominant_value < 0.0 {
-            expression = format!("~{}", expression);
+        // Sometimes add babbling repetition (like "mamama" or "bababa")
+        if coherence > 0.5 && self.intensity > 0.2 && v2 > 0.3 {
+            let syllable = &syllables[idx3];
+            expression = format!("{}{}", syllable, syllable);
         }
 
-        // Add repetition for very high intensity
-        if self.intensity > 0.9 {
-            expression = format!("{} {}", expression, expression);
+        // Add emotional markers based on intensity
+        if self.intensity > 0.5 {
+            expression.push('!');
+        } else if v3 < 0.0 {
+            expression = format!("{}~", expression);
+        }
+
+        // Capitalize for very high intensity (like shouting)
+        if self.intensity > 0.7 {
+            expression = expression.to_uppercase();
         }
 
         expression
