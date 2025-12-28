@@ -203,13 +203,17 @@ impl Cell {
     pub fn live(&mut self) -> CellAction {
         self.age += 1;
 
-        // 1. Consume energy to live (metabolism)
-        self.energy -= 0.001;
+        // 1. Consume energy to live (metabolism) - very slow consumption
+        self.energy -= 0.0001;
 
-        // 2. Process received signals
+        // 2. Passive energy gain (like photosynthesis) - cells naturally gain energy
+        self.energy += 0.00005;
+        self.energy = self.energy.min(1.5); // Cap energy
+
+        // 3. Process received signals
         self.process_inbox();
 
-        // 3. Tension builds up over time and with stimuli
+        // 4. Tension builds up over time and with stimuli
         self.tension += 0.01 + self.inbox.len() as f32 * 0.05;
 
         // 4. Decay unused connections

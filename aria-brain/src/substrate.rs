@@ -238,8 +238,8 @@ impl Substrate {
         // Phase 6: Apply attractor influence
         self.apply_attractors();
 
-        // Phase 7: Maintain population (natural selection)
-        if current_tick % 100 == 0 {
+        // Phase 7: Maintain population (natural selection) - run frequently
+        if current_tick % 10 == 0 {
             self.natural_selection();
         }
 
@@ -386,9 +386,19 @@ impl Substrate {
         let target_pop = 10_000;
 
         if current_pop < target_pop {
-            // Reproduce the best performers
+            // If population is very low, create new primordial cells
+            if current_pop < 100 {
+                let cells_to_create = (target_pop / 10).min(1000);
+                for _ in 0..cells_to_create {
+                    let new_id = self.next_id.fetch_add(1, Ordering::SeqCst);
+                    self.cells.insert(new_id, Cell::new(new_id));
+                }
+                return;
+            }
+
+            // Reproduce the best performers (lowered threshold)
             let best_cells: Vec<_> = self.cells.iter()
-                .filter(|e| e.value().energy > 0.7)
+                .filter(|e| e.value().energy > 0.3)
                 .take(100)
                 .map(|e| e.value().clone())
                 .collect();
