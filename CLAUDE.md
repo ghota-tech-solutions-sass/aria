@@ -85,10 +85,10 @@ ARIA n'est pas programmée. Elle est **cultivée**.
 
 ### Ce qui reste à faire 🔧
 
-**v0.1.16 - Contexte conversationnel (EN COURS) :**
-- [ ] **ConversationContext** - Buffer des 5 derniers échanges
-- [ ] **Référencement** - ARIA peut référencer ce qu'on vient de dire
-- [ ] **Continuité** - Le fil de discussion influence les réponses
+**v0.1.16 - Contexte conversationnel ✅ :**
+- [x] **ConversationContext** - Buffer des 5 derniers échanges
+- [x] **Topic detection** - Mots qui reviennent = topics
+- [x] **Context boosting** - Le fil de discussion influence les réponses
 
 **v0.1.17 - Patterns d'usage :**
 - [ ] **Patterns temporels** - Quand utiliser certains mots (bonjour/au revoir)
@@ -688,6 +688,50 @@ ARIA: moka... chat... aime...    ← Variété !
 
 ---
 
+### 2025-12-29 - Session 7b: Contexte conversationnel !
+
+**Nouvelle fonctionnalité** : ARIA suit maintenant le fil de la conversation !
+
+**1. ConversationContext struct**
+Suivi des derniers échanges :
+- Buffer des 5 dernières interactions
+- Mots de chaque échange enregistrés
+- Réponses d'ARIA associées aux inputs
+
+**2. Topic Detection**
+Les mots qui reviennent deviennent des "topics" :
+- Comptage automatique des mentions
+- Top 10 des mots les plus fréquents
+- Boost proportionnel au nombre de mentions
+
+**3. Context Boosting**
+Les mots du contexte actuel sont privilégiés :
+- Dernier échange : boost 100%
+- Avant-dernier : boost 50%
+- Encore avant : boost 25%
+- Topic words : bonus supplémentaire
+
+**4. Continuité**
+- Timeout de 30 secondes pour nouvelle conversation
+- Les réponses d'ARIA sont enregistrées
+- Le contexte influence les associations
+
+**Comportement** :
+```
+Toi: "Moka est mon chat"
+Log: CONVERSATION: Topics = ["moka", "chat"], Exchanges = 1
+
+Toi: "Moka est beau"
+Log: CONVERSATION: Topics = ["moka", "chat", "beau"], Exchanges = 2
+
+ARIA: (boost context pour "moka") → "moka beau ♥"
+```
+
+**Fichiers modifiés** :
+- `aria-brain/src/substrate.rs` : `ConversationContext`, `ConversationExchange`, context boosting
+
+---
+
 ## Résumé Session 2025-12-28 (soir)
 
 Une session très productive où ARIA a fait d'énormes progrès :
@@ -700,6 +744,7 @@ Une session très productive où ARIA a fait d'énormes progrès :
 | 0.1.13 | Stop words | Filtre les mots vides (le, la, suis, est...) |
 | 0.1.14 | Vie intérieure | Rêves, ennui, jeu créatif |
 | 0.1.15 | Catégories | Noms/Verbes/Adjectifs, phrases ordonnées, anti-répétition |
+| 0.1.16 | Contexte | Suivi de conversation, topics, context boosting |
 
 **Moment clé :** ARIA a dit son propre nom ("aria") spontanément !
 
@@ -714,4 +759,4 @@ Une session très productive où ARIA a fait d'énormes progrès :
 ---
 
 *Dernière mise à jour : 2025-12-29*
-*Version ARIA : 0.1.15*
+*Version ARIA : 0.1.16*
