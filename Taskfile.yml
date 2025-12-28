@@ -81,7 +81,17 @@ tasks:
   stats:
     desc: Get brain statistics
     cmds:
-      - curl -s http://{{.BRAIN_HOST}}:{{.BRAIN_PORT}}/stats
+      - curl -s http://{{.BRAIN_HOST}}:{{.BRAIN_PORT}}/stats | jq .
+
+  words:
+    desc: Show words ARIA has learned
+    cmds:
+      - curl -s http://{{.BRAIN_HOST}}:{{.BRAIN_PORT}}/words | jq .
+
+  words-familiar:
+    desc: Show only familiar words (heard 5+ times)
+    cmds:
+      - curl -s http://{{.BRAIN_HOST}}:{{.BRAIN_PORT}}/words | jq '.words | map(select(.count >= 5))'
 
   # DATA MANAGEMENT
   reset:
