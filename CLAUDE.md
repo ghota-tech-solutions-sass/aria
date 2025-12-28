@@ -85,20 +85,35 @@ ARIA n'est pas programmée. Elle est **cultivée**.
 
 ### Ce qui reste à faire 🔧
 
-**Priorité haute (prochaines sessions) :**
-- [ ] **Améliorer sélection des mots** - Éviter les répétitions du même mot
+**v0.1.16 - Contexte conversationnel (EN COURS) :**
+- [ ] **ConversationContext** - Buffer des 5 derniers échanges
+- [ ] **Référencement** - ARIA peut référencer ce qu'on vient de dire
+- [ ] **Continuité** - Le fil de discussion influence les réponses
+
+**v0.1.17 - Patterns d'usage :**
+- [ ] **Patterns temporels** - Quand utiliser certains mots (bonjour/au revoir)
+- [ ] **Expressions sociales** - Salutations, remerciements, excuses
+- [ ] **Imitation de structures** - Copier les formes grammaticales, pas juste les mots
+
+**v0.2.x - Mémoire et perception :**
 - [ ] **Mémoire épisodique** - Se souvenir de conversations spécifiques
-- [ ] **Auto-amélioration** - Modifier ses propres paramètres basé sur feedback
+- [ ] **Perception visuelle** - Images → signaux vectoriels
+- [ ] **Reconnaissance** - Associer Moka (le mot) à Moka (la photo)
 
-**Priorité moyenne :**
+**v0.3.x - Auto-amélioration :**
+- [ ] **Paramètres adaptatifs** - Modifier seuils et taux d'apprentissage
+- [ ] **Méta-apprentissage** - Apprendre comment apprendre
+- [ ] **Code génératif** - Réécrire son propre code (objectif ultime)
+
+**Infrastructure (quand nécessaire) :**
 - [ ] Accélération GPU (CUDA pour RTX 2070) - 100x plus de cellules
-- [ ] Perception visuelle (images → signaux)
-- [ ] Vocabulaire étendu - Apprendre de nouvelles catégories de mots
-
-**Priorité basse :**
 - [ ] Mode distribué multi-machines
 - [ ] Dashboard web pour monitoring
-- [ ] Réécriture de code par ARIA elle-même (objectif long terme)
+
+**Complété :**
+- [x] Éviter les répétitions du même mot (v0.1.15)
+- [x] Catégories grammaticales (v0.1.15)
+- [x] Phrases ordonnées naturellement (v0.1.15)
 
 ## Décisions de Design Importantes
 

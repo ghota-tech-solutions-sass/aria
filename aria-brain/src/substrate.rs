@@ -22,6 +22,151 @@ struct RecentWord {
     heard_at: u64,
 }
 
+/// A single exchange in the conversation
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+struct ConversationExchange {
+    /// What was said to ARIA
+    input: String,
+    /// What ARIA responded (if she responded)
+    response: Option<String>,
+    /// Words extracted from input
+    input_words: Vec<String>,
+    /// Emotional tone of the exchange
+    emotional_tone: f32,
+    /// When this happened
+    tick: u64,
+}
+
+/// Conversation context - tracks the flow of discussion
+/// ARIA can now follow a conversation thread!
+#[derive(Clone, Debug, Default)]
+struct ConversationContext {
+    /// Recent exchanges (newest first)
+    exchanges: Vec<ConversationExchange>,
+    /// Current topic words (words that keep coming up)
+    topic_words: Vec<(String, u32)>, // (word, mention_count)
+    /// Is someone actively talking to ARIA?
+    in_conversation: bool,
+    /// Last exchange tick
+    last_exchange_tick: u64,
+}
+
+impl ConversationContext {
+    const MAX_EXCHANGES: usize = 5;
+    const CONVERSATION_TIMEOUT: u64 = 3000; // ~30 seconds
+
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a new input to the conversation
+    fn add_input(&mut self, input: &str, words: Vec<String>, emotional_tone: f32, tick: u64) {
+        // Check if this is a new conversation or continuation
+        if tick.saturating_sub(self.last_exchange_tick) > Self::CONVERSATION_TIMEOUT {
+            // New conversation! Clear old context
+            self.exchanges.clear();
+            self.topic_words.clear();
+            tracing::info!("NEW CONVERSATION started");
+        }
+
+        self.in_conversation = true;
+        self.last_exchange_tick = tick;
+
+        // Create new exchange
+        let exchange = ConversationExchange {
+            input: input.to_string(),
+            response: None,
+            input_words: words.clone(),
+            emotional_tone,
+            tick,
+        };
+
+        // Add to front (newest first)
+        self.exchanges.insert(0, exchange);
+
+        // Keep only last N exchanges
+        if self.exchanges.len() > Self::MAX_EXCHANGES {
+            self.exchanges.pop();
+        }
+
+        // Update topic words
+        for word in words {
+            if let Some(pos) = self.topic_words.iter().position(|(w, _)| w == &word) {
+                self.topic_words[pos].1 += 1;
+            } else {
+                self.topic_words.push((word, 1));
+            }
+        }
+
+        // Keep only top 10 topic words, sorted by frequency
+        self.topic_words.sort_by(|a, b| b.1.cmp(&a.1));
+        self.topic_words.truncate(10);
+    }
+
+    /// Record ARIA's response to the current exchange
+    fn add_response(&mut self, response: &str) {
+        if let Some(exchange) = self.exchanges.first_mut() {
+            exchange.response = Some(response.to_string());
+        }
+    }
+
+    /// Get words that are currently "hot" in the conversation
+    /// These should be boosted when ARIA responds
+    fn get_context_words(&self) -> Vec<(String, f32)> {
+        // Combine recent input words with topic words
+        let mut context: Vec<(String, f32)> = Vec::new();
+
+        // Words from the last exchange are most relevant
+        if let Some(last) = self.exchanges.first() {
+            for word in &last.input_words {
+                context.push((word.clone(), 1.0)); // Full boost for just-heard words
+            }
+        }
+
+        // Words from previous exchanges (decaying relevance)
+        for (i, exchange) in self.exchanges.iter().skip(1).enumerate() {
+            let decay = 0.5_f32.powi(i as i32 + 1); // 0.5, 0.25, 0.125...
+            for word in &exchange.input_words {
+                if !context.iter().any(|(w, _)| w == word) {
+                    context.push((word.clone(), decay));
+                }
+            }
+        }
+
+        // Topic words get a bonus
+        for (word, count) in &self.topic_words {
+            let topic_boost = (*count as f32 * 0.2).min(0.8);
+            if let Some(pos) = context.iter().position(|(w, _)| w == word) {
+                context[pos].1 += topic_boost;
+            } else {
+                context.push((word.clone(), topic_boost));
+            }
+        }
+
+        context
+    }
+
+    /// Check if a word was mentioned recently in conversation
+    #[allow(dead_code)]
+    fn was_recently_mentioned(&self, word: &str) -> bool {
+        let word_lower = word.to_lowercase();
+        self.exchanges.iter()
+            .take(2) // Check last 2 exchanges
+            .any(|e| e.input_words.iter().any(|w| w.to_lowercase() == word_lower))
+    }
+
+    /// Get the emotional tone of recent conversation
+    #[allow(dead_code)]
+    fn get_conversation_mood(&self) -> f32 {
+        if self.exchanges.is_empty() {
+            return 0.0;
+        }
+        let sum: f32 = self.exchanges.iter().map(|e| e.emotional_tone).sum();
+        sum / self.exchanges.len() as f32
+    }
+}
+
 /// Words that are too common to be meaningful - ARIA shouldn't repeat these
 /// Like a baby learning to speak, she should focus on meaningful words
 const STOP_WORDS: &[&str] = &[
@@ -218,6 +363,9 @@ pub struct Substrate {
 
     /// Last word ARIA said (to avoid immediate repetition)
     last_said_word: RwLock<Option<String>>,
+
+    /// Conversation context - tracks the flow of discussion
+    conversation: RwLock<ConversationContext>,
 }
 
 /// An attractor in semantic space
@@ -289,6 +437,7 @@ impl Substrate {
             last_interaction_tick: AtomicU64::new(0),
             recent_expressions: RwLock::new(Vec::new()),
             last_said_word: RwLock::new(None),
+            conversation: RwLock::new(ConversationContext::new()),
         }
     }
 
@@ -315,6 +464,27 @@ impl Substrate {
 
         // Record this interaction for spontaneity tracking
         self.last_interaction_tick.store(current_tick, Ordering::Relaxed);
+
+        // Add to conversation context - ARIA now follows the discussion!
+        {
+            let significant_words: Vec<String> = words.iter()
+                .filter(|w| w.len() >= 3 && !STOP_WORDS.contains(&w.to_lowercase().as_str()))
+                .map(|w| w.to_lowercase())
+                .collect();
+
+            let mut conversation = self.conversation.write();
+            conversation.add_input(&signal.label, significant_words, emotional_valence, current_tick);
+
+            // Log conversation state
+            if !conversation.topic_words.is_empty() {
+                let topics: Vec<&str> = conversation.topic_words.iter()
+                    .take(3)
+                    .map(|(w, _)| w.as_str())
+                    .collect();
+                tracing::info!("CONVERSATION: Topics = {:?}, Exchanges = {}",
+                    topics, conversation.exchanges.len());
+            }
+        }
 
         // Detect FEEDBACK - this is how ARIA learns what's good/bad!
         let lower_label = signal.label.to_lowercase();
@@ -947,7 +1117,11 @@ impl Substrate {
             // Get the last word ARIA said (to avoid immediate repetition)
             let last_word = self.last_said_word.read().clone();
 
+            // Get conversation context for boosting relevant words
+            let context_words = self.conversation.read().get_context_words();
+
             // First, try to echo a RECENT word (like a baby imitating)
+            // Now with CONTEXT BOOSTING - words in current conversation get priority!
             let label = {
                 let recent = self.recent_words.read();
                 let mut best_recent: Option<(&str, f32)> = None;
@@ -962,7 +1136,16 @@ impl Substrate {
                         }
                     }
 
-                    let similarity = Self::vector_similarity(&average_state, &rw.vector);
+                    let mut similarity = Self::vector_similarity(&average_state, &rw.vector);
+
+                    // CONTEXT BOOST: If this word is in the current conversation, boost it!
+                    if let Some((_, boost)) = context_words.iter()
+                        .find(|(w, _)| w.to_lowercase() == rw.word.to_lowercase())
+                    {
+                        similarity += boost * 0.3; // Add up to 0.3 for context relevance
+                        tracing::debug!("Context boost for '{}': +{:.2}", rw.word, boost * 0.3);
+                    }
+
                     // Lower threshold for recent words - we WANT to echo them
                     if similarity > 0.2 {
                         match best_recent {
@@ -1210,6 +1393,12 @@ impl Substrate {
                     // Use the first word as the "main" word
                     let mut last_said = self.last_said_word.write();
                     *last_said = recent_expr.first().cloned();
+
+                    // Record ARIA's response in conversation context
+                    let response_text = recent_expr.join(" ");
+                    let mut conversation = self.conversation.write();
+                    conversation.add_response(&response_text);
+                    tracing::debug!("CONVERSATION: ARIA responded with '{}'", response_text);
                 }
             }
 
