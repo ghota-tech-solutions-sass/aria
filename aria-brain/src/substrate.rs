@@ -1167,8 +1167,15 @@ impl Substrate {
             let is_conversation_start = self.conversation.read().is_conversation_start();
 
             // SOCIAL CONTEXT RESPONSES - respond appropriately to greetings, etc.
-            // Only on first 1-2 exchanges when social context is clear
-            if is_conversation_start && social_context != SocialContext::General {
+            // - Greeting/Farewell: only at conversation start (exchanges 1-2)
+            // - Thanks/Affection: anytime!
+            let should_respond_socially = match social_context {
+                SocialContext::Greeting | SocialContext::Farewell => is_conversation_start,
+                SocialContext::Thanks | SocialContext::Affection => true,
+                _ => false,
+            };
+
+            if should_respond_socially && social_context != SocialContext::General {
                 let social_response = match social_context {
                     SocialContext::Greeting => {
                         // Find a greeting word ARIA knows or use default
