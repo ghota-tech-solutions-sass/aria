@@ -1,0 +1,30 @@
+[package]
+name = "aria-compute"
+description = "Compute backends for ARIA - CPU and GPU implementations"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+aria-core = { workspace = true }
+
+# Parallelism
+rayon = { workspace = true }
+parking_lot = { workspace = true }
+
+# GPU compute
+wgpu = { workspace = true }
+bytemuck = { workspace = true }
+
+# Utilities
+rand = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+# Async for GPU init
+tokio = { workspace = true }
+futures = { workspace = true }
+pollster = { workspace = true }
+
+[dev-dependencies]

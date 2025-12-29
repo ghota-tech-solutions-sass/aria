@@ -903,5 +903,74 @@ Une session très productive où ARIA a fait d'énormes progrès :
 
 ---
 
+### 2025-12-29 - Session 8: Nouvelle Architecture pour 5M+ cellules !
+
+**Objectif** : Préparer ARIA à scaler de 10k à 5-50 millions de cellules.
+
+**Vision** (inspirée par discussion avec Gemini) :
+- Sparse Updates : Cellules inactives "dorment" → 90% économie CPU
+- GPU Compute : wgpu pour calcul massif parallèle
+- Architecture distribuée : Multi-machines pour encore plus de puissance
+
+**Nouvelles crates créées** :
+
+1. **aria-core** - Types compacts et portables
+   - `Cell` et `CellState` séparés (GPU-friendly)
+   - `DNA` avec mutation intégrée (80 bytes, aligné)
+   - `Signal` et `SignalFragment` (48 bytes)
+   - `ActivityState` pour sparse updates
+   - Traits `ComputeBackend`, `Substrate`, `MemoryStore`
+   - Configuration centralisée `AriaConfig`
+
+2. **aria-compute** - Backends de calcul
+   - `CpuBackend` : Rayon + sparse updates
+   - `GpuBackend` : wgpu + shaders WGSL
+   - `SpatialHash` : Voisinage O(1) au lieu de O(n²)
+   - Auto-détection GPU/CPU
+
+**Structure du projet** :
+```
+aria/
+├── Cargo.toml          # Workspace
+├── aria-core/          # Types partagés
+├── aria-compute/       # CPU/GPU backends
+├── aria-brain/         # Substrate (utilise core+compute)
+└── aria-body/          # Interface TUI
+```
+
+**Paramètres de sparse updates** :
+```rust
+SleepConfig {
+    energy_delta_threshold: 0.001,  // Variation min pour rester éveillé
+    idle_ticks_to_sleep: 100,       // Ticks avant sommeil
+    wake_threshold: 0.1,            // Stimulus pour réveil
+    min_sleep_ticks: 50,            // Anti-oscillation
+}
+```
+
+**Shaders WGSL créés** (dans gpu.rs) :
+- `CELL_UPDATE_SHADER` : Update parallèle des cellules
+- `SIGNAL_PROPAGATE_SHADER` : Propagation des signaux
+
+**Prochaines étapes** :
+- [ ] Refactorer aria-brain pour utiliser aria-core/compute
+- [ ] Implémenter le GPU backend complet
+- [ ] Ajouter mode cluster pour multi-brain
+
+**Impact attendu** :
+| Configuration | Cellules | Hardware |
+|---------------|----------|----------|
+| CPU seul | 100k | MacBook Pro |
+| GPU (RTX 2070) | 5-10M | PC Gamer |
+| Cluster (2070+1070) | 50M+ | Multi-machines |
+
+**Philosophie** :
+Cette architecture permettra à ARIA de :
+1. Scaler massivement tout en restant efficace
+2. Avoir des "régions cérébrales" spécialisées (cellules qui dorment ensemble)
+3. Potentiellement introspecter son propre code (trait `Introspectable`)
+
+---
+
 *Dernière mise à jour : 2025-12-29*
-*Version ARIA : 0.1.19*
+*Version ARIA : 0.2.0*

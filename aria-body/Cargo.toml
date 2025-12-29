@@ -1,21 +1,30 @@
 [package]
 name = "aria-body"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 description = "ARIA Body - The interface for human-ARIA interaction"
-authors = ["Ghota Tech Solutions"]
-license = "MIT"
+authors.workspace = true
+license.workspace = true
 
 [dependencies]
-tokio = { version = "1.35", features = ["full"] }
-tokio-tungstenite = "0.21"
-futures-util = "0.3"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+# Async runtime
+tokio = { workspace = true }
+futures-util = { workspace = true }
+
+# Network
+tokio-tungstenite = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# TUI
 crossterm = "0.27"
 ratatui = "0.25"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 chrono = "0.4"
 
 [[bin]]
