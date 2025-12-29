@@ -350,7 +350,6 @@ impl LongTermMemory {
 
     /// Get an appropriate response word for a social context
     /// Returns words that ARIA knows and are appropriate for this context
-    #[allow(dead_code)]
     pub fn get_response_for_context(&self, context: SocialContext) -> Option<String> {
         // Find words that are commonly used in this context
         let mut candidates: Vec<(&String, f32)> = Vec::new();
@@ -363,13 +362,23 @@ impl LongTermMemory {
                 let score = (*count as f32) * freq.familiarity_boost.max(0.1);
                 if score > 0.0 {
                     candidates.push((word, score));
+                    tracing::info!("RESPONSE CANDIDATE: '{}' for {:?} (count: {}, score: {:.2})",
+                        word, context, count, score);
                 }
             }
         }
 
         // Sort by score and return best match
         candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        candidates.first().map(|(word, _)| (*word).clone())
+        let result = candidates.first().map(|(word, _)| (*word).clone());
+
+        if result.is_some() {
+            tracing::info!("LEARNED RESPONSE: Using '{}' for {:?} context", result.as_ref().unwrap(), context);
+        } else {
+            tracing::info!("NO LEARNED RESPONSE for {:?} context (checked {} words)", context, self.word_frequencies.len());
+        }
+
+        result
     }
 
     /// Learn that a word was used in a specific social context
@@ -389,6 +398,15 @@ impl LongTermMemory {
             if is_end {
                 freq.usage_pattern.end_of_conversation =
                     freq.usage_pattern.end_of_conversation * (1.0 - alpha) + alpha;
+            }
+
+            // Log learning for social contexts
+            if context != SocialContext::General {
+                let ctx_count = freq.usage_pattern.contexts.iter()
+                    .find(|(c, _)| *c == context)
+                    .map(|(_, count)| *count)
+                    .unwrap_or(0);
+                tracing::info!("LEARN PATTERN: '{}' in {:?} context (count: {})", word_lower, context, ctx_count);
             }
         }
     }

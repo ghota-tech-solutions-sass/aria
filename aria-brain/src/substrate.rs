@@ -518,16 +518,6 @@ impl Substrate {
             (is_start, ctx)
         };
 
-        // Learn usage patterns for words in this message
-        {
-            let mut memory = self.memory.write();
-            for word in &words {
-                if word.len() >= 3 && !STOP_WORDS.contains(&word.to_lowercase().as_str()) {
-                    memory.learn_usage_pattern(word, current_context, is_conversation_start, false);
-                }
-            }
-        }
-
         // Detect FEEDBACK - this is how ARIA learns what's good/bad!
         let lower_label = signal.label.to_lowercase();
 
@@ -657,6 +647,12 @@ impl Substrate {
                         emotional_valence
                     );
                 }
+            }
+
+            // Learn usage patterns for words in this message
+            // This must be AFTER hear_word_with_context so the word exists!
+            for word in &significant_words {
+                memory.learn_usage_pattern(word, current_context, is_conversation_start, false);
             }
         }
 
