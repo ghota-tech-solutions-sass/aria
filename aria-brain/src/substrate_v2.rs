@@ -59,7 +59,7 @@ use crate::signal::Signal as OldSignal;
 
 /// Minimum ticks between emissions (anti-spam)
 /// At 2ms/tick, 150 ticks = 300ms between responses
-const EMISSION_COOLDOWN_TICKS: u64 = 150;
+const EMISSION_COOLDOWN_TICKS: u64 = 500;  // ~1 second between emissions
 
 /// Words that are too common - ARIA focuses on meaningful words
 const STOP_WORDS: &[&str] = &[

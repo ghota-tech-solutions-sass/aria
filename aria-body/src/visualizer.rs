@@ -30,6 +30,10 @@ pub struct AriaVisualizer {
     // Unified conversation history (chronological order, oldest first)
     pub messages: Vec<ChatMessage>,
 
+    // Throttling for ARIA messages
+    last_aria_message: std::time::Instant,
+    last_aria_text: String,
+
     // Connection state
     pub connected: bool,
     pub last_update: std::time::Instant,
@@ -59,6 +63,8 @@ impl AriaVisualizer {
             activity_history: vec![0; 100],
             current_stats: BrainStats::default(),
             messages: Vec::new(),
+            last_aria_message: std::time::Instant::now(),
+            last_aria_text: String::new(),
             connected: true,
             last_update: std::time::Instant::now(),
         }
@@ -84,7 +90,18 @@ impl AriaVisualizer {
     }
 
     pub fn add_expression(&mut self, expr: String) {
-        self.messages.push(ChatMessage::Aria(expr));
+        let now = std::time::Instant::now();
+        let elapsed = now.duration_since(self.last_aria_message);
+
+        // Throttle: skip if same message or too fast (< 500ms)
+        if expr == self.last_aria_text || elapsed.as_millis() < 500 {
+            return;
+        }
+
+        self.messages.push(ChatMessage::Aria(expr.clone()));
+        self.last_aria_message = now;
+        self.last_aria_text = expr;
+
         // Keep last 50 messages
         if self.messages.len() > 50 {
             self.messages.remove(0);
