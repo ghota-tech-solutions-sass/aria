@@ -72,7 +72,12 @@ async fn main() {
 
     #[cfg(feature = "substrate-v2")]
     let substrate = {
-        let aria_config = aria_core::AriaConfig::cpu_dev();
+        // Load config from environment (default: 50k cells with sparse updates)
+        let aria_config = aria_core::AriaConfig::from_env();
+        info!("🧠 Substrate V2: {} cells ({:?} backend, sparse={})",
+            aria_config.population.target_population,
+            aria_config.compute.backend,
+            aria_config.compute.sparse_updates);
         Arc::new(parking_lot::RwLock::new(SubstrateV2::new(aria_config, memory.clone())))
     };
 
@@ -405,8 +410,9 @@ async fn evolution_loop_v2(
 
         tick += 1;
 
-        // ~500 ticks per second
-        tokio::time::sleep(tokio::time::Duration::from_millis(2)).await;
+        // Fast mode: just yield, don't sleep
+        // Let the CPU work at full speed
+        tokio::task::yield_now().await;
     }
 }
 

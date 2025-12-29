@@ -144,7 +144,39 @@ pub struct LongTermMemory {
     /// First times tracker - to detect "first of kind" episodes
     #[serde(default)]
     pub first_times: HashMap<String, u64>, // kind -> episode_id
+
+    // === ADAPTIVE PARAMETERS (self-modification) ===
+
+    /// Emission threshold (0.05-0.5)
+    #[serde(default = "default_emission_threshold")]
+    pub adaptive_emission_threshold: f32,
+
+    /// Response probability (0.3-1.0)
+    #[serde(default = "default_response_probability")]
+    pub adaptive_response_probability: f32,
+
+    /// Learning rate (0.1-0.8)
+    #[serde(default = "default_learning_rate")]
+    pub adaptive_learning_rate: f32,
+
+    /// Spontaneity (0.01-0.3)
+    #[serde(default = "default_spontaneity")]
+    pub adaptive_spontaneity: f32,
+
+    /// Positive feedback count
+    #[serde(default)]
+    pub adaptive_feedback_positive: u64,
+
+    /// Negative feedback count
+    #[serde(default)]
+    pub adaptive_feedback_negative: u64,
 }
+
+// Default values for adaptive params
+fn default_emission_threshold() -> f32 { 0.15 }
+fn default_response_probability() -> f32 { 0.8 }
+fn default_learning_rate() -> f32 { 0.3 }
+fn default_spontaneity() -> f32 { 0.05 }
 
 /// Tracks how often a word is heard and its emotional context
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -443,6 +475,13 @@ impl LongTermMemory {
             episodes: Vec::new(),
             next_episode_id: 0,
             first_times: HashMap::new(),
+            // Adaptive params - ARIA self-modifies these
+            adaptive_emission_threshold: default_emission_threshold(),
+            adaptive_response_probability: default_response_probability(),
+            adaptive_learning_rate: default_learning_rate(),
+            adaptive_spontaneity: default_spontaneity(),
+            adaptive_feedback_positive: 0,
+            adaptive_feedback_negative: 0,
         }
     }
 

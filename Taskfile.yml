@@ -50,11 +50,11 @@ tasks:
       - cargo run --release
 
   brain-v2:
-    desc: Start the brain with new substrate V2 (GPU-ready, sparse updates)
+    desc: Start the brain with substrate V2 (50k cells, sparse updates)
     dir: aria-brain
     env:
       ARIA_PORT: '{{.BRAIN_PORT}}'
-      ARIA_CELLS: '{{.ARIA_CELLS | default "10000"}}'
+      ARIA_CELLS: '{{.ARIA_CELLS | default "50000"}}'
     cmds:
       - cargo run --release --features substrate-v2
 

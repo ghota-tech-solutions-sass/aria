@@ -108,6 +108,22 @@ impl Signal {
             (self.label.clone(), None)
         };
 
+        // If the brain is babbling (learning to communicate)
+        if main_label.starts_with("babble:") {
+            let syllable = main_label.strip_prefix("babble:").unwrap_or("hm");
+            let base_expression = if self.intensity > 0.5 {
+                format!("{}!", syllable)
+            } else {
+                syllable.to_string()
+            };
+
+            return if let Some(marker) = emotional_marker {
+                format!("{} {}", base_expression, marker)
+            } else {
+                base_expression
+            };
+        }
+
         // If the brain is responding to a social context (greeting, farewell, etc.)
         if main_label.starts_with("social:") {
             // Format: social:greeting:bonjour or social:farewell:bye

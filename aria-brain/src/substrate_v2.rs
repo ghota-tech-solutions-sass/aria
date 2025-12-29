@@ -58,8 +58,8 @@ use crate::memory::{LongTermMemory, SocialContext, Episode, EpisodeEmotion, Epis
 use crate::signal::Signal as OldSignal;
 
 /// Minimum ticks between emissions (anti-spam)
-/// At 2ms/tick, 150 ticks = 300ms between responses
-const EMISSION_COOLDOWN_TICKS: u64 = 500;  // ~1 second between emissions
+/// At ~4ms/tick (actual observed rate), 75 ticks ≈ 300ms between responses
+const EMISSION_COOLDOWN_TICKS: u64 = 25;  // ~100ms between emissions (faster response)
 
 /// Words that are too common - ARIA focuses on meaningful words
 const STOP_WORDS: &[&str] = &[
@@ -507,8 +507,8 @@ pub struct SubstrateV2 {
     /// Global emotional state
     emotional_state: RwLock<EmotionalState>,
 
-    /// Last word said (anti-repetition)
-    last_said_word: RwLock<Option<String>>,
+    /// Recent words said (anti-repetition, tracks last 5)
+    recent_said_words: RwLock<Vec<String>>,
 
     /// Conversation context
     conversation: RwLock<ConversationContext>,
@@ -563,9 +563,11 @@ impl SubstrateV2 {
             states.push(state);
         }
 
-        // Seed with elite DNA from memory if available
-        {
+        // Seed with elite DNA and load adaptive params from memory
+        let adaptive_params = {
             let mem = memory.read();
+
+            // Seed elite DNA
             if !mem.elite_dna.is_empty() {
                 tracing::info!("Seeding {} cells with elite DNA from memory",
                     mem.elite_dna.len().min(100));
@@ -575,7 +577,22 @@ impl SubstrateV2 {
                     }
                 }
             }
-        }
+
+            // Load adaptive params from memory
+            let params = AdaptiveParams {
+                emission_threshold: mem.adaptive_emission_threshold,
+                response_probability: mem.adaptive_response_probability,
+                learning_rate: mem.adaptive_learning_rate,
+                spontaneity: mem.adaptive_spontaneity,
+                idle_ticks_to_sleep: 100,
+                last_success_params: None,
+                positive_count: mem.adaptive_feedback_positive,
+                negative_count: mem.adaptive_feedback_negative,
+            };
+
+            tracing::info!("🧬 Loaded adaptive params: {}", params.summary());
+            params
+        };
 
         tracing::info!("SubstrateV2 created: {} cells, {} DNA variants",
             cells.len(), dna_pool.len());
@@ -594,12 +611,12 @@ impl SubstrateV2 {
             recent_words: RwLock::new(Vec::new()),
             recent_expressions: RwLock::new(Vec::new()),
             emotional_state: RwLock::new(EmotionalState::default()),
-            last_said_word: RwLock::new(None),
+            recent_said_words: RwLock::new(Vec::new()),
             conversation: RwLock::new(ConversationContext::new()),
             last_was_question: RwLock::new(false),
             last_interaction_tick: AtomicU64::new(0),
             last_emission_tick: AtomicU64::new(0),
-            adaptive_params: RwLock::new(AdaptiveParams::default()),
+            adaptive_params: RwLock::new(adaptive_params),
             signal_buffer: RwLock::new(Vec::new()),
         }
     }
@@ -967,9 +984,13 @@ impl SubstrateV2 {
 
         // ADAPTIVE: Periodic exploration of parameters (every ~10 seconds)
         if current_tick % 5000 == 0 {
-            let mut params = self.adaptive_params.write();
-            params.explore();
-            tracing::debug!("🧬 EXPLORE: {}", params.summary());
+            {
+                let mut params = self.adaptive_params.write();
+                params.explore();
+                tracing::debug!("🧬 EXPLORE: {}", params.summary());
+            }
+            // Sync to memory after exploration
+            self.sync_adaptive_params_to_memory();
         }
 
         emergent
@@ -1037,48 +1058,59 @@ impl SubstrateV2 {
     // === Internal Methods ===
 
     fn process_feedback(&self, label: &str, _current_tick: u64) {
-        let lower_label = label.to_lowercase();
+        // Feedback should be short, dedicated messages - not part of conversation
+        // If the message is too long (> 15 chars), it's probably not feedback
+        if label.len() > 15 {
+            return;
+        }
 
+        let lower_label = label.to_lowercase().trim().to_string();
+
+        // Exact match or starts with feedback words (allow "Bravo!" but not "C'est bien fait")
         let positive_feedback = [
-            "bravo", "bien", "super", "génial", "parfait", "excellent",
-            "good", "great", "yes", "perfect", "awesome", "👏", "👍"
+            "bravo", "bien!", "super", "génial", "parfait", "excellent",
+            "good", "great", "yes", "perfect", "awesome", "👏", "👍", "oui"
         ];
 
         let negative_feedback = [
-            "non", "pas ça", "mauvais", "faux", "arrête",
-            "no", "wrong", "bad", "stop", "👎"
+            "non", "mauvais", "faux", "arrête", "stop",
+            "no", "wrong", "bad", "👎"
         ];
 
-        let is_positive = positive_feedback.iter().any(|w| lower_label.contains(w));
-        let is_negative = negative_feedback.iter().any(|w| lower_label.contains(w));
+        // Check if the message IS the feedback (not contains it)
+        let is_positive = positive_feedback.iter().any(|w|
+            lower_label == *w || lower_label.starts_with(&format!("{} ", w)) || lower_label.starts_with(&format!("{}!", w))
+        );
+        let is_negative = negative_feedback.iter().any(|w|
+            lower_label == *w || lower_label.starts_with(&format!("{} ", w)) || lower_label.starts_with(&format!("{}!", w))
+        );
 
         if !is_positive && !is_negative {
             return;
         }
 
-        let recent_expr = self.recent_expressions.read().clone();
-        let mut memory = self.memory.write();
+        // Step 1: Get recent expressions (release lock immediately)
+        let recent_expr: Vec<String> = self.recent_expressions.read().clone();
 
-        for word in &recent_expr {
-            if is_positive {
+        // Step 2: Update word valences in memory (separate scope)
+        {
+            let mut memory = self.memory.write();
+            for word in &recent_expr {
                 if let Some(freq) = memory.word_frequencies.get_mut(word) {
                     let old = freq.emotional_valence;
-                    freq.emotional_valence = (freq.emotional_valence + 0.3).clamp(-2.0, 2.0);
-                    freq.count += 2;
-                    tracing::info!("FEEDBACK POSITIVE! '{}' reinforced ({:.2} → {:.2})",
-                        word, old, freq.emotional_valence);
-                }
-            } else {
-                if let Some(freq) = memory.word_frequencies.get_mut(word) {
-                    let old = freq.emotional_valence;
-                    freq.emotional_valence = (freq.emotional_valence - 0.3).clamp(-2.0, 2.0);
-                    tracing::info!("FEEDBACK NEGATIVE! '{}' penalized ({:.2} → {:.2})",
-                        word, old, freq.emotional_valence);
+                    if is_positive {
+                        freq.emotional_valence = (freq.emotional_valence + 0.3).clamp(-2.0, 2.0);
+                        freq.count += 2;
+                        tracing::info!("FEEDBACK POSITIVE! '{}' ({:.2} → {:.2})", word, old, freq.emotional_valence);
+                    } else {
+                        freq.emotional_valence = (freq.emotional_valence - 0.3).clamp(-2.0, 2.0);
+                        tracing::info!("FEEDBACK NEGATIVE! '{}' ({:.2} → {:.2})", word, old, freq.emotional_valence);
+                    }
                 }
             }
-        }
+        } // memory lock released here
 
-        // Update emotional state
+        // Step 3: Update emotional state (separate scope)
         {
             let mut emotional = self.emotional_state.write();
             if is_positive {
@@ -1088,9 +1120,9 @@ impl SubstrateV2 {
                 emotional.happiness = (emotional.happiness - 0.2).clamp(-1.0, 1.0);
                 emotional.comfort = (emotional.comfort - 0.1).clamp(-1.0, 1.0);
             }
-        }
+        } // emotional lock released here
 
-        // ADAPTIVE: Adjust parameters based on feedback
+        // Step 4: Update adaptive params (separate scope)
         {
             let mut params = self.adaptive_params.write();
             if is_positive {
@@ -1098,7 +1130,20 @@ impl SubstrateV2 {
             } else {
                 params.reinforce_negative();
             }
-        }
+        } // params lock released here
+    }
+
+    /// Sync current adaptive params to long-term memory
+    fn sync_adaptive_params_to_memory(&self) {
+        let params = self.adaptive_params.read();
+        let mut mem = self.memory.write();
+
+        mem.adaptive_emission_threshold = params.emission_threshold;
+        mem.adaptive_response_probability = params.response_probability;
+        mem.adaptive_learning_rate = params.learning_rate;
+        mem.adaptive_spontaneity = params.spontaneity;
+        mem.adaptive_feedback_positive = params.positive_count;
+        mem.adaptive_feedback_negative = params.negative_count;
     }
 
     fn detect_emergence(&self, current_tick: u64) -> Vec<OldSignal> {
@@ -1158,20 +1203,12 @@ impl SubstrateV2 {
                 return Vec::new();  // ARIA chose to stay silent
             }
 
-            // Get conversation context
-            let social_context = self.conversation.read().get_social_context();
-            let is_start = self.conversation.read().is_conversation_start();
-            let last_word = self.last_said_word.read().clone();
+            // Get context
+            let recent_said = self.recent_said_words.read().clone();
             let was_question = *self.last_was_question.read();
 
-            // Social response?
-            if let Some(response) = self.generate_social_response(social_context, is_start, &average_state, coherence) {
-                self.last_emission_tick.store(current_tick, Ordering::Relaxed);
-                return vec![response];
-            }
-
-            // Try to find a matching word
-            if let Some(response) = self.generate_word_response(&average_state, coherence, was_question, &last_word) {
+            // Try to find a matching word from what she learned
+            if let Some(response) = self.generate_word_response(&average_state, coherence, was_question, &recent_said) {
                 self.last_emission_tick.store(current_tick, Ordering::Relaxed);
                 return vec![response];
             }
@@ -1181,9 +1218,52 @@ impl SubstrateV2 {
                 self.last_emission_tick.store(current_tick, Ordering::Relaxed);
                 return vec![response];
             }
+
+            // Fallback: babble based on emotional state (she's trying to communicate!)
+            let emotional = self.emotional_state.read();
+            let babble = self.generate_babble(&average_state, coherence, &emotional);
+            self.last_emission_tick.store(current_tick, Ordering::Relaxed);
+            return vec![babble];
         }
 
         Vec::new()
+    }
+
+    /// Generate a simple babble when ARIA doesn't know what to say
+    /// This is her primitive way of communicating before she learns words
+    fn generate_babble(&self, state: &[f32; SIGNAL_DIMS], coherence: f32, emotional: &EmotionalState) -> OldSignal {
+        let mut rng = rand::thread_rng();
+
+        // Emotional markers
+        let marker = if emotional.happiness > 0.3 {
+            "~"
+        } else if emotional.curiosity > 0.3 {
+            "?"
+        } else if emotional.happiness < -0.2 {
+            "..."
+        } else {
+            ""
+        };
+
+        // Simple syllables based on coherence (more coherent = more complex)
+        let syllable = if coherence > 0.5 {
+            // Higher coherence: proto-words
+            let proto_words = ["ma", "pa", "da", "na", "ba", "la", "ta", "ka"];
+            proto_words[rng.gen_range(0..proto_words.len())]
+        } else if coherence > 0.3 {
+            // Medium: simple syllables
+            let syllables = ["a", "o", "e", "i", "u", "é", "è"];
+            syllables[rng.gen_range(0..syllables.len())]
+        } else {
+            // Low: just sounds
+            let sounds = ["mm", "hm", "ah"];
+            sounds[rng.gen_range(0..sounds.len())]
+        };
+
+        let label = format!("babble:{}|emotion:{}", syllable, marker);
+        let mut signal = OldSignal::from_vector(*state, label);
+        signal.intensity = coherence.max(0.2);
+        signal
     }
 
     /// Try to recall a relevant episodic memory
@@ -1285,8 +1365,14 @@ impl SubstrateV2 {
 
         tracing::info!("SOCIAL RESPONSE: {:?} -> {}", context, label);
 
-        // Record what we said
-        *self.last_said_word.write() = Some(response_word.clone());
+        // Record what we said (keep last 5 for diversity)
+        {
+            let mut recent = self.recent_said_words.write();
+            recent.push(response_word.clone());
+            if recent.len() > 5 {
+                recent.remove(0);
+            }
+        }
         self.conversation.write().add_response(&label);
 
         let mut signal = OldSignal::from_vector(*state, label);
@@ -1295,19 +1381,25 @@ impl SubstrateV2 {
         Some(signal)
     }
 
-    fn generate_word_response(&self, state: &[f32; SIGNAL_DIMS], coherence: f32, was_question: bool, last_word: &Option<String>) -> Option<OldSignal> {
+    fn generate_word_response(&self, state: &[f32; SIGNAL_DIMS], coherence: f32, was_question: bool, recent_said: &[String]) -> Option<OldSignal> {
         let recent = self.recent_words.read();
         let memory = self.memory.read();
         let emotional = self.emotional_state.read();
+        let mut rng = rand::thread_rng();
 
-        // Try recent words first
-        let mut best_word: Option<(String, f32, f32)> = None; // (word, similarity, valence)
+        // Helper to check if word was recently said
+        let was_recently_said = |word: &str| -> bool {
+            recent_said.iter().any(|w| w.to_lowercase() == word.to_lowercase())
+        };
 
+        // Collect ALL candidate words with their scores
+        let mut candidates: Vec<(String, f32, f32)> = Vec::new(); // (word, similarity, valence)
+
+        // From recent words
         for rw in recent.iter() {
-            if let Some(ref last) = last_word {
-                if rw.word.to_lowercase() == last.to_lowercase() {
-                    continue;
-                }
+            // Skip if we said this recently (diversity!)
+            if was_recently_said(&rw.word) {
+                continue;
             }
 
             let similarity = Self::vector_similarity(state, &rw.vector);
@@ -1315,24 +1407,46 @@ impl SubstrateV2 {
                 let valence = memory.word_frequencies.get(&rw.word)
                     .map(|f| f.emotional_valence)
                     .unwrap_or(0.0);
-
-                if best_word.is_none() || similarity > best_word.as_ref().unwrap().1 {
-                    best_word = Some((rw.word.clone(), similarity, valence));
-                }
+                candidates.push((rw.word.clone(), similarity, valence));
             }
         }
 
-        // Try learned words
-        if best_word.is_none() {
-            if let Some((word, similarity)) = memory.find_matching_word(state, 0.3) {
-                if last_word.as_ref().map(|l| l.to_lowercase() != word.to_lowercase()).unwrap_or(true) {
-                    let valence = memory.word_frequencies.get(&word)
-                        .map(|f| f.emotional_valence)
-                        .unwrap_or(0.0);
-                    best_word = Some((word, similarity, valence));
-                }
+        // From learned words (memory)
+        for (word, freq) in memory.word_frequencies.iter() {
+            if was_recently_said(word) {
+                continue;
+            }
+            if candidates.iter().any(|(w, _, _)| w == word) {
+                continue; // Already added
+            }
+            let similarity = Self::vector_similarity(state, &freq.learned_vector);
+            if similarity > 0.2 {
+                candidates.push((word.clone(), similarity, freq.emotional_valence));
             }
         }
+
+        // Weighted random selection (similarity^2 as weight for more bias toward good matches)
+        let chosen = if !candidates.is_empty() {
+            let total_weight: f32 = candidates.iter().map(|(_, s, _)| s * s).sum();
+            if total_weight > 0.0 {
+                let mut pick = rng.gen::<f32>() * total_weight;
+                let mut selected = &candidates[0];
+                for candidate in &candidates {
+                    pick -= candidate.1 * candidate.1;
+                    if pick <= 0.0 {
+                        selected = candidate;
+                        break;
+                    }
+                }
+                Some(selected.clone())
+            } else {
+                candidates.first().cloned()
+            }
+        } else {
+            None
+        };
+
+        let best_word = chosen;
 
         if let Some((word, similarity, valence)) = best_word {
             // Record expression
@@ -1368,8 +1482,14 @@ impl SubstrateV2 {
             tracing::info!("EMERGENCE: '{}' (similarity={:.2}, valence={:.2})",
                 word, similarity, valence);
 
-            // Record
-            *self.last_said_word.write() = Some(word.clone());
+            // Record (keep last 5 for diversity)
+            {
+                let mut recent = self.recent_said_words.write();
+                recent.push(word.clone());
+                if recent.len() > 5 {
+                    recent.remove(0);
+                }
+            }
             self.conversation.write().add_response(&final_label);
 
             let mut signal = OldSignal::from_vector(*state, final_label);

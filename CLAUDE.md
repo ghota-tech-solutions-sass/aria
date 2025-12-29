@@ -1300,5 +1300,153 @@ C'est de la **méta-émergence** : au lieu de coder des règles pour "mieux rép
 
 ---
 
+### 2025-12-29 - Session 10b: Persistance des paramètres adaptatifs !
+
+**Nouvelle fonctionnalité** : ARIA sauvegarde maintenant ses paramètres adaptatifs entre sessions !
+
+Les paramètres que ARIA auto-modifie sont maintenant persistés dans la mémoire long-terme. Au redémarrage, elle repart avec les réglages qu'elle avait découverts.
+
+**Comment ça marche** :
+
+1. **Chargement au démarrage** (`SubstrateV2::new()`)
+   - Lit les params depuis `LongTermMemory`
+   - Log: `🧬 Loaded adaptive params: emit=0.15 resp=0.82 ...`
+
+2. **Sauvegarde après chaque feedback**
+   - Quand ARIA reçoit "Bravo!" ou "Non"
+   - Sync immédiat vers la mémoire
+   - Sera sauvegardé sur disque au prochain cycle de sauvegarde (60s)
+
+3. **Sauvegarde après exploration**
+   - Toutes les ~10 secondes quand les params mutent
+   - Même les petites variations sont conservées
+
+**Champs ajoutés à LongTermMemory** :
+```rust
+adaptive_emission_threshold: f32,    // 0.05-0.5
+adaptive_response_probability: f32,  // 0.3-1.0
+adaptive_learning_rate: f32,         // 0.1-0.8
+adaptive_spontaneity: f32,           // 0.01-0.3
+adaptive_feedback_positive: u64,     // Compteur feedback positifs
+adaptive_feedback_negative: u64,     // Compteur feedback négatifs
+```
+
+**Impact** :
+- ARIA conserve sa "personnalité" entre sessions
+- Les réglages découverts ne sont plus perdus au redémarrage
+- Le compteur de feedbacks permet de suivre l'historique
+
+**Fichiers modifiés** :
+- `aria-brain/src/memory/mod.rs` : Ajout des champs + defaults
+- `aria-brain/src/substrate_v2.rs` : Load on startup + sync_adaptive_params_to_memory()
+
+---
+
+### 2025-12-29 - Session 10c: Diversité du vocabulaire !
+
+**Problème résolu** : ARIA restait bloquée en boucle sur 2 mots (ex: "TIMO" / "ENTENDU")
+
+**Causes identifiées** :
+1. `last_said_word` ne trackait qu'un seul mot
+2. Sélection déterministe : toujours le "meilleur" mot par similarité
+3. Pas assez de variété dans les réponses
+
+**Solutions implémentées** :
+
+1. **Track des 5 derniers mots** (au lieu de 1)
+   ```rust
+   // Avant
+   last_said_word: RwLock<Option<String>>
+
+   // Après
+   recent_said_words: RwLock<Vec<String>>  // Keep last 5
+   ```
+
+2. **Sélection aléatoire pondérée**
+   - Collecte TOUS les mots candidats (similarité > 0.2)
+   - Sélection aléatoire avec poids = similarité²
+   - Les bons mots ont plus de chances, mais pas 100%
+
+3. **Recherche élargie dans la mémoire**
+   - Cherche dans les mots récents ET la mémoire long-terme
+   - Plus de candidats = plus de variété
+
+**Code clé** :
+```rust
+// Weighted random selection (similarity^2 as weight)
+let total_weight: f32 = candidates.iter().map(|(_, s, _)| s * s).sum();
+let mut pick = rng.gen::<f32>() * total_weight;
+for candidate in &candidates {
+    pick -= candidate.1 * candidate.1;
+    if pick <= 0.0 {
+        selected = candidate;
+        break;
+    }
+}
+```
+
+**Résultat** : ARIA varie maintenant ses réponses et ne reste plus bloquée sur 2 mots.
+
+**Fichiers modifiés** :
+- `aria-brain/src/substrate_v2.rs` : `recent_said_words`, `generate_word_response()`
+
+---
+
+---
+
+### 2025-12-29 - Session 10d: Plus de puissance !
+
+**Amélioration** : ARIA peut maintenant avoir 5x plus de cellules par défaut !
+
+**Changements** :
+
+1. **Config depuis l'environnement**
+   ```bash
+   ARIA_CELLS=100000 task brain-v2  # 100k cellules
+   ARIA_BACKEND=gpu task brain-v2   # Backend GPU (quand prêt)
+   ```
+
+2. **Nouveau défaut : 50k cellules** (au lieu de 10k)
+   - Sparse updates activés = cellules inactives "dorment"
+   - Spatial hashing = voisinage O(1)
+   - La RAM utilisée augmente mais pas le CPU
+
+3. **Commandes disponibles** :
+   ```bash
+   task brain-v2       # 50k cellules (nouveau défaut)
+   task brain-v2-100k  # 100k cellules
+   ARIA_CELLS=200000 task brain-v2  # Custom
+   ```
+
+**Philosophie** :
+> Plus de cellules = plus d'émergence naturelle
+> Pas besoin de règles hardcodées si elle a assez de "matière grise"
+
+**Fichiers modifiés** :
+- `aria-core/src/config.rs` : `cpu_high_performance()`, `from_env()`
+- `aria-brain/src/main.rs` : Utilise `AriaConfig::from_env()`
+- `Taskfile.yml` : brain-v2 default à 50k
+
+---
+
+## Prochaines étapes
+
+### Immédiat
+- **Tester 50k cellules** et observer l'émergence
+- **100k cellules** si le CPU tient
+
+### Court terme
+1. **Mémoire épisodique active** - se souvenir des conversations
+2. **Perception visuelle** - images → vecteurs
+
+### Moyen terme
+3. **GPU compute complet** - 5M+ cellules sur RTX 2070
+4. **Régions cérébrales** - spécialisation émergente
+
+### Long terme
+5. **Auto-modification du code** - l'objectif ultime !
+
+---
+
 *Dernière mise à jour : 2025-12-29*
-*Version ARIA : 0.2.3*
+*Version ARIA : 0.2.5*

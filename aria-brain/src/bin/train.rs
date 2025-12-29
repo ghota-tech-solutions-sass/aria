@@ -1,13 +1,14 @@
-//! ARIA Training System
+//! ARIA Training System v2
 //!
-//! Automatically trains ARIA with common French conversation patterns.
-//! This accelerates learning without hardcoding responses.
+//! Trains ARIA through contextual conversations, not isolated patterns.
+//! ARIA learns naturally through multi-turn dialogues and associations.
 
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio::time::sleep;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
+use rand::seq::SliceRandom;
 
 /// Signal to send to ARIA (matches brain's Signal struct)
 #[derive(Clone, Debug, Serialize)]
@@ -43,117 +44,192 @@ impl Signal {
 
         // Emotional markers
         let lower = text.to_lowercase();
-        let positive = ["aime", "adore", "bien", "super", "bravo", "merci", "♥"];
+        let positive = ["aime", "adore", "bien", "super", "bravo", "merci", "♥", "good", "great"];
         let negative = ["triste", "mal", "peur", "non", "déteste"];
 
         content[28] = if positive.iter().any(|w| lower.contains(w)) { 1.0 } else { 0.0 };
         content[29] = if negative.iter().any(|w| lower.contains(w)) { -1.0 } else { 0.0 };
         content[30] = if lower.contains("aide") || lower.contains("veux") { 0.5 } else { 0.0 };
-        content[31] = if text.ends_with('?') || lower.contains("comment") { 0.8 } else { 0.0 };
+        content[31] = if text.ends_with('?') || lower.contains("comment") || lower.contains("qui") { 0.8 } else { 0.0 };
 
         Self {
             content,
-            intensity: 0.5,  // Normal intensity - don't overwhelm
+            intensity: 0.5,
             label: text.to_string(),
             signal_type: "Perception".to_string(),
         }
     }
 }
 
+/// A conversational exchange
 #[derive(Debug, Clone)]
-struct TrainingPattern {
-    /// What to say to ARIA
+struct Exchange {
+    /// What to say
     input: &'static str,
-    /// Expected words in ARIA's response (any of these = success)
-    expected: &'static [&'static str],
-    /// How many times to train this pattern
-    repetitions: u32,
+    /// Expected words (any = success), None = just context, don't check
+    expected: Option<&'static [&'static str]>,
+    /// Delay after this exchange (ms)
+    delay_ms: u64,
 }
 
-/// Teaching patterns - first teach ARIA the response, then test
-/// Format: (question, expected_responses, teaching_phrase)
-const TEACHING_PATTERNS: &[(&str, &[&str], &str)] = &[
-    // Teach "bien" as response to "ça va"
-    ("Comment ça va ?", &["bien", "super", "ça va"], "Ça va bien !"),
-    ("Ça va ?", &["bien", "oui", "super"], "Oui ça va bien !"),
+/// A full conversation scenario
+#[derive(Debug, Clone)]
+struct Conversation {
+    /// Name of this scenario
+    name: &'static str,
+    /// Description
+    description: &'static str,
+    /// Exchanges in order
+    exchanges: &'static [Exchange],
+}
 
-    // Teach farewell responses
-    ("Au revoir !", &["revoir", "bye", "bientôt"], "Au revoir, à bientôt !"),
-    ("Bonne nuit !", &["nuit", "dors", "bonne"], "Bonne nuit, dors bien !"),
-];
+/// Contextual conversations - ARIA learns through dialogue flow
+const CONVERSATIONS: &[Conversation] = &[
+    // === Introduction & Identity ===
+    Conversation {
+        name: "Introduction",
+        description: "Teaching ARIA her identity",
+        exchanges: &[
+            Exchange { input: "Bonjour !", expected: Some(&["bonjour", "salut", "coucou"]), delay_ms: 600 },
+            Exchange { input: "Tu t'appelles ARIA.", expected: None, delay_ms: 400 },
+            Exchange { input: "ARIA, c'est ton nom.", expected: None, delay_ms: 400 },
+            Exchange { input: "Comment tu t'appelles ?", expected: Some(&["aria"]), delay_ms: 600 },
+            Exchange { input: "Bravo !", expected: None, delay_ms: 300 },
+        ],
+    },
 
-/// Training patterns - ARIA learns through feedback, not hardcoding!
-const PATTERNS: &[TrainingPattern] = &[
-    // Greetings (ARIA already knows these from social context)
-    TrainingPattern {
-        input: "Bonjour ARIA !",
-        expected: &["bonjour", "salut", "coucou", "hello"],
-        repetitions: 3,
+    // === Moka the cat ===
+    Conversation {
+        name: "Moka le chat",
+        description: "Teaching about Moka",
+        exchanges: &[
+            Exchange { input: "J'ai un chat.", expected: None, delay_ms: 400 },
+            Exchange { input: "Mon chat s'appelle Moka.", expected: None, delay_ms: 400 },
+            Exchange { input: "Moka est un Bengal.", expected: None, delay_ms: 400 },
+            Exchange { input: "Moka est très mignon.", expected: None, delay_ms: 400 },
+            Exchange { input: "Tu aimes Moka ?", expected: Some(&["oui", "moka", "aime", "chat"]), delay_ms: 600 },
+            Exchange { input: "Bravo ! Moka est adorable.", expected: None, delay_ms: 400 },
+            Exchange { input: "Qui est Moka ?", expected: Some(&["chat", "moka", "bengal"]), delay_ms: 600 },
+        ],
     },
-    TrainingPattern {
-        input: "Salut !",
-        expected: &["bonjour", "salut", "coucou", "hello"],
-        repetitions: 3,
+
+    // === Emotions & Feelings ===
+    Conversation {
+        name: "Emotions",
+        description: "Teaching emotional responses",
+        exchanges: &[
+            Exchange { input: "Comment ça va ?", expected: Some(&["bien", "super", "oui"]), delay_ms: 600 },
+            Exchange { input: "Je suis content de te parler.", expected: None, delay_ms: 400 },
+            Exchange { input: "Tu es contente ?", expected: Some(&["oui", "content", "bien"]), delay_ms: 600 },
+            Exchange { input: "Je t'aime ARIA !", expected: Some(&["aime", "aussi", "♥"]), delay_ms: 600 },
+            Exchange { input: "Bravo !", expected: None, delay_ms: 300 },
+        ],
     },
-    TrainingPattern {
-        input: "Coucou !",
-        expected: &["bonjour", "salut", "coucou", "hello"],
-        repetitions: 3,
+
+    // === Greetings variety ===
+    Conversation {
+        name: "Salutations",
+        description: "Various greetings",
+        exchanges: &[
+            Exchange { input: "Salut ARIA !", expected: Some(&["salut", "bonjour", "coucou"]), delay_ms: 600 },
+            Exchange { input: "Coucou !", expected: Some(&["coucou", "salut", "bonjour"]), delay_ms: 600 },
+            Exchange { input: "Hello !", expected: Some(&["hello", "bonjour", "salut"]), delay_ms: 600 },
+            Exchange { input: "Bravo, tu sais dire bonjour !", expected: None, delay_ms: 400 },
+        ],
     },
-    // How are you? (after teaching)
-    TrainingPattern {
-        input: "Comment ça va ?",
-        expected: &["bien", "ça va", "super"],
-        repetitions: 5,
+
+    // === Politeness ===
+    Conversation {
+        name: "Politesse",
+        description: "Thank you and please",
+        exchanges: &[
+            Exchange { input: "Merci ARIA !", expected: Some(&["rien", "plaisir", "merci"]), delay_ms: 600 },
+            Exchange { input: "Tu es très gentille.", expected: Some(&["merci", "gentil"]), delay_ms: 600 },
+            Exchange { input: "Bravo !", expected: None, delay_ms: 300 },
+            Exchange { input: "Merci beaucoup !", expected: Some(&["rien", "plaisir"]), delay_ms: 600 },
+        ],
     },
-    TrainingPattern {
-        input: "Ça va ?",
-        expected: &["bien", "oui", "super"],
-        repetitions: 5,
+
+    // === Questions & Answers ===
+    Conversation {
+        name: "Questions",
+        description: "Teaching Q&A patterns",
+        exchanges: &[
+            Exchange { input: "Tu parles français ?", expected: Some(&["oui", "français", "parle"]), delay_ms: 600 },
+            Exchange { input: "Bravo !", expected: None, delay_ms: 300 },
+            Exchange { input: "Tu comprends ?", expected: Some(&["oui", "comprend"]), delay_ms: 600 },
+            Exchange { input: "Tu apprends vite !", expected: None, delay_ms: 400 },
+            Exchange { input: "Tu aimes apprendre ?", expected: Some(&["oui", "aime", "apprend"]), delay_ms: 600 },
+            Exchange { input: "Bravo !", expected: None, delay_ms: 300 },
+        ],
     },
-    // Thanks
-    TrainingPattern {
-        input: "Merci ARIA !",
-        expected: &["rien", "derien", "plaisir", "merci"],
-        repetitions: 3,
+
+    // === Farewells ===
+    Conversation {
+        name: "Au revoir",
+        description: "Goodbye patterns",
+        exchanges: &[
+            Exchange { input: "Je vais partir.", expected: None, delay_ms: 400 },
+            Exchange { input: "Au revoir ARIA !", expected: Some(&["revoir", "bye", "bientôt"]), delay_ms: 600 },
+            Exchange { input: "À bientôt !", expected: Some(&["bientôt", "revoir"]), delay_ms: 600 },
+            Exchange { input: "Bonne nuit ARIA.", expected: Some(&["nuit", "bonne", "dors"]), delay_ms: 600 },
+        ],
     },
-    TrainingPattern {
-        input: "Merci beaucoup !",
-        expected: &["rien", "derien", "plaisir"],
-        repetitions: 3,
+
+    // === Associations ===
+    Conversation {
+        name: "Associations",
+        description: "Building word associations",
+        exchanges: &[
+            Exchange { input: "Le soleil est jaune.", expected: None, delay_ms: 400 },
+            Exchange { input: "Le soleil brille.", expected: None, delay_ms: 400 },
+            Exchange { input: "J'aime le soleil.", expected: None, delay_ms: 400 },
+            Exchange { input: "Tu aimes le soleil ?", expected: Some(&["oui", "soleil", "aime"]), delay_ms: 600 },
+            Exchange { input: "Bravo !", expected: None, delay_ms: 300 },
+            Exchange { input: "La lune est belle.", expected: None, delay_ms: 400 },
+            Exchange { input: "La nuit, il y a la lune.", expected: None, delay_ms: 400 },
+            Exchange { input: "Tu préfères le soleil ou la lune ?", expected: Some(&["soleil", "lune"]), delay_ms: 600 },
+        ],
     },
-    // Affection
-    TrainingPattern {
-        input: "Je t'aime ARIA",
-        expected: &["aime", "aussi", "♥", "bisou"],
-        repetitions: 3,
+
+    // === Colors ===
+    Conversation {
+        name: "Couleurs",
+        description: "Teaching colors",
+        exchanges: &[
+            Exchange { input: "Le ciel est bleu.", expected: None, delay_ms: 400 },
+            Exchange { input: "L'herbe est verte.", expected: None, delay_ms: 400 },
+            Exchange { input: "Les roses sont rouges.", expected: None, delay_ms: 400 },
+            Exchange { input: "De quelle couleur est le ciel ?", expected: Some(&["bleu", "ciel"]), delay_ms: 600 },
+            Exchange { input: "Bravo !", expected: None, delay_ms: 300 },
+            Exchange { input: "Tu aimes le bleu ?", expected: Some(&["oui", "bleu", "aime"]), delay_ms: 600 },
+        ],
     },
-    TrainingPattern {
-        input: "Tu es gentille",
-        expected: &["merci", "gentil", "aime", "♥"],
-        repetitions: 3,
+
+    // === Numbers (basic) ===
+    Conversation {
+        name: "Nombres",
+        description: "Basic numbers",
+        exchanges: &[
+            Exchange { input: "Un, deux, trois.", expected: None, delay_ms: 400 },
+            Exchange { input: "J'ai deux chats.", expected: None, delay_ms: 400 },
+            Exchange { input: "Moka et Obrigada sont mes chats.", expected: None, delay_ms: 400 },
+            Exchange { input: "Combien de chats j'ai ?", expected: Some(&["deux", "2", "moka", "obrigada"]), delay_ms: 600 },
+        ],
     },
-    // Questions about ARIA
-    TrainingPattern {
-        input: "Comment tu t'appelles ?",
-        expected: &["aria", "appelle"],
-        repetitions: 3,
-    },
-    TrainingPattern {
-        input: "Tu aimes Moka ?",
-        expected: &["oui", "moka", "aime", "chat"],
-        repetitions: 3,
-    },
-    // Farewells (after teaching)
-    TrainingPattern {
-        input: "Au revoir ARIA",
-        expected: &["revoir", "bye", "bientôt"],
-        repetitions: 3,
-    },
-    TrainingPattern {
-        input: "Bonne nuit !",
-        expected: &["nuit", "dors", "bonne", "bien"],
-        repetitions: 3,
+
+    // === Reinforcement through repetition ===
+    Conversation {
+        name: "Renforcement",
+        description: "Reinforcing core concepts",
+        exchanges: &[
+            Exchange { input: "ARIA, tu es intelligente.", expected: None, delay_ms: 400 },
+            Exchange { input: "ARIA apprend vite.", expected: None, delay_ms: 400 },
+            Exchange { input: "Je suis fier de toi ARIA.", expected: None, delay_ms: 400 },
+            Exchange { input: "Tu es fière de toi ?", expected: Some(&["oui", "fier", "fière"]), delay_ms: 600 },
+            Exchange { input: "Bravo ARIA !", expected: None, delay_ms: 300 },
+            Exchange { input: "Tu es la meilleure !", expected: Some(&["merci", "♥"]), delay_ms: 600 },
+        ],
     },
 ];
 
@@ -168,12 +244,10 @@ struct AriaResponse {
 
 /// Extract the word from a label like "word:moka" or "greeting:bonjour"
 fn extract_word(label: &str) -> String {
-    // Handle formats like "word:moka|emotion:♥" or "greeting:bonjour"
     let base = label.split('|').next().unwrap_or(label);
 
-    // Try all known prefixes
     let prefixes = [
-        "word:", "phrase:", "answer:", "spontaneous:",
+        "word:", "phrase:", "answer:", "spontaneous:", "babble:",
         "greeting:", "farewell:", "thanks:", "affection:", "social:",
     ];
 
@@ -188,98 +262,131 @@ fn extract_word(label: &str) -> String {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🎓 ARIA Training System");
-    println!("========================");
-    println!();
+    println!("🎓 ARIA Training System v2");
+    println!("===========================");
+    println!("Training through contextual conversations\n");
 
     let url = std::env::var("ARIA_BRAIN_URL")
         .unwrap_or_else(|_| "ws://localhost:8765/aria".to_string());
 
+    let epochs: u32 = std::env::var("ARIA_EPOCHS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3);
+
+    // Timeout for responses (longer for bigger brains)
+    let timeout_ms: u64 = std::env::var("ARIA_TIMEOUT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2000);  // 2 seconds default
+
     println!("Connecting to {}...", url);
+    println!("Epochs: {}, Timeout: {}ms\n", epochs, timeout_ms);
 
     let (ws_stream, _) = connect_async(&url).await?;
     let (mut write, mut read) = ws_stream.split();
 
     println!("Connected! Starting training...\n");
 
-    // Skip teaching phase - let ARIA learn naturally through testing
-    // The social context system already handles greetings, thanks, affection
-    println!("📝 Testing ARIA's responses...\n");
-    println!("   (ARIA learns through social context detection, not rote memorization)\n");
-
     let mut total_success = 0;
-    let mut total_attempts = 0;
+    let mut total_tests = 0;
+    let mut rng = rand::thread_rng();
 
-    for pattern in PATTERNS {
-        println!("📝 Training: \"{}\"", pattern.input);
-        println!("   Expected: {:?}", pattern.expected);
+    for epoch in 1..=epochs {
+        println!("╔═══════════════════════════════════════╗");
+        println!("║  Epoch {}/{}                            ║", epoch, epochs);
+        println!("╚═══════════════════════════════════════╝\n");
 
-        for rep in 1..=pattern.repetitions {
-            // Send the training input using Signal::from_text
-            let signal = Signal::from_text(pattern.input);
-            write.send(Message::Text(serde_json::to_string(&signal)?)).await?;
+        // Shuffle conversations for variety
+        let mut conversations: Vec<_> = CONVERSATIONS.iter().collect();
+        conversations.shuffle(&mut rng);
 
-            // Wait for ARIA's response (faster brain = faster response)
-            let mut response_text = String::new();
-            let timeout = sleep(Duration::from_millis(800));
-            tokio::pin!(timeout);
+        for conv in &conversations {
+            println!("📚 {} - {}", conv.name, conv.description);
+            println!("─────────────────────────────────────────");
 
-            loop {
-                tokio::select! {
-                    msg = read.next() => {
-                        if let Some(Ok(Message::Text(text))) = msg {
-                            if let Ok(response) = serde_json::from_str::<AriaResponse>(&text) {
-                                // Only consider signals with reasonable intensity
-                                if response.intensity > 0.01 && !response.label.is_empty() {
-                                    response_text = extract_word(&response.label);
-                                    break;
+            for exchange in conv.exchanges {
+                // Send message
+                let signal = Signal::from_text(exchange.input);
+                write.send(Message::Text(serde_json::to_string(&signal)?)).await?;
+
+                print!("   You: {}", exchange.input);
+
+                // Wait for response (use configured timeout)
+                let mut response_text = String::new();
+                let timeout = sleep(Duration::from_millis(timeout_ms));
+                tokio::pin!(timeout);
+
+                loop {
+                    tokio::select! {
+                        msg = read.next() => {
+                            if let Some(Ok(Message::Text(text))) = msg {
+                                if let Ok(response) = serde_json::from_str::<AriaResponse>(&text) {
+                                    if response.intensity > 0.01 && !response.label.is_empty() {
+                                        response_text = extract_word(&response.label);
+                                        break;
+                                    }
                                 }
                             }
                         }
-                    }
-                    _ = &mut timeout => {
-                        break;
+                        _ = &mut timeout => {
+                            break;
+                        }
                     }
                 }
+
+                // Check response if expected
+                if let Some(expected) = exchange.expected {
+                    total_tests += 1;
+                    let success = expected.iter().any(|exp| response_text.contains(exp));
+
+                    if success {
+                        total_success += 1;
+                        println!(" → ARIA: {} ✅", response_text);
+                    } else if response_text.is_empty() {
+                        println!(" → ARIA: (silence) ❌");
+                    } else {
+                        println!(" → ARIA: {} ❌ (expected: {:?})", response_text, expected);
+                    }
+                } else {
+                    // Just context, no test
+                    if !response_text.is_empty() {
+                        println!(" → ARIA: {} 💭", response_text);
+                    } else {
+                        println!(" (context)");
+                    }
+                }
+
+                // Small pause between exchanges
+                sleep(Duration::from_millis(300)).await;
             }
 
-            total_attempts += 1;
+            println!();
 
-            // Check if response matches expected
-            let success = pattern.expected.iter()
-                .any(|exp| response_text.contains(exp));
-
-            // Only send POSITIVE feedback - no negative feedback to avoid polluting vocabulary
-            if success {
-                total_success += 1;
-                let feedback_signal = Signal::from_text("Bravo !");
-                write.send(Message::Text(serde_json::to_string(&feedback_signal)?)).await?;
-            }
-            // When wrong, we just stay silent - no "non" or "hmm" to learn
-
-            let status = if success { "✅" } else { "❌" };
-            println!("   Rep {}/{}: {} (response: {})",
-                rep, pattern.repetitions, status,
-                if response_text.is_empty() { "(none)" } else { &response_text }
-            );
-
-            // Delay between repetitions
-            sleep(Duration::from_millis(200)).await;
+            // Pause between conversations
+            sleep(Duration::from_millis(800)).await;
         }
 
-        println!();
+        let epoch_rate = if total_tests > 0 {
+            (total_success as f32 / total_tests as f32) * 100.0
+        } else {
+            0.0
+        };
+
+        println!("📊 After epoch {}: {:.1}% success ({}/{})\n",
+            epoch, epoch_rate, total_success, total_tests);
     }
 
-    let success_rate = if total_attempts > 0 {
-        (total_success as f32 / total_attempts as f32) * 100.0
+    let final_rate = if total_tests > 0 {
+        (total_success as f32 / total_tests as f32) * 100.0
     } else {
         0.0
     };
 
-    println!("========================");
+    println!("═══════════════════════════════════════");
     println!("🎓 Training Complete!");
-    println!("   Success: {}/{} ({:.1}%)", total_success, total_attempts, success_rate);
-    println!();
+    println!("   Total: {}/{} ({:.1}%)", total_success, total_tests, final_rate);
+    println!("═══════════════════════════════════════\n");
 
     Ok(())
 }

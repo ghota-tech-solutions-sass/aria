@@ -290,4 +290,37 @@ impl AriaConfig {
         config.compute.backend = ComputeBackendType::Cpu;
         config
     }
+
+    /// Create config for high-performance CPU (more cells, sparse updates)
+    pub fn cpu_high_performance(target_cells: u64) -> Self {
+        let mut config = Self::default();
+        config.population.target_population = target_cells;
+        config.population.population_buffer = (target_cells / 5) as u64; // 20% buffer
+        config.population.min_population = (target_cells / 10) as u64;   // 10% minimum
+        config.compute.backend = ComputeBackendType::Cpu;
+        config.compute.sparse_updates = true;   // Sleep inactive cells
+        config.compute.spatial_hashing = true;  // O(1) neighbor lookup
+        config
+    }
+
+    /// Create config from environment variables
+    ///
+    /// Reads:
+    /// - ARIA_CELLS: Target population (default: 50000)
+    /// - ARIA_BACKEND: "cpu" or "gpu" (default: cpu)
+    pub fn from_env() -> Self {
+        let target_cells = std::env::var("ARIA_CELLS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(50_000);  // Default: 50k cells
+
+        let backend = std::env::var("ARIA_BACKEND")
+            .map(|s| s.to_lowercase())
+            .ok();
+
+        match backend.as_deref() {
+            Some("gpu") => Self::gpu_optimized(target_cells),
+            _ => Self::cpu_high_performance(target_cells),
+        }
+    }
 }
