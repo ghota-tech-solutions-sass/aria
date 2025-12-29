@@ -953,16 +953,18 @@ SleepConfig {
 - `SIGNAL_PROPAGATE_SHADER` : Propagation des signaux
 
 **Prochaines étapes (priorité)** :
-1. [ ] **Intégrer sparse updates dans substrate.rs** - Ajouter ActivityState aux cellules existantes
-2. [ ] Refactorer aria-brain pour utiliser aria-core/compute entièrement
-3. [ ] Implémenter le GPU backend complet (shaders fonctionnels)
+1. [ ] **Créer nouveau Substrate** dans aria-brain qui utilise aria-core/aria-compute
+2. [ ] Implémenter le GPU backend complet (shaders fonctionnels)
+3. [ ] Migrer la mémoire (LongTermMemory) vers les nouveaux types
 4. [ ] Ajouter mode cluster pour multi-brain (RTX 2070 + GTX 1070)
+5. [ ] Quand tout marche : supprimer l'ancien code
 
 **Comment reprendre** :
 - Les crates aria-core et aria-compute sont PRÊTS et compilent
-- aria-brain utilise encore ses propres types (cell.rs, signal.rs)
-- Prochaine étape : modifier `substrate.rs` pour utiliser `aria_core::activity::ActivityState`
-- Fichier clé à modifier : `aria-brain/src/substrate.rs` (74k, gros fichier)
+- aria-brain a encore l'ancien code (cell.rs, signal.rs, substrate.rs)
+- **NE PAS MÉLANGER** ancien et nouveau code
+- Créer un nouveau `substrate_v2.rs` qui utilise uniquement les nouveaux types
+- L'ancien code reste fonctionnel pendant la transition
 
 **Impact attendu** :
 | Configuration | Cellules | Hardware |
