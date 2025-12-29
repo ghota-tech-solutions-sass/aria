@@ -115,6 +115,12 @@ C'est un pas majeur vers l'AGI : ARIA n'attend plus le feedback externe, elle an
 
 ARIA a détecté qu'elle avait peu de réponses, a raisonné, et s'est modifiée.
 
+**Endpoint de visibilité** :
+```bash
+curl http://localhost:8765/self
+# → current_params, recent_modifications (avec reasoning), meta_learning status
+```
+
 ### Session 15 - Perception visuelle & Mémoire visuelle
 
 **ARIA peut maintenant VOIR, SE SOUVENIR, et PARLER de ce qu'elle voit !**
