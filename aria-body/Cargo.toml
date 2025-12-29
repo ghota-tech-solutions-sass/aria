@@ -13,6 +13,7 @@ futures-util = { workspace = true }
 
 # Network
 tokio-tungstenite = { workspace = true }
+reqwest = { version = "0.11", features = ["json"] }
 
 # Serialization
 serde = { workspace = true }

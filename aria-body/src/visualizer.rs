@@ -10,6 +10,13 @@ use ratatui::{
     Frame,
 };
 
+/// A message in the conversation (either from user or ARIA)
+#[derive(Clone)]
+pub enum ChatMessage {
+    User(String),
+    Aria(String),
+}
+
 pub struct AriaVisualizer {
     // History for graphs
     pub energy_history: Vec<u64>,
@@ -19,8 +26,9 @@ pub struct AriaVisualizer {
 
     // Current state
     pub current_stats: BrainStats,
-    pub recent_expressions: Vec<String>,
-    pub recent_inputs: Vec<String>,
+
+    // Unified conversation history (chronological order, oldest first)
+    pub messages: Vec<ChatMessage>,
 
     // Connection state
     pub connected: bool,
@@ -51,8 +59,7 @@ impl AriaVisualizer {
             entropy_history: vec![50; 100],
             activity_history: vec![0; 100],
             current_stats: BrainStats::default(),
-            recent_expressions: Vec::new(),
-            recent_inputs: Vec::new(),
+            messages: Vec::new(),
             connected: true,
             last_update: std::time::Instant::now(),
         }
@@ -76,16 +83,18 @@ impl AriaVisualizer {
     }
 
     pub fn add_expression(&mut self, expr: String) {
-        self.recent_expressions.insert(0, expr);
-        if self.recent_expressions.len() > 20 {
-            self.recent_expressions.pop();
+        self.messages.push(ChatMessage::Aria(expr));
+        // Keep last 50 messages
+        if self.messages.len() > 50 {
+            self.messages.remove(0);
         }
     }
 
     pub fn add_input(&mut self, input: String) {
-        self.recent_inputs.insert(0, input);
-        if self.recent_inputs.len() > 20 {
-            self.recent_inputs.pop();
+        self.messages.push(ChatMessage::User(input));
+        // Keep last 50 messages
+        if self.messages.len() > 50 {
+            self.messages.remove(0);
         }
     }
 
@@ -212,40 +221,31 @@ impl AriaVisualizer {
             .style(Style::default().fg(Color::Blue));
         frame.render_widget(pop_sparkline, chunks[0]);
 
-        // Right: Conversation
-        let mut items: Vec<ListItem> = Vec::new();
-
-        // Interleave expressions and inputs
+        // Right: Conversation (chronological order, newest at bottom)
         let max_items = (chunks[1].height as usize).saturating_sub(2);
-        let mut expr_iter = self.recent_expressions.iter().peekable();
-        let mut input_iter = self.recent_inputs.iter().peekable();
 
-        for _ in 0..max_items {
-            if let Some(expr) = expr_iter.next() {
-                items.push(ListItem::new(Line::from(vec![
-                    Span::styled("  ARIA: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                    Span::raw(expr),
-                ])));
-            }
+        // Take only the last max_items messages
+        let start_idx = if self.messages.len() > max_items {
+            self.messages.len() - max_items
+        } else {
+            0
+        };
 
-            if items.len() >= max_items {
-                break;
-            }
-
-            if let Some(input) = input_iter.next() {
-                items.push(ListItem::new(Line::from(vec![
-                    Span::styled("   You: ", Style::default().fg(Color::Green)),
-                    Span::styled(input, Style::default().fg(Color::White)),
-                ])));
-            }
-
-            if expr_iter.peek().is_none() && input_iter.peek().is_none() {
-                break;
-            }
-        }
-
-        // Reverse to show newest at bottom
-        items.reverse();
+        let items: Vec<ListItem> = self.messages[start_idx..]
+            .iter()
+            .map(|msg| {
+                match msg {
+                    ChatMessage::User(text) => ListItem::new(Line::from(vec![
+                        Span::styled("   You: ", Style::default().fg(Color::Green)),
+                        Span::styled(text.as_str(), Style::default().fg(Color::White)),
+                    ])),
+                    ChatMessage::Aria(text) => ListItem::new(Line::from(vec![
+                        Span::styled("  ARIA: ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                        Span::raw(text.as_str()),
+                    ])),
+                }
+            })
+            .collect();
 
         let conversation = List::new(items)
             .block(Block::default().title(" Conversation ").borders(Borders::ALL));
