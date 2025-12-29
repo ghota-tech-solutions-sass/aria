@@ -52,6 +52,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "1.0"
 pollster = "0.3"
 
+# Image processing (for visual perception)
+image = "0.25"
+base64 = "0.22"
+
 # Core crate (internal)
 aria-core = { path = "aria-core" }
 aria-compute = { path = "aria-compute" }

@@ -8,6 +8,7 @@ mod signal;
 mod memory;
 mod config;
 mod meta_learning;
+mod vision;
 
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -328,7 +329,73 @@ async fn main() {
             }))
         });
 
-    let routes = ws_route.or(health).or(stats).or(words).or(associations).or(episodes).or(clusters).or(meta);
+    // Visual perception endpoint - POST /vision with base64 image
+    let perception_tx_vision = perception_tx.clone();
+    let vision_endpoint = warp::path("vision")
+        .and(warp::post())
+        .and(warp::body::json())
+        .map(move |body: serde_json::Value| {
+            // Extract base64 image from body
+            let b64 = body.get("image")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let source = body.get("source")
+                .and_then(|v| v.as_str())
+                .unwrap_or("upload")
+                .to_string();
+
+            if b64.is_empty() {
+                return warp::reply::json(&serde_json::json!({
+                    "error": "Missing 'image' field with base64 data"
+                }));
+            }
+
+            // Process the image
+            let vision = vision::VisualPerception::new();
+            match vision.process_base64(b64) {
+                Ok(features) => {
+                    let visual_signal = vision::VisualSignal::new(features.clone(), source);
+
+                    // Convert to internal signal and send to substrate
+                    let signal = Signal {
+                        content: visual_signal.vector.to_vec(),
+                        intensity: visual_signal.intensity,
+                        label: format!("vision:{}", visual_signal.description),
+                        signal_type: signal::SignalType::Visual,
+                        timestamp: 0,
+                    };
+
+                    info!("👁️ VISION: {} (intensity: {:.2})", visual_signal.description, visual_signal.intensity);
+
+                    if let Err(e) = perception_tx_vision.send(signal) {
+                        warn!("Failed to send visual signal: {}", e);
+                    }
+
+                    warp::reply::json(&serde_json::json!({
+                        "success": true,
+                        "description": visual_signal.description,
+                        "intensity": visual_signal.intensity,
+                        "features": {
+                            "brightness": features.brightness,
+                            "warmth": features.warmth,
+                            "saturation": features.saturation,
+                            "complexity": features.edge_density,
+                            "emotional_valence": features.emotional_valence,
+                            "nature_score": features.nature_score,
+                            "face_likelihood": features.face_likelihood
+                        }
+                    }))
+                }
+                Err(e) => {
+                    warp::reply::json(&serde_json::json!({
+                        "error": format!("Failed to process image: {}", e)
+                    }))
+                }
+            }
+        });
+
+    let routes = ws_route.or(health).or(stats).or(words).or(associations).or(episodes).or(clusters).or(meta).or(vision_endpoint);
 
     info!("WebSocket ready on ws://0.0.0.0:{}/aria", config.port);
     info!("Health check on http://0.0.0.0:{}/health", config.port);
@@ -338,6 +405,7 @@ async fn main() {
     info!("Episodes on http://0.0.0.0:{}/episodes", config.port);
     info!("Clusters on http://0.0.0.0:{}/clusters", config.port);
     info!("Meta-learning on http://0.0.0.0:{}/meta", config.port);
+    info!("Vision on POST http://0.0.0.0:{}/vision", config.port);
     println!();
     println!("🧒 ARIA is waiting for her first interaction...");
     println!();

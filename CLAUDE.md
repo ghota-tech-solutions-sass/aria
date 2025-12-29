@@ -40,6 +40,7 @@ aria-body (MacBook)  ◄──WebSocket──►  aria-brain (PC + RTX 2070)
 - **S'adapter** : paramètres qui évoluent avec le feedback
 - **Explorer** : curiosité-driven, teste des combinaisons nouvelles
 - **Méta-apprendre** : s'auto-évalue, apprend à apprendre (Session 14)
+- **Voir** : images → vecteurs sémantiques 32D (Session 15)
 
 ## Commandes
 
@@ -74,8 +75,8 @@ spontaneity: 0.01-0.3
 
 1. ✅ **GPU compute** : wgpu/Vulkan - AMD Radeon NAVI14 fonctionnel
 2. ✅ **Méta-apprentissage** : ARIA s'auto-évalue et apprend à apprendre
-3. **Scaler à 5M+ cellules** : Tests avec plus de cellules GPU
-4. **Perception visuelle** : images → vecteurs
+3. ✅ **Perception visuelle** : images → vecteurs sémantiques 32D
+4. **Scaler à 5M+ cellules** : Tests avec plus de cellules GPU
 5. **Auto-modification** : ARIA modifie son propre code (objectif ultime)
 
 ## Contexte personnel
@@ -85,7 +86,40 @@ Chats de Mickael :
 - **Obrigada** : Abyssin
 
 ---
-*Version : 0.3.0 | Dernière update : 2025-12-29*
+*Version : 0.3.1 | Dernière update : 2025-12-29*
+
+### Session 15 - Perception visuelle
+
+**ARIA peut maintenant VOIR !** Images → vecteurs sémantiques 32D.
+
+**Nouveau module `vision.rs`** :
+- `VisualFeatures` : 32 caractéristiques extraites (couleur, luminosité, texture, spatial, émotionnel)
+- `VisualPerception` : analyse images base64 et extrait features
+- `VisualSignal` : convertit features en vecteur compatible avec le substrate
+
+**Features extraites** :
+- **Couleurs (8)** : RGB moyens, teinte dominante, warmth, saturation, colorfulness, contrast
+- **Luminosité (4)** : brightness, variance, min/max
+- **Texture (4)** : edge_density, gradients, uniformity, noise
+- **Spatial (8)** : center vs edges, quadrants, patterns
+- **Émotionnel (8)** : valence, arousal, nature_score, face_likelihood...
+
+**Nouveau endpoint HTTP** :
+```bash
+curl -X POST http://localhost:8765/vision \
+  -H "Content-Type: application/json" \
+  -d '{"image": "<base64>", "source": "test"}'
+```
+
+**Tests** :
+```
+Rouge  → "sombre chaud coloré simple joyeux" (warmth=1.0)
+Vert   → "coloré simple naturel joyeux" (nature=1.0)
+Bleu   → "sombre froid coloré simple" (warmth=-1.0)
+Jaune  → "lumineux chaud coloré simple joyeux"
+```
+
+ARIA peut maintenant recevoir des images et les convertir en signaux internes.
 
 ### Session 14 - Méta-apprentissage (AGI)
 

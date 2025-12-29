@@ -33,6 +33,8 @@ pub enum SignalType {
     Expression,
     /// Internal signal between cells
     Internal,
+    /// Visual perception (images)
+    Visual,
 }
 
 impl Signal {
