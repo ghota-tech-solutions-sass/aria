@@ -17,10 +17,11 @@ tasks:
     deps: [build-brain, build-body]
 
   build-brain:
-    desc: Build the brain (substrate) and trainer
+    desc: Build the brain (substrate V1 + V2) and trainer
     dir: aria-brain
     cmds:
       - cargo build --release --bin aria-brain
+      - cargo build --release --bin aria-brain --features substrate-v2
       - cargo build --release --bin aria-train
 
   build-body:
@@ -48,8 +49,26 @@ tasks:
     cmds:
       - cargo run --release
 
+  brain-v2:
+    desc: Start the brain with new substrate V2 (GPU-ready, sparse updates)
+    dir: aria-brain
+    env:
+      ARIA_PORT: '{{.BRAIN_PORT}}'
+      ARIA_CELLS: '{{.ARIA_CELLS | default "10000"}}'
+    cmds:
+      - cargo run --release --features substrate-v2
+
+  brain-v2-100k:
+    desc: Start brain V2 with 100k cells (sparse updates save CPU)
+    dir: aria-brain
+    env:
+      ARIA_PORT: '{{.BRAIN_PORT}}'
+      ARIA_CELLS: '100000'
+    cmds:
+      - cargo run --release --features substrate-v2
+
   brain-gpu:
-    desc: Start the brain with GPU acceleration
+    desc: Start the brain with GPU acceleration (V1 - deprecated)
     dir: aria-brain
     env:
       ARIA_PORT: '{{.BRAIN_PORT}}'
@@ -78,18 +97,25 @@ tasks:
   test:
     desc: Run all tests
     cmds:
+      - cd aria-core && cargo test
+      - cd aria-compute && cargo test
       - cd aria-brain && cargo test
       - cd aria-body && cargo test
 
   check:
-    desc: Check code without building
+    desc: Check code without building (V1 and V2)
     cmds:
       - cd aria-brain && cargo check
+      - cd aria-brain && cargo check --features substrate-v2
+      - cd aria-core && cargo check
+      - cd aria-compute && cargo check
       - cd aria-body && cargo check
 
   fmt:
     desc: Format all code
     cmds:
+      - cd aria-core && cargo fmt
+      - cd aria-compute && cargo fmt
       - cd aria-brain && cargo fmt
       - cd aria-body && cargo fmt
 
@@ -118,6 +144,16 @@ tasks:
     desc: Show semantic word associations
     cmds:
       - curl -s http://{{.BRAIN_HOST}}:{{.BRAIN_PORT}}/associations | jq .
+
+  episodes:
+    desc: Show episodic memories (significant moments ARIA remembers)
+    cmds:
+      - curl -s http://{{.BRAIN_HOST}}:{{.BRAIN_PORT}}/episodes | jq .
+
+  episodes-first:
+    desc: Show "first time" episodes only
+    cmds:
+      - curl -s http://{{.BRAIN_HOST}}:{{.BRAIN_PORT}}/episodes | jq '.first_times'
 
   # TRAINING
   train:

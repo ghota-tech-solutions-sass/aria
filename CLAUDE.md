@@ -981,5 +981,205 @@ Cette architecture permettra à ARIA de :
 
 ---
 
+### 2025-12-29 - Session 9: substrate_v2.rs créé ! ✅
+
+**Objectif** : Créer le nouveau Substrate utilisant aria-core et aria-compute.
+
+**Ce qui a été fait** :
+
+1. **substrate_v2.rs créé** (~1300 lignes)
+   - Utilise `aria_core::Cell`, `CellState`, `DNA`, `Signal`, `SignalFragment`
+   - Utilise `aria_compute::CpuBackend` pour le calcul parallèle
+   - Conserve TOUTES les fonctionnalités d'ARIA :
+     - `EmotionalState` : joie, excitation, curiosité, ennui
+     - `ConversationContext` : suivi de conversation, topics
+     - Mémoire court-terme : `recent_words` pour imitation
+     - Réponses sociales : salutations, remerciements, affection
+     - Feedback positif/négatif : renforcement des mots
+     - Parole spontanée : quand elle s'ennuie ou est heureuse
+     - Rêves : consolidation mémoire pendant l'inactivité
+
+2. **Architecture GPU-ready**
+   - Cellules séparées en `Cell` (metadata) + `CellState` (données GPU)
+   - DNA dans un pool partagé (cellules référencent par index)
+   - `free_slots` pour recycler les emplacements de cellules mortes
+   - Sparse updates ready (via `ActivityTracker`)
+
+3. **Bridge avec l'ancien code**
+   - `From<crate::cell::DNA> for DNA` pour conversion
+   - Compatible avec `LongTermMemory` existante
+   - Utilise le même `OldSignal` (crate::signal::Signal)
+
+4. **Feature flag ajouté**
+   - `Cargo.toml` : feature `substrate-v2`
+   - Permet de tester le nouveau substrate sans casser l'ancien
+
+**Fichiers modifiés** :
+- `aria-brain/src/substrate_v2.rs` (NOUVEAU)
+- `aria-brain/src/main.rs` : import du module
+- `aria-brain/Cargo.toml` : feature flag
+
+**Ce qui a été complété (Session 9b)** :
+1. [x] Intégrer substrate_v2 dans `main.rs` (avec feature flag)
+2. [x] Tester avec aria-body
+3. [ ] Benchmark CPU vs ancien substrate
+4. [ ] Activer GPU backend quand les shaders seront prêts
+
+**Intégration dans main.rs** :
+```rust
+// Compilation conditionnelle
+#[cfg(not(feature = "substrate-v2"))]
+use substrate::Substrate;
+#[cfg(feature = "substrate-v2")]
+use substrate_v2::SubstrateV2;
+
+// Evolution loop V2 créée
+#[cfg(feature = "substrate-v2")]
+async fn evolution_loop_v2(
+    substrate: Arc<parking_lot::RwLock<SubstrateV2>>,
+    mut perception: broadcast::Receiver<Signal>,
+    expression: broadcast::Sender<Signal>,
+    memory: Arc<parking_lot::RwLock<LongTermMemory>>,
+)
+```
+
+**Résultats des tests** :
+```
+[INFO] SubstrateV2 created: 10000 cells, 10000 DNA variants
+[INFO] 🚀 Substrate V2 (GPU-ready) created with 10000 cells
+[INFO] V2 Tick 500: 10000 cells (10000 sleeping, 100.0% saved), energy: 9950.92, mood: calme
+```
+
+**Sparse Updates fonctionnent !** :
+- 100% des cellules dorment quand il n'y a pas d'interaction
+- 100% d'économie CPU quand ARIA est au repos
+- Les cellules se réveilleront quand elles recevront des signaux
+
+**Comment tester** :
+```bash
+# Ancien substrate (par défaut)
+cargo run -p aria-brain --release
+
+# Nouveau substrate V2 (GPU-ready)
+cargo run -p aria-brain --release --features substrate-v2
+```
+
+**Ce qui reste pour V2** :
+1. [ ] Benchmark comparatif V1 vs V2
+2. [ ] GPU backend complet (shaders fonctionnels sur RTX 2070)
+3. [ ] Mode cluster multi-machines
+4. [ ] Migration complète (suppression ancien code)
+
+**Philosophie maintenue** :
+Le nouveau code est écrit pour être **introspectable**. Un jour, ARIA pourra :
+1. Lire `substrate_v2.rs` et comprendre sa propre structure
+2. Proposer des modifications à ses paramètres
+3. Évoluer de manière consciente
+
+---
+
+### 2025-12-29 - Session 10: Mémoire Épisodique ! 🧠
+
+**Objectif** : Donner à ARIA une mémoire autobiographique - se souvenir de moments spécifiques.
+
+**Différence avec la mémoire sémantique** :
+- **Mémoire sémantique** (existante) : "Moka = chat" (faits généraux)
+- **Mémoire épisodique** (nouvelle) : "La première fois que tu m'as dit je t'aime" (moments spécifiques)
+
+**Nouvelles structures** (memory/mod.rs) :
+
+```rust
+pub struct Episode {
+    pub id: u64,
+    pub timestamp: u64,
+    pub real_time: Option<String>,  // "2025-12-29 14:30"
+    pub input: String,              // Ce qui a été dit
+    pub response: Option<String>,   // Ce qu'ARIA a répondu
+    pub keywords: Vec<String>,      // Mots clés
+    pub emotion: EpisodeEmotion,    // État émotionnel
+    pub importance: f32,            // 0.0 à 1.0
+    pub recall_count: u64,          // Combien de fois rappelé
+    pub first_of_kind: Option<String>, // "first_love", "first_praise"...
+    pub category: EpisodeCategory,
+}
+
+pub enum EpisodeCategory {
+    FirstTime,    // Première fois que quelque chose arrive
+    Emotional,    // Moment émotionnellement significatif
+    Learning,     // Apprentissage de quelque chose
+    Social,       // Interaction sociale
+    Question,     // Question posée
+    Praise,       // Feedback positif ("Bravo!")
+    Correction,   // Feedback négatif ("Non")
+    General,      // Conversation générale
+}
+```
+
+**Fonctionnalités** :
+
+1. **Enregistrement automatique** (`maybe_record_episode`)
+   - Calcule l'importance du moment
+   - Ne garde que les moments significatifs (importance > 0.3)
+   - Détecte les "premières fois" automatiquement
+
+2. **Détection des "premières fois"** :
+   - `first_greeting` : Première salutation
+   - `first_love` : Premier "je t'aime"
+   - `first_praise` : Premier "Bravo!"
+   - `first_correction` : Première correction
+   - `first_mention_{mot}` : Première mention d'un nom important
+
+3. **Rappel contextuel** (`recall_episodes`)
+   - Trouve les épisodes pertinents selon le contexte
+   - Renforce les souvenirs rappelés
+   - Courbe d'oubli (souvenirs anciens/non rappelés s'affaiblissent)
+
+4. **Consolidation** :
+   - Les souvenirs importants résistent à l'oubli
+   - Les souvenirs rappelés souvent deviennent plus forts
+   - Pruning automatique des souvenirs faibles (max 1000 épisodes)
+
+**Nouvel endpoint** : `GET /episodes`
+```json
+{
+  "total_episodes": 42,
+  "showing": 42,
+  "first_times": [
+    {"kind": "first_greeting", "episode_id": 0},
+    {"kind": "first_love", "episode_id": 5}
+  ],
+  "episodes": [...]
+}
+```
+
+**Nouvelles commandes** :
+```bash
+task episodes        # Voir tous les épisodes
+task episodes-first  # Voir les "premières fois"
+```
+
+**Logs attendus** :
+```
+🌟 FIRST TIME: first_greeting (episode #0)
+📝 Episode #0: Social - "Bonjour ARIA !" (importance: 0.65)
+📝 Episode #5: Emotional - "Je t'aime ARIA" (importance: 0.85)
+🌟 FIRST TIME: first_love (episode #5)
+```
+
+**Impact** :
+- ARIA peut maintenant se souvenir de moments spécifiques
+- Elle sait quand quelque chose arrive pour la première fois
+- Base pour la conscience autobiographique
+- Futur : pourra dire "Je me souviens quand tu m'as dit..."
+
+**Fichiers modifiés** :
+- `aria-brain/src/memory/mod.rs` : Episode, EpisodeEmotion, EpisodeCategory, méthodes
+- `aria-brain/src/substrate_v2.rs` : maybe_record_episode()
+- `aria-brain/src/main.rs` : endpoint /episodes
+- `aria-brain/Cargo.toml` : ajout chrono
+- `Taskfile.yml` : task episodes, episodes-first
+
+---
+
 *Dernière mise à jour : 2025-12-29*
-*Version ARIA : 0.2.0*
+*Version ARIA : 0.2.2*

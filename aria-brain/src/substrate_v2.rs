@@ -1,0 +1,1469 @@
+//! # Substrate V2 - GPU-Ready Living Universe
+//!
+//! This is ARIA's new brain - designed for 5M+ cells with GPU acceleration.
+//!
+//! ## Key Differences from V1
+//!
+//! - Uses `aria-core` types (Cell, CellState, DNA) instead of local types
+//! - Uses `aria-compute` backends (CpuBackend, GpuBackend) for computation
+//! - Cell data is separated: metadata (Cell) vs dynamic state (CellState)
+//! - DNA is stored in a pool (cells reference by index)
+//! - Sparse updates: sleeping cells don't consume CPU
+//!
+//! ## Architecture
+//!
+//! ```text
+//! ┌──────────────────────────────────────────────────────────────────┐
+//! │                       SubstrateV2                                 │
+//! │  ┌─────────┐  ┌───────────┐  ┌──────────┐  ┌─────────────────┐  │
+//! │  │  Cells  │  │ CellStates│  │ DNA Pool │  │ ComputeBackend  │  │
+//! │  │ Vec<C>  │  │ Vec<CS>   │  │ Vec<DNA> │  │ CPU or GPU      │  │
+//! │  └────┬────┘  └─────┬─────┘  └────┬─────┘  └────────┬────────┘  │
+//! │       │             │             │                 │           │
+//! │       └─────────────┴─────────────┴─────────────────┘           │
+//! │                             │                                    │
+//! │  ┌─────────────┐    ┌──────┴───────┐    ┌─────────────────────┐│
+//! │  │ LongTerm    │    │ Emotional    │    │ Conversation        ││
+//! │  │ Memory      │    │ State        │    │ Context             ││
+//! │  └─────────────┘    └──────────────┘    └─────────────────────┘│
+//! └──────────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! ## Future: ARIA May Read This
+//!
+//! This code is written to be introspectable. One day, ARIA might
+//! read and understand her own substrate, and even propose modifications.
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+use parking_lot::RwLock;
+use rand::Rng;
+use serde::{Deserialize, Serialize};
+
+// New types from aria-core
+use aria_core::{
+    Cell, CellState, CellAction, DNA,
+    Signal, SignalFragment, SignalType,
+    AriaConfig, ActivityTracker,
+    POSITION_DIMS, STATE_DIMS, SIGNAL_DIMS,
+};
+use aria_core::traits::{ComputeBackend, BackendStats};
+
+// Compute backend
+use aria_compute::CpuBackend;
+
+// Our local memory module (will be migrated later)
+use crate::memory::{LongTermMemory, SocialContext, Episode, EpisodeEmotion, EpisodeCategory};
+use crate::signal::Signal as OldSignal;
+
+/// Minimum ticks between emissions (anti-spam)
+/// At 2ms/tick, 150 ticks = 300ms between responses
+const EMISSION_COOLDOWN_TICKS: u64 = 150;
+
+/// Words that are too common - ARIA focuses on meaningful words
+const STOP_WORDS: &[&str] = &[
+    // French
+    "le", "la", "les", "un", "une", "des", "du", "de", "au", "aux",
+    "je", "tu", "il", "elle", "on", "nous", "vous", "ils", "elles",
+    "me", "te", "se", "lui", "leur", "en", "y",
+    "est", "suis", "es", "sont", "sommes", "êtes",
+    "ai", "as", "a", "ont", "avons", "avez",
+    "fait", "faire", "vais", "vas", "va", "vont",
+    "et", "ou", "mais", "donc", "car", "ni", "que", "qui", "quoi",
+    "dans", "sur", "sous", "avec", "sans", "pour", "par", "chez",
+    "ce", "cette", "ces", "mon", "ma", "mes", "ton", "ta", "tes", "son", "sa", "ses",
+    // English
+    "the", "a", "an", "is", "are", "am", "was", "were",
+    "i", "you", "he", "she", "it", "we", "they",
+    "my", "your", "his", "her", "its", "our", "their",
+    "and", "or", "but", "so", "if", "then", "to", "of", "in", "on", "at",
+    "be", "have", "has", "had", "do", "does", "did",
+    "si", "ne", "pas", "plus", "très", "bien",
+];
+
+/// A recently heard word for imitation
+#[derive(Clone, Debug)]
+struct RecentWord {
+    word: String,
+    vector: [f32; SIGNAL_DIMS],
+    heard_at: u64,
+}
+
+/// A single exchange in conversation
+#[derive(Clone, Debug)]
+struct ConversationExchange {
+    input: String,
+    response: Option<String>,
+    input_words: Vec<String>,
+    emotional_tone: f32,
+    tick: u64,
+}
+
+/// Conversation tracking - ARIA follows the discussion
+#[derive(Clone, Debug, Default)]
+struct ConversationContext {
+    exchanges: Vec<ConversationExchange>,
+    topic_words: Vec<(String, u32)>,
+    in_conversation: bool,
+    last_exchange_tick: u64,
+    current_social_context: SocialContext,
+    exchange_count: u32,
+}
+
+impl ConversationContext {
+    const MAX_EXCHANGES: usize = 5;
+    const CONVERSATION_TIMEOUT: u64 = 3000; // ~30 seconds
+
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn add_input(&mut self, input: &str, words: Vec<String>, tone: f32, tick: u64, context: SocialContext) {
+        if tick.saturating_sub(self.last_exchange_tick) > Self::CONVERSATION_TIMEOUT {
+            self.exchanges.clear();
+            self.topic_words.clear();
+            self.exchange_count = 0;
+            tracing::info!("NEW CONVERSATION started");
+        }
+
+        self.in_conversation = true;
+        self.last_exchange_tick = tick;
+        self.current_social_context = context;
+        self.exchange_count += 1;
+
+        self.exchanges.insert(0, ConversationExchange {
+            input: input.to_string(),
+            response: None,
+            input_words: words.clone(),
+            emotional_tone: tone,
+            tick,
+        });
+
+        if self.exchanges.len() > Self::MAX_EXCHANGES {
+            self.exchanges.pop();
+        }
+
+        for word in words {
+            if let Some(pos) = self.topic_words.iter().position(|(w, _)| w == &word) {
+                self.topic_words[pos].1 += 1;
+            } else {
+                self.topic_words.push((word, 1));
+            }
+        }
+        self.topic_words.sort_by(|a, b| b.1.cmp(&a.1));
+        self.topic_words.truncate(10);
+    }
+
+    fn add_response(&mut self, response: &str) {
+        if let Some(exchange) = self.exchanges.first_mut() {
+            exchange.response = Some(response.to_string());
+        }
+    }
+
+    fn get_context_words(&self) -> Vec<(String, f32)> {
+        let mut context: Vec<(String, f32)> = Vec::new();
+
+        if let Some(last) = self.exchanges.first() {
+            for word in &last.input_words {
+                context.push((word.clone(), 1.0));
+            }
+        }
+
+        for (i, exchange) in self.exchanges.iter().skip(1).enumerate() {
+            let decay = 0.5_f32.powi(i as i32 + 1);
+            for word in &exchange.input_words {
+                if !context.iter().any(|(w, _)| w == word) {
+                    context.push((word.clone(), decay));
+                }
+            }
+        }
+
+        for (word, count) in &self.topic_words {
+            let topic_boost = (*count as f32 * 0.2).min(0.8);
+            if let Some(pos) = context.iter().position(|(w, _)| w == word) {
+                context[pos].1 += topic_boost;
+            } else {
+                context.push((word.clone(), topic_boost));
+            }
+        }
+
+        context
+    }
+
+    fn is_conversation_start(&self) -> bool {
+        self.exchange_count <= 2
+    }
+
+    fn get_social_context(&self) -> SocialContext {
+        self.current_social_context
+    }
+}
+
+/// ARIA's emotional state - her current mood
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct EmotionalState {
+    pub happiness: f32,   // -1.0 to 1.0
+    pub arousal: f32,     // 0.0 to 1.0
+    pub comfort: f32,     // -1.0 to 1.0
+    pub curiosity: f32,   // 0.0 to 1.0
+    pub boredom: f32,     // 0.0 to 1.0
+    pub last_update: u64,
+}
+
+impl EmotionalState {
+    pub fn decay(&mut self, current_tick: u64) {
+        let ticks_elapsed = current_tick.saturating_sub(self.last_update);
+        if ticks_elapsed > 0 {
+            let decay = 0.999f32.powi(ticks_elapsed as i32);
+            self.happiness *= decay;
+            self.arousal *= decay;
+            self.comfort *= decay;
+            self.curiosity *= decay;
+
+            // Boredom GROWS without interaction
+            let boredom_growth = 0.0001 * ticks_elapsed as f32;
+            self.boredom = (self.boredom + boredom_growth).min(1.0);
+
+            self.last_update = current_tick;
+        }
+    }
+
+    pub fn process_signal(&mut self, content: &[f32], intensity: f32, current_tick: u64) {
+        self.decay(current_tick);
+
+        let positive = content.get(28).copied().unwrap_or(0.0);
+        let negative = content.get(29).copied().unwrap_or(0.0);
+        let _request = content.get(30).copied().unwrap_or(0.0);
+        let question = content.get(31).copied().unwrap_or(0.0);
+
+        let momentum = 0.3;
+
+        if positive > 0.0 {
+            self.happiness = (self.happiness + positive * momentum * intensity).clamp(-1.0, 1.0);
+            self.comfort = (self.comfort + 0.2 * momentum * intensity).clamp(-1.0, 1.0);
+        }
+
+        if negative < 0.0 {
+            self.happiness = (self.happiness + negative * momentum * intensity).clamp(-1.0, 1.0);
+            self.comfort = (self.comfort - 0.3 * momentum * intensity).clamp(-1.0, 1.0);
+        }
+
+        if question > 0.0 {
+            self.curiosity = (self.curiosity + question * momentum * intensity).clamp(0.0, 1.0);
+            self.arousal = (self.arousal + 0.1 * momentum).clamp(0.0, 1.0);
+        }
+
+        self.arousal = (self.arousal + 0.05 * intensity).clamp(0.0, 1.0);
+        self.boredom = (self.boredom - 0.3 * intensity).max(0.0);
+    }
+
+    pub fn get_emotional_marker(&self) -> Option<&'static str> {
+        let threshold = 0.3;
+
+        if self.happiness > threshold && self.happiness >= self.curiosity.abs() {
+            if self.happiness > 0.6 { Some("♥") } else { Some("~") }
+        } else if self.curiosity > threshold {
+            if self.arousal > 0.5 { Some("!") } else { Some("?") }
+        } else if self.happiness < -threshold {
+            Some("...")
+        } else if self.arousal > 0.6 {
+            Some("!")
+        } else {
+            None
+        }
+    }
+
+    pub fn mood_description(&self) -> &'static str {
+        if self.happiness > 0.5 && self.arousal > 0.5 {
+            "joyeux"
+        } else if self.happiness > 0.5 {
+            "content"
+        } else if self.curiosity > 0.5 {
+            "curieux"
+        } else if self.happiness < -0.3 {
+            "triste"
+        } else if self.arousal > 0.6 {
+            "excité"
+        } else {
+            "calme"
+        }
+    }
+}
+
+/// Statistics about the substrate
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SubstrateStats {
+    pub tick: u64,
+    pub alive_cells: usize,
+    pub total_energy: f32,
+    pub entropy: f32,
+    pub active_clusters: usize,
+    pub dominant_emotion: String,
+    pub signals_per_second: f32,
+    pub oldest_cell_age: u64,
+    pub average_connections: f32,
+    pub mood: String,
+    pub happiness: f32,
+    pub arousal: f32,
+    pub curiosity: f32,
+    // New V2 stats
+    pub sleeping_cells: usize,
+    pub cpu_savings_percent: f32,
+    pub backend_name: String,
+}
+
+/// The V2 Substrate - GPU-ready living universe
+///
+/// This is ARIA's brain, designed for massive scale.
+pub struct SubstrateV2 {
+    // === Cell Data (separated for GPU efficiency) ===
+
+    /// Cell metadata (ID, DNA index, generation, activity state)
+    cells: Vec<Cell>,
+
+    /// Cell dynamic state (position, state, energy, tension) - GPU buffer
+    states: Vec<CellState>,
+
+    /// DNA pool - cells reference by index
+    dna_pool: Vec<DNA>,
+
+    /// Index of next available cell slot (for recycling)
+    free_slots: Vec<usize>,
+
+    // === Compute Backend ===
+
+    /// CPU or GPU backend for cell updates
+    backend: Box<dyn ComputeBackend>,
+
+    /// Activity tracker for sparse updates
+    activity_tracker: ActivityTracker,
+
+    // === Configuration ===
+
+    /// ARIA configuration
+    config: AriaConfig,
+
+    // === Timing ===
+
+    /// Current tick
+    tick: AtomicU64,
+
+    /// Next cell ID
+    next_id: AtomicU64,
+
+    // === Memory & Learning ===
+
+    /// Long-term memory
+    memory: Arc<RwLock<LongTermMemory>>,
+
+    /// Short-term: recently heard words
+    recent_words: RwLock<Vec<RecentWord>>,
+
+    /// Recent expressions (for feedback)
+    recent_expressions: RwLock<Vec<String>>,
+
+    // === Emotional & Social ===
+
+    /// Global emotional state
+    emotional_state: RwLock<EmotionalState>,
+
+    /// Last word said (anti-repetition)
+    last_said_word: RwLock<Option<String>>,
+
+    /// Conversation context
+    conversation: RwLock<ConversationContext>,
+
+    /// Was last input a question?
+    last_was_question: RwLock<bool>,
+
+    /// Last interaction tick (for spontaneity)
+    last_interaction_tick: AtomicU64,
+
+    /// Last emission tick (anti-spam cooldown)
+    last_emission_tick: AtomicU64,
+
+    // === Signal Buffers ===
+
+    /// Pending signals for cells
+    signal_buffer: RwLock<Vec<SignalFragment>>,
+}
+
+impl SubstrateV2 {
+    /// Create a new V2 substrate
+    pub fn new(config: AriaConfig, memory: Arc<RwLock<LongTermMemory>>) -> Self {
+        let initial_cells = config.population.target_population as usize;
+
+        // Create backend (CPU for now, GPU later)
+        let backend: Box<dyn ComputeBackend> = Box::new(
+            CpuBackend::new(&config).expect("Failed to create CPU backend")
+        );
+
+        // Create cells and states
+        let mut cells = Vec::with_capacity(initial_cells);
+        let mut states = Vec::with_capacity(initial_cells);
+        let mut dna_pool = Vec::new();
+
+        // Initialize primordial cells
+        for i in 0..initial_cells {
+            // Create DNA for this cell
+            let dna = DNA::random();
+            let dna_index = dna_pool.len() as u32;
+            dna_pool.push(dna);
+
+            // Create cell and state
+            let cell = Cell::new(i as u64, dna_index);
+            let state = CellState::new();
+
+            cells.push(cell);
+            states.push(state);
+        }
+
+        // Seed with elite DNA from memory if available
+        {
+            let mem = memory.read();
+            if !mem.elite_dna.is_empty() {
+                tracing::info!("Seeding {} cells with elite DNA from memory",
+                    mem.elite_dna.len().min(100));
+                for (i, elite) in mem.elite_dna.iter().take(100).enumerate() {
+                    if i < dna_pool.len() {
+                        dna_pool[i] = elite.dna.clone().into();
+                    }
+                }
+            }
+        }
+
+        tracing::info!("SubstrateV2 created: {} cells, {} DNA variants",
+            cells.len(), dna_pool.len());
+
+        Self {
+            cells,
+            states,
+            dna_pool,
+            free_slots: Vec::new(),
+            backend,
+            activity_tracker: ActivityTracker::new(),
+            config,
+            tick: AtomicU64::new(0),
+            next_id: AtomicU64::new(initial_cells as u64),
+            memory,
+            recent_words: RwLock::new(Vec::new()),
+            recent_expressions: RwLock::new(Vec::new()),
+            emotional_state: RwLock::new(EmotionalState::default()),
+            last_said_word: RwLock::new(None),
+            conversation: RwLock::new(ConversationContext::new()),
+            last_was_question: RwLock::new(false),
+            last_interaction_tick: AtomicU64::new(0),
+            last_emission_tick: AtomicU64::new(0),
+            signal_buffer: RwLock::new(Vec::new()),
+        }
+    }
+
+    /// Inject an external signal (from aria-body)
+    ///
+    /// This is called when someone talks to ARIA.
+    /// Returns immediate emergence signals if any.
+    pub fn inject_signal(&mut self, signal: OldSignal) -> Vec<OldSignal> {
+        let current_tick = self.tick.load(Ordering::Relaxed);
+
+        // Record interaction time
+        self.last_interaction_tick.store(current_tick, Ordering::Relaxed);
+
+        // Extract words
+        let words: Vec<&str> = signal.label
+            .split(|c: char| !c.is_alphabetic())
+            .filter(|w| !w.is_empty())
+            .collect();
+
+        // Get signal vector
+        let signal_vector = signal.to_vector();
+
+        // Determine emotional valence
+        let emotional_valence = if signal.content.get(28).copied().unwrap_or(0.0) > 0.0 {
+            1.0
+        } else if signal.content.get(29).copied().unwrap_or(0.0) < 0.0 {
+            -1.0
+        } else {
+            0.0
+        };
+
+        // Detect social context
+        let (social_context, _confidence) = LongTermMemory::detect_social_context(&signal.label);
+
+        // Update conversation context
+        let (is_conversation_start, current_context) = {
+            let significant_words: Vec<String> = words.iter()
+                .filter(|w| w.len() >= 3 && !STOP_WORDS.contains(&w.to_lowercase().as_str()))
+                .map(|w| w.to_lowercase())
+                .collect();
+
+            let mut conversation = self.conversation.write();
+            conversation.add_input(&signal.label, significant_words, emotional_valence, current_tick, social_context);
+            (conversation.is_conversation_start(), conversation.get_social_context())
+        };
+
+        // Process feedback
+        self.process_feedback(&signal.label, current_tick);
+
+        // Detect questions
+        let is_question = signal.label.ends_with('?')
+            || signal.content.get(31).copied().unwrap_or(0.0) > 0.5;
+        *self.last_was_question.write() = is_question;
+
+        // Update emotional state
+        {
+            let mut emotional = self.emotional_state.write();
+            emotional.process_signal(&signal.content, signal.intensity, current_tick);
+        }
+
+        // Learn words
+        let mut familiarity_boost = 1.0f32;
+        {
+            let mut memory = self.memory.write();
+            memory.stats.total_ticks = current_tick;
+
+            for (i, word) in words.iter().enumerate() {
+                let preceding = if i > 0 { Some(words[i - 1]) } else { None };
+                let following = if i + 1 < words.len() { Some(words[i + 1]) } else { None };
+
+                let word_familiarity = memory.hear_word_with_context(
+                    word, signal_vector, emotional_valence, preceding, following
+                );
+
+                if word_familiarity > 0.5 {
+                    familiarity_boost = familiarity_boost.max(1.0 + word_familiarity);
+                }
+            }
+
+            // Learn associations
+            let significant_words: Vec<&str> = words.iter()
+                .filter(|w| w.len() >= 3 && !STOP_WORDS.contains(&w.to_lowercase().as_str()))
+                .copied()
+                .collect();
+
+            for i in 0..significant_words.len() {
+                for j in (i + 1)..significant_words.len() {
+                    memory.learn_association(significant_words[i], significant_words[j], emotional_valence);
+                }
+                // Learn usage patterns
+                memory.learn_usage_pattern(significant_words[i], current_context, is_conversation_start, false);
+            }
+        }
+
+        // Store recent words
+        {
+            let mut recent = self.recent_words.write();
+            for word in &words {
+                let lower_word = word.to_lowercase();
+                if word.len() >= 3 && !STOP_WORDS.contains(&lower_word.as_str()) {
+                    recent.push(RecentWord {
+                        word: lower_word,
+                        vector: signal_vector,
+                        heard_at: current_tick,
+                    });
+                }
+            }
+            recent.retain(|w| current_tick - w.heard_at < 500);
+            let len = recent.len();
+            if len > 20 {
+                recent.drain(0..len - 20);
+            }
+        }
+
+        // Create signal fragment for cells
+        let cell_scale = self.cells.len() as f32 / 10_000.0;
+        let base_intensity = signal.intensity * 5.0 * familiarity_boost * cell_scale;
+
+        let fragment = SignalFragment::external(signal_vector, base_intensity);
+
+        // Get target position
+        let target_position = signal.semantic_position();
+
+        tracing::info!("V2 Signal received: '{}' intensity={:.2} (boost: {:.2})",
+            signal.label, fragment.intensity, familiarity_boost);
+
+        // Distribute to cells
+        for (i, state) in self.states.iter_mut().enumerate() {
+            let distance = Self::semantic_distance(&state.position, &target_position);
+            let attenuation = (1.0 / (1.0 + distance * 0.1)).max(0.2);
+            let attenuated_intensity = fragment.intensity * attenuation;
+
+            // Direct activation
+            for (j, s) in fragment.content.iter().enumerate() {
+                if j < SIGNAL_DIMS {
+                    state.state[j] += s * attenuated_intensity * 5.0;
+                }
+            }
+
+            // Energy boost
+            state.energy = (state.energy + 0.05 * fragment.intensity).min(self.config.metabolism.energy_cap);
+
+            // Wake sleeping cells if stimulus is strong enough
+            if attenuated_intensity > self.config.activity.wake_threshold {
+                self.cells[i].activity.wake();
+                state.set_sleeping(false);
+            }
+        }
+
+        // Add to signal buffer for backend processing
+        {
+            let mut buffer = self.signal_buffer.write();
+            buffer.push(fragment);
+            if buffer.len() > 100 {
+                buffer.remove(0);
+            }
+        }
+
+        // === EPISODIC MEMORY ===
+        // Record significant moments as episodes
+        self.maybe_record_episode(
+            &signal.label,
+            current_context,
+            emotional_valence,
+            signal.intensity,
+            is_question,
+            current_tick,
+        );
+
+        // Check for immediate emergence
+        self.detect_emergence(current_tick)
+    }
+
+    /// Decide whether to record an episode and record it
+    fn maybe_record_episode(
+        &self,
+        input: &str,
+        social_context: SocialContext,
+        emotional_valence: f32,
+        intensity: f32,
+        is_question: bool,
+        current_tick: u64,
+    ) {
+        // Calculate importance
+        let base_importance = intensity * 0.5;
+        let emotional_importance = emotional_valence.abs() * 0.3;
+        let social_importance = match social_context {
+            SocialContext::Greeting | SocialContext::Farewell => 0.3,
+            SocialContext::Affection => 0.5,
+            SocialContext::Thanks => 0.2,
+            _ => 0.0,
+        };
+        let importance = (base_importance + emotional_importance + social_importance).min(1.0);
+
+        // Only record if significant enough (importance > 0.3)
+        if importance < 0.3 {
+            return;
+        }
+
+        // Determine category
+        let category = if emotional_valence.abs() > 0.5 {
+            if emotional_valence > 0.0 {
+                EpisodeCategory::Emotional
+            } else {
+                EpisodeCategory::Correction
+            }
+        } else if is_question {
+            EpisodeCategory::Question
+        } else if social_context == SocialContext::Greeting || social_context == SocialContext::Farewell {
+            EpisodeCategory::Social
+        } else if social_context == SocialContext::Thanks {
+            EpisodeCategory::Social
+        } else if social_context == SocialContext::Affection {
+            EpisodeCategory::Emotional
+        } else {
+            EpisodeCategory::General
+        };
+
+        // Check for praise/correction feedback
+        let feedback_words = ["bravo", "bien", "super", "génial", "parfait", "good", "great", "yes", "perfect"];
+        let correction_words = ["non", "pas", "mauvais", "faux", "arrête", "no", "wrong", "bad", "stop"];
+
+        let lower_input = input.to_lowercase();
+        let final_category = if feedback_words.iter().any(|w| lower_input.contains(w)) {
+            EpisodeCategory::Praise
+        } else if correction_words.iter().any(|w| lower_input.contains(w)) {
+            EpisodeCategory::Correction
+        } else {
+            category
+        };
+
+        // Extract keywords (significant words)
+        let keywords: Vec<String> = input
+            .split(|c: char| !c.is_alphabetic())
+            .filter(|w| w.len() >= 3 && !STOP_WORDS.contains(&w.to_lowercase().as_str()))
+            .map(|w| w.to_lowercase())
+            .collect();
+
+        // Get current emotional state
+        let emotional = self.emotional_state.read();
+        let emotion = EpisodeEmotion {
+            happiness: emotional.happiness,
+            arousal: emotional.arousal,
+            comfort: emotional.comfort,
+            curiosity: emotional.curiosity,
+        };
+        drop(emotional);
+
+        // Record the episode
+        let mut memory = self.memory.write();
+        memory.record_episode(
+            input,
+            None, // Response will be added later if we have one
+            keywords,
+            emotion,
+            importance,
+            final_category,
+            current_tick,
+        );
+    }
+
+    /// One tick of life
+    pub fn tick(&mut self) -> Vec<OldSignal> {
+        let current_tick = self.tick.fetch_add(1, Ordering::SeqCst);
+
+        // Get signals from buffer
+        let signals: Vec<SignalFragment> = {
+            let mut buffer = self.signal_buffer.write();
+            std::mem::take(&mut *buffer)
+        };
+
+        // Process cells using backend
+        let actions = self.backend.update_cells(
+            &mut self.cells,
+            &mut self.states,
+            &self.dna_pool,
+            &signals,
+        ).unwrap_or_default();
+
+        // Handle actions
+        let mut births = Vec::new();
+        let mut deaths = Vec::new();
+
+        for (cell_id, action) in actions {
+            match action {
+                CellAction::Die => {
+                    deaths.push(cell_id);
+                }
+                CellAction::Divide => {
+                    // Find parent
+                    if let Some(parent_idx) = self.cells.iter().position(|c| c.id == cell_id) {
+                        let parent = &self.cells[parent_idx];
+                        let parent_state = &self.states[parent_idx];
+
+                        if parent_state.energy > self.config.metabolism.reproduction_threshold {
+                            let new_id = self.next_id.fetch_add(1, Ordering::SeqCst);
+
+                            // Create child DNA (mutated from parent)
+                            let parent_dna = &self.dna_pool[parent.dna_index as usize];
+                            let child_dna = DNA::from_parent(parent_dna, self.config.population.mutation_rate);
+                            let child_dna_index = self.dna_pool.len() as u32;
+                            self.dna_pool.push(child_dna);
+
+                            // Create child
+                            let child = Cell::from_parent(new_id, parent, child_dna_index);
+                            let child_state = CellState::from_parent(parent_state);
+
+                            births.push((child, child_state));
+                        }
+                    }
+                }
+                CellAction::Move(direction) => {
+                    if let Some(idx) = self.cells.iter().position(|c| c.id == cell_id) {
+                        for (i, d) in direction.iter().enumerate() {
+                            self.states[idx].position[i] = (self.states[idx].position[i] + d).clamp(-10.0, 10.0);
+                        }
+                    }
+                }
+                CellAction::Signal(content) => {
+                    // Internal signal emission
+                    if let Some(idx) = self.cells.iter().position(|c| c.id == cell_id) {
+                        let position = self.states[idx].position;
+                        self.propagate_signal(content, position, 0.5);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Remove dead cells
+        for id in deaths {
+            if let Some(idx) = self.cells.iter().position(|c| c.id == id) {
+                self.free_slots.push(idx);
+                self.states[idx].set_dead();
+            }
+        }
+
+        // Add new cells
+        for (cell, state) in births {
+            if let Some(idx) = self.free_slots.pop() {
+                self.cells[idx] = cell;
+                self.states[idx] = state;
+            } else if self.cells.len() < (self.config.population.target_population + self.config.population.population_buffer) as usize {
+                self.cells.push(cell);
+                self.states.push(state);
+            }
+        }
+
+        // Natural selection
+        if current_tick % self.config.population.selection_interval as u64 == 0 {
+            self.natural_selection();
+        }
+
+        // Detect emergence
+        let mut emergent = self.detect_emergence(current_tick);
+
+        // Spontaneous speech
+        if let Some(spontaneous) = self.maybe_speak_spontaneously(current_tick) {
+            emergent.push(spontaneous);
+        }
+
+        // Dream/consolidate
+        self.maybe_dream(current_tick);
+
+        emergent
+    }
+
+    /// Get substrate statistics
+    pub fn stats(&self) -> SubstrateStats {
+        let current_tick = self.tick.load(Ordering::Relaxed);
+        let emotional = self.emotional_state.read();
+
+        let alive_count = self.cells.iter()
+            .zip(self.states.iter())
+            .filter(|(_, s)| !s.is_dead())
+            .count();
+
+        let sleeping_count = self.cells.iter()
+            .filter(|c| c.activity.sleeping)
+            .count();
+
+        let total_energy: f32 = self.states.iter()
+            .filter(|s| !s.is_dead())
+            .map(|s| s.energy)
+            .sum();
+
+        let oldest_age = self.cells.iter()
+            .map(|c| c.age)
+            .max()
+            .unwrap_or(0);
+
+        let cpu_savings = if alive_count > 0 {
+            sleeping_count as f32 / alive_count as f32 * 100.0
+        } else {
+            0.0
+        };
+
+        SubstrateStats {
+            tick: current_tick,
+            alive_cells: alive_count,
+            total_energy,
+            entropy: self.calculate_entropy(),
+            active_clusters: 0, // TODO
+            dominant_emotion: emotional.mood_description().to_string(),
+            signals_per_second: 0.0, // TODO
+            oldest_cell_age: oldest_age,
+            average_connections: 0.0, // TODO
+            mood: emotional.mood_description().to_string(),
+            happiness: emotional.happiness,
+            arousal: emotional.arousal,
+            curiosity: emotional.curiosity,
+            sleeping_cells: sleeping_count,
+            cpu_savings_percent: cpu_savings,
+            backend_name: self.backend.name().to_string(),
+        }
+    }
+
+    // === Internal Methods ===
+
+    fn process_feedback(&self, label: &str, _current_tick: u64) {
+        let lower_label = label.to_lowercase();
+
+        let positive_feedback = [
+            "bravo", "bien", "super", "génial", "parfait", "excellent",
+            "good", "great", "yes", "perfect", "awesome", "👏", "👍"
+        ];
+
+        let negative_feedback = [
+            "non", "pas ça", "mauvais", "faux", "arrête",
+            "no", "wrong", "bad", "stop", "👎"
+        ];
+
+        let is_positive = positive_feedback.iter().any(|w| lower_label.contains(w));
+        let is_negative = negative_feedback.iter().any(|w| lower_label.contains(w));
+
+        if !is_positive && !is_negative {
+            return;
+        }
+
+        let recent_expr = self.recent_expressions.read().clone();
+        let mut memory = self.memory.write();
+
+        for word in &recent_expr {
+            if is_positive {
+                if let Some(freq) = memory.word_frequencies.get_mut(word) {
+                    let old = freq.emotional_valence;
+                    freq.emotional_valence = (freq.emotional_valence + 0.3).clamp(-2.0, 2.0);
+                    freq.count += 2;
+                    tracing::info!("FEEDBACK POSITIVE! '{}' reinforced ({:.2} → {:.2})",
+                        word, old, freq.emotional_valence);
+                }
+            } else {
+                if let Some(freq) = memory.word_frequencies.get_mut(word) {
+                    let old = freq.emotional_valence;
+                    freq.emotional_valence = (freq.emotional_valence - 0.3).clamp(-2.0, 2.0);
+                    tracing::info!("FEEDBACK NEGATIVE! '{}' penalized ({:.2} → {:.2})",
+                        word, old, freq.emotional_valence);
+                }
+            }
+        }
+
+        // Update emotional state
+        let mut emotional = self.emotional_state.write();
+        if is_positive {
+            emotional.happiness = (emotional.happiness + 0.3).clamp(-1.0, 1.0);
+            emotional.comfort = (emotional.comfort + 0.2).clamp(-1.0, 1.0);
+        } else {
+            emotional.happiness = (emotional.happiness - 0.2).clamp(-1.0, 1.0);
+            emotional.comfort = (emotional.comfort - 0.1).clamp(-1.0, 1.0);
+        }
+    }
+
+    fn detect_emergence(&self, current_tick: u64) -> Vec<OldSignal> {
+        if current_tick % 5 != 0 {
+            return Vec::new();
+        }
+
+        // Anti-spam: cooldown between emissions
+        let last_emit = self.last_emission_tick.load(Ordering::Relaxed);
+        if current_tick.saturating_sub(last_emit) < EMISSION_COOLDOWN_TICKS {
+            return Vec::new();
+        }
+
+        // Find active cells
+        let active_states: Vec<(usize, f32)> = self.states.iter()
+            .enumerate()
+            .filter_map(|(i, s)| {
+                let activation: f32 = s.state.iter().map(|x| x.abs()).sum();
+                if activation > self.config.emergence.activation_threshold {
+                    Some((i, activation))
+                } else {
+                    None
+                }
+            })
+            .take(1000)
+            .collect();
+
+        if active_states.is_empty() {
+            return Vec::new();
+        }
+
+        // Calculate average state
+        let mut average_state = [0.0f32; SIGNAL_DIMS];
+        for (i, _) in &active_states {
+            for (j, s) in self.states[*i].state[0..SIGNAL_DIMS].iter().enumerate() {
+                average_state[j] += s;
+            }
+        }
+        let n = active_states.len() as f32;
+        for a in &mut average_state {
+            *a /= n;
+        }
+
+        // Check coherence
+        let coherence = self.calculate_coherence(&active_states);
+
+        if coherence > self.config.emergence.coherence_threshold {
+            // Get conversation context
+            let social_context = self.conversation.read().get_social_context();
+            let is_start = self.conversation.read().is_conversation_start();
+            let last_word = self.last_said_word.read().clone();
+            let was_question = *self.last_was_question.read();
+
+            // Social response?
+            if let Some(response) = self.generate_social_response(social_context, is_start, &average_state, coherence) {
+                self.last_emission_tick.store(current_tick, Ordering::Relaxed);
+                return vec![response];
+            }
+
+            // Try to find a matching word
+            if let Some(response) = self.generate_word_response(&average_state, coherence, was_question, &last_word) {
+                self.last_emission_tick.store(current_tick, Ordering::Relaxed);
+                return vec![response];
+            }
+        }
+
+        Vec::new()
+    }
+
+    fn generate_social_response(&self, context: SocialContext, is_start: bool, state: &[f32; SIGNAL_DIMS], coherence: f32) -> Option<OldSignal> {
+        let should_respond = match context {
+            SocialContext::Greeting => true,
+            SocialContext::Farewell => is_start,
+            SocialContext::Thanks | SocialContext::Affection => true,
+            _ => false,
+        };
+
+        if !should_respond || context == SocialContext::General {
+            return None;
+        }
+
+        let memory = self.memory.read();
+        let response_word = match context {
+            SocialContext::Greeting => {
+                memory.get_response_for_context(SocialContext::Greeting)
+                    .unwrap_or_else(|| "bonjour".to_string())
+            }
+            SocialContext::Farewell => {
+                memory.get_response_for_context(SocialContext::Farewell)
+                    .unwrap_or_else(|| "bye".to_string())
+            }
+            SocialContext::Thanks => "derien".to_string(),
+            SocialContext::Affection => {
+                memory.get_response_for_context(SocialContext::Affection)
+                    .unwrap_or_else(|| "aime".to_string())
+            }
+            _ => return None,
+        };
+
+        let marker = match context {
+            SocialContext::Affection => "♥",
+            SocialContext::Greeting => "~",
+            _ => "~",
+        };
+
+        let label = format!("social:{:?}:{}|emotion:{}", context, response_word, marker).to_lowercase();
+
+        tracing::info!("SOCIAL RESPONSE: {:?} -> {}", context, label);
+
+        // Record what we said
+        *self.last_said_word.write() = Some(response_word.clone());
+        self.conversation.write().add_response(&label);
+
+        let mut signal = OldSignal::from_vector(*state, label);
+        signal.intensity = coherence.max(0.4);
+
+        Some(signal)
+    }
+
+    fn generate_word_response(&self, state: &[f32; SIGNAL_DIMS], coherence: f32, was_question: bool, last_word: &Option<String>) -> Option<OldSignal> {
+        let recent = self.recent_words.read();
+        let memory = self.memory.read();
+        let emotional = self.emotional_state.read();
+
+        // Try recent words first
+        let mut best_word: Option<(String, f32, f32)> = None; // (word, similarity, valence)
+
+        for rw in recent.iter() {
+            if let Some(ref last) = last_word {
+                if rw.word.to_lowercase() == last.to_lowercase() {
+                    continue;
+                }
+            }
+
+            let similarity = Self::vector_similarity(state, &rw.vector);
+            if similarity > 0.2 {
+                let valence = memory.word_frequencies.get(&rw.word)
+                    .map(|f| f.emotional_valence)
+                    .unwrap_or(0.0);
+
+                if best_word.is_none() || similarity > best_word.as_ref().unwrap().1 {
+                    best_word = Some((rw.word.clone(), similarity, valence));
+                }
+            }
+        }
+
+        // Try learned words
+        if best_word.is_none() {
+            if let Some((word, similarity)) = memory.find_matching_word(state, 0.3) {
+                if last_word.as_ref().map(|l| l.to_lowercase() != word.to_lowercase()).unwrap_or(true) {
+                    let valence = memory.word_frequencies.get(&word)
+                        .map(|f| f.emotional_valence)
+                        .unwrap_or(0.0);
+                    best_word = Some((word, similarity, valence));
+                }
+            }
+        }
+
+        if let Some((word, similarity, valence)) = best_word {
+            // Record expression
+            {
+                let mut expr = self.recent_expressions.write();
+                expr.push(word.clone());
+                if expr.len() > 5 {
+                    expr.remove(0);
+                }
+            }
+
+            // Build label
+            let label = if was_question {
+                if valence > 0.3 {
+                    format!("answer:oui+{}", word)
+                } else if valence < -0.3 {
+                    format!("answer:non+{}", word)
+                } else {
+                    format!("word:{}?", word)
+                }
+            } else {
+                format!("word:{}", word)
+            };
+
+            // Add emotional marker
+            let marker = emotional.get_emotional_marker().unwrap_or("");
+            let final_label = if !marker.is_empty() {
+                format!("{}|emotion:{}", label, marker)
+            } else {
+                label
+            };
+
+            tracing::info!("EMERGENCE: '{}' (similarity={:.2}, valence={:.2})",
+                word, similarity, valence);
+
+            // Record
+            *self.last_said_word.write() = Some(word.clone());
+            self.conversation.write().add_response(&final_label);
+
+            let mut signal = OldSignal::from_vector(*state, final_label);
+            signal.intensity = coherence;
+
+            return Some(signal);
+        }
+
+        None
+    }
+
+    fn maybe_speak_spontaneously(&self, current_tick: u64) -> Option<OldSignal> {
+        if current_tick % 100 != 0 {
+            return None;
+        }
+
+        // Anti-spam: respect cooldown
+        let last_emit = self.last_emission_tick.load(Ordering::Relaxed);
+        if current_tick.saturating_sub(last_emit) < EMISSION_COOLDOWN_TICKS {
+            return None;
+        }
+
+        let last_interaction = self.last_interaction_tick.load(Ordering::Relaxed);
+        let ticks_since = current_tick.saturating_sub(last_interaction);
+
+        let emotional = self.emotional_state.read();
+
+        let is_lonely = ticks_since > 3000;
+        let is_bored = emotional.boredom > 0.5;
+        let is_excited = emotional.arousal > 0.6;
+        let is_happy = emotional.happiness > 0.5;
+        let is_curious = emotional.curiosity > 0.5;
+
+        let mut rng = rand::thread_rng();
+        let random: f32 = rng.gen();
+
+        let probability = if is_lonely { 0.05 }
+            else if is_bored { 0.04 }
+            else if is_excited && is_happy { 0.03 }
+            else if is_excited { 0.02 }
+            else if is_curious { 0.01 }
+            else { 0.001 };
+
+        if random > probability {
+            return None;
+        }
+
+        let memory = self.memory.read();
+
+        let favorite_word = memory.word_frequencies.iter()
+            .filter(|(_, freq)| freq.emotional_valence > 0.5 && freq.count > 3)
+            .max_by(|(_, a), (_, b)| {
+                let score_a = a.emotional_valence * (a.count as f32).sqrt();
+                let score_b = b.emotional_valence * (b.count as f32).sqrt();
+                score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(word, _)| word.clone());
+
+        let (label, intensity) = if is_lonely {
+            if let Some(word) = favorite_word {
+                tracing::info!("SPONTANEOUS (lonely): thinking of '{}'", word);
+                (format!("spontaneous:{}|emotion:?", word), 0.3)
+            } else {
+                ("spontaneous:attention|emotion:?".to_string(), 0.2)
+            }
+        } else if is_bored {
+            let all_favorites: Vec<String> = memory.word_frequencies.iter()
+                .filter(|(_, freq)| freq.emotional_valence > 0.2 && freq.count > 1)
+                .map(|(word, _)| word.clone())
+                .collect();
+
+            if all_favorites.len() >= 2 {
+                let w1 = &all_favorites[rng.gen_range(0..all_favorites.len())];
+                let w2 = &all_favorites[rng.gen_range(0..all_favorites.len())];
+                if w1 != w2 {
+                    tracing::info!("SPONTANEOUS (bored): combining '{}' + '{}'", w1, w2);
+                    (format!("phrase:{}+{}|emotion:~", w1, w2), 0.35)
+                } else {
+                    ("spontaneous:bored|emotion:~".to_string(), 0.25)
+                }
+            } else {
+                ("spontaneous:bored|emotion:~".to_string(), 0.25)
+            }
+        } else if is_happy {
+            if let Some(word) = favorite_word {
+                tracing::info!("SPONTANEOUS (happy): expressing '{}' ♥", word);
+                (format!("spontaneous:{}|emotion:♥", word), 0.5)
+            } else {
+                ("spontaneous:joy|emotion:♥".to_string(), 0.4)
+            }
+        } else if is_excited {
+            ("spontaneous:excited|emotion:!".to_string(), 0.4)
+        } else if is_curious {
+            ("spontaneous:curious|emotion:?".to_string(), 0.3)
+        } else {
+            ("spontaneous:babble|emotion:~".to_string(), 0.2)
+        };
+
+        let mut signal = OldSignal::from_vector([0.0; SIGNAL_DIMS], label);
+        signal.intensity = intensity;
+
+        self.last_emission_tick.store(current_tick, Ordering::Relaxed);
+        Some(signal)
+    }
+
+    fn maybe_dream(&self, current_tick: u64) {
+        if current_tick % 500 != 0 {
+            return;
+        }
+
+        let last_interaction = self.last_interaction_tick.load(Ordering::Relaxed);
+        if current_tick.saturating_sub(last_interaction) < 1000 {
+            return;
+        }
+
+        let mut memory = self.memory.write();
+        let mut rng = rand::thread_rng();
+
+        let favorites: Vec<String> = memory.word_frequencies.iter()
+            .filter(|(_, freq)| freq.emotional_valence > 0.3 && freq.count > 2)
+            .map(|(word, _)| word.clone())
+            .collect();
+
+        if favorites.is_empty() {
+            return;
+        }
+
+        let dream_word = &favorites[rng.gen_range(0..favorites.len())];
+
+        if let Some(freq) = memory.word_frequencies.get_mut(dream_word) {
+            freq.count += 1;
+            if freq.emotional_valence > 0.0 {
+                freq.emotional_valence = (freq.emotional_valence + 0.05).min(2.0);
+            }
+        }
+
+        if rng.gen::<f32>() < 0.1 {
+            tracing::info!("💭 DREAMING: thinking about '{}'...", dream_word);
+        }
+    }
+
+    fn natural_selection(&mut self) {
+        let target = self.config.population.target_population as usize;
+        let buffer = self.config.population.population_buffer as usize;
+        let min_pop = self.config.population.min_population as usize;
+        let alive_count = self.cells.iter()
+            .zip(self.states.iter())
+            .filter(|(_, s)| !s.is_dead())
+            .count();
+
+        if alive_count > target + buffer {
+            // Too many cells - remove weakest
+            let mut indices: Vec<(usize, f32)> = self.states.iter()
+                .enumerate()
+                .filter(|(_, s)| !s.is_dead())
+                .map(|(i, s)| (i, s.energy))
+                .collect();
+
+            indices.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            let to_remove = alive_count - target;
+            for (idx, _) in indices.iter().take(to_remove) {
+                self.states[*idx].set_dead();
+                self.free_slots.push(*idx);
+            }
+        } else if alive_count < min_pop {
+            // Too few cells - spawn new ones
+            let to_spawn = min_pop - alive_count;
+            for _ in 0..to_spawn {
+                let new_id = self.next_id.fetch_add(1, Ordering::SeqCst);
+                let dna = DNA::random();
+                let dna_index = self.dna_pool.len() as u32;
+                self.dna_pool.push(dna);
+
+                let cell = Cell::new(new_id, dna_index);
+                let state = CellState::new();
+
+                if let Some(idx) = self.free_slots.pop() {
+                    self.cells[idx] = cell;
+                    self.states[idx] = state;
+                } else {
+                    self.cells.push(cell);
+                    self.states.push(state);
+                }
+            }
+        }
+    }
+
+    fn propagate_signal(&mut self, content: [f32; SIGNAL_DIMS], source_pos: [f32; POSITION_DIMS], intensity: f32) {
+        let fragment = SignalFragment::external(content, intensity);
+
+        for state in &mut self.states {
+            if state.is_dead() { continue; }
+
+            let distance = Self::semantic_distance(&state.position, &source_pos);
+            if distance < 2.0 {
+                let attenuation = 1.0 / (1.0 + distance);
+                for (i, s) in fragment.content.iter().enumerate() {
+                    if i < SIGNAL_DIMS {
+                        state.state[i] += s * intensity * attenuation;
+                    }
+                }
+            }
+        }
+    }
+
+    fn calculate_coherence(&self, active_states: &[(usize, f32)]) -> f32 {
+        if active_states.len() < 2 {
+            return 0.0;
+        }
+
+        let mut total_similarity = 0.0f32;
+        let mut count = 0;
+
+        for i in 0..active_states.len().min(10) {
+            for j in (i + 1)..active_states.len().min(10) {
+                let s1 = &self.states[active_states[i].0];
+                let s2 = &self.states[active_states[j].0];
+
+                let mut dot = 0.0f32;
+                let mut norm1 = 0.0f32;
+                let mut norm2 = 0.0f32;
+
+                for k in 0..SIGNAL_DIMS {
+                    dot += s1.state[k] * s2.state[k];
+                    norm1 += s1.state[k] * s1.state[k];
+                    norm2 += s2.state[k] * s2.state[k];
+                }
+
+                let denom = (norm1 * norm2).sqrt();
+                if denom > 0.0 {
+                    total_similarity += dot / denom;
+                    count += 1;
+                }
+            }
+        }
+
+        if count > 0 {
+            total_similarity / count as f32
+        } else {
+            0.0
+        }
+    }
+
+    fn calculate_entropy(&self) -> f32 {
+        let active: Vec<f32> = self.states.iter()
+            .filter(|s| !s.is_dead())
+            .map(|s| s.state.iter().map(|x| x.abs()).sum::<f32>())
+            .collect();
+
+        if active.is_empty() {
+            return 0.0;
+        }
+
+        let total: f32 = active.iter().sum();
+        if total <= 0.0 {
+            return 0.0;
+        }
+
+        let mut entropy = 0.0f32;
+        for a in &active {
+            let p = a / total;
+            if p > 0.0 {
+                entropy -= p * p.ln();
+            }
+        }
+
+        entropy / (active.len() as f32).ln().max(1.0)
+    }
+
+    fn semantic_distance(a: &[f32; POSITION_DIMS], b: &[f32; POSITION_DIMS]) -> f32 {
+        a.iter().zip(b.iter())
+            .map(|(x, y)| (x - y).powi(2))
+            .sum::<f32>()
+            .sqrt()
+    }
+
+    fn vector_similarity(a: &[f32; SIGNAL_DIMS], b: &[f32; SIGNAL_DIMS]) -> f32 {
+        let mut dot = 0.0f32;
+        let mut norm_a = 0.0f32;
+        let mut norm_b = 0.0f32;
+
+        for (x, y) in a.iter().zip(b.iter()) {
+            dot += x * y;
+            norm_a += x * x;
+            norm_b += y * y;
+        }
+
+        let denom = (norm_a * norm_b).sqrt();
+        if denom > 0.0 {
+            dot / denom
+        } else {
+            0.0
+        }
+    }
+}
+
+// Bridge type for DNA conversion
+impl From<crate::cell::DNA> for DNA {
+    fn from(old: crate::cell::DNA) -> Self {
+        // Use the old thresholds/reactions to create a similar DNA
+        let mut dna = DNA::random();
+        // Copy over the values (the old DNA has same layout but is local type)
+        for (i, t) in old.thresholds.iter().enumerate() {
+            dna.thresholds[i] = *t;
+        }
+        for (i, r) in old.reactions.iter().enumerate() {
+            dna.reactions[i] = *r;
+        }
+        dna
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_emotional_state_decay() {
+        let mut state = EmotionalState {
+            happiness: 1.0,
+            arousal: 1.0,
+            comfort: 1.0,
+            curiosity: 1.0,
+            boredom: 0.0,
+            last_update: 0,
+        };
+
+        state.decay(1000);
+
+        assert!(state.happiness < 1.0);
+        assert!(state.boredom > 0.0);
+    }
+
+    #[test]
+    fn test_conversation_context() {
+        let mut ctx = ConversationContext::new();
+
+        ctx.add_input("hello world", vec!["hello".into(), "world".into()], 0.5, 100, SocialContext::Greeting);
+
+        assert!(ctx.is_conversation_start());
+        assert_eq!(ctx.get_social_context(), SocialContext::Greeting);
+
+        let words = ctx.get_context_words();
+        assert!(!words.is_empty());
+    }
+}

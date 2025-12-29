@@ -130,6 +130,20 @@ pub struct LongTermMemory {
     /// Semantic associations between words (key = "word1:word2" sorted alphabetically)
     #[serde(default)]
     pub word_associations: HashMap<String, WordAssociation>,
+
+    // === EPISODIC MEMORY ===
+
+    /// Episodes - specific moments ARIA remembers
+    #[serde(default)]
+    pub episodes: Vec<Episode>,
+
+    /// Next episode ID
+    #[serde(default)]
+    pub next_episode_id: u64,
+
+    /// First times tracker - to detect "first of kind" episodes
+    #[serde(default)]
+    pub first_times: HashMap<String, u64>, // kind -> episode_id
 }
 
 /// Tracks how often a word is heard and its emotional context
@@ -228,6 +242,168 @@ pub enum Outcome {
     Neutral,
 }
 
+// ============================================================================
+// EPISODIC MEMORY - Specific moments ARIA remembers
+// ============================================================================
+
+/// An episodic memory - a specific moment ARIA remembers
+/// Unlike semantic memory (word associations), episodes are autobiographical:
+/// "I remember when you first said you loved me"
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Episode {
+    /// Unique episode ID
+    pub id: u64,
+
+    /// When this happened (tick)
+    pub timestamp: u64,
+
+    /// When this happened (real time, for display)
+    #[serde(default)]
+    pub real_time: Option<String>,
+
+    /// What was said to ARIA
+    pub input: String,
+
+    /// What ARIA responded
+    pub response: Option<String>,
+
+    /// Key words in this episode
+    pub keywords: Vec<String>,
+
+    /// Emotional state at the time
+    pub emotion: EpisodeEmotion,
+
+    /// How important/significant this episode was (0.0 to 1.0)
+    pub importance: f32,
+
+    /// How many times this episode has been recalled
+    pub recall_count: u64,
+
+    /// Last time this episode was recalled (tick)
+    pub last_recalled: u64,
+
+    /// Was this a first time? (first greeting, first "I love you", etc.)
+    pub first_of_kind: Option<String>,
+
+    /// Category of episode
+    pub category: EpisodeCategory,
+}
+
+/// Emotional state captured in an episode
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct EpisodeEmotion {
+    pub happiness: f32,
+    pub arousal: f32,
+    pub comfort: f32,
+    pub curiosity: f32,
+}
+
+/// Category of episodic memory
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum EpisodeCategory {
+    /// First time something happened
+    FirstTime,
+    /// Emotionally significant moment
+    Emotional,
+    /// Learning something new
+    Learning,
+    /// Social interaction (greeting, farewell, etc.)
+    Social,
+    /// Question and answer
+    Question,
+    /// Positive feedback received
+    Praise,
+    /// Negative feedback received
+    Correction,
+    /// General conversation
+    General,
+}
+
+impl Default for EpisodeCategory {
+    fn default() -> Self {
+        EpisodeCategory::General
+    }
+}
+
+impl Episode {
+    /// Create a new episode
+    pub fn new(
+        id: u64,
+        timestamp: u64,
+        input: String,
+        response: Option<String>,
+        keywords: Vec<String>,
+        emotion: EpisodeEmotion,
+        importance: f32,
+        category: EpisodeCategory,
+    ) -> Self {
+        // Get current real time for display
+        let real_time = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
+
+        Self {
+            id,
+            timestamp,
+            real_time: Some(real_time),
+            input,
+            response,
+            keywords,
+            emotion,
+            importance,
+            recall_count: 0,
+            last_recalled: timestamp,
+            first_of_kind: None,
+            category,
+        }
+    }
+
+    /// Mark this as a "first time" episode
+    pub fn mark_first_of_kind(&mut self, kind: &str) {
+        self.first_of_kind = Some(kind.to_string());
+        self.importance = (self.importance + 0.3).min(1.0); // First times are more important
+    }
+
+    /// Recall this episode (strengthens it)
+    pub fn recall(&mut self, current_tick: u64) {
+        self.recall_count += 1;
+        self.last_recalled = current_tick;
+        // Recalling strengthens importance slightly
+        self.importance = (self.importance + 0.05).min(1.0);
+    }
+
+    /// Check if this episode matches given keywords
+    pub fn matches_context(&self, context_words: &[String]) -> f32 {
+        if context_words.is_empty() || self.keywords.is_empty() {
+            return 0.0;
+        }
+
+        let matches = self.keywords.iter()
+            .filter(|kw| context_words.iter().any(|cw| cw.to_lowercase() == kw.to_lowercase()))
+            .count();
+
+        matches as f32 / self.keywords.len().max(1) as f32
+    }
+
+    /// Calculate memory strength (for forgetting curve)
+    pub fn memory_strength(&self, current_tick: u64) -> f32 {
+        let age = current_tick.saturating_sub(self.timestamp) as f32;
+        let recency = current_tick.saturating_sub(self.last_recalled) as f32;
+
+        // Base decay (older memories fade)
+        let age_factor = (-age / 1_000_000.0).exp(); // Very slow decay
+
+        // Recency boost (recently recalled = stronger)
+        let recency_factor = (-recency / 100_000.0).exp();
+
+        // Recall strengthening (more recalls = stronger)
+        let recall_factor = 1.0 + (self.recall_count as f32).ln().max(0.0) * 0.2;
+
+        // Importance matters
+        let importance_factor = 0.5 + self.importance * 0.5;
+
+        (age_factor * 0.3 + recency_factor * 0.4 + importance_factor * 0.3) * recall_factor
+    }
+}
+
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct GlobalStats {
     pub total_ticks: u64,
@@ -264,6 +440,9 @@ impl LongTermMemory {
             vocabulary: HashMap::new(),
             word_frequencies: HashMap::new(),
             word_associations: HashMap::new(),
+            episodes: Vec::new(),
+            next_episode_id: 0,
+            first_times: HashMap::new(),
         }
     }
 
@@ -1164,6 +1343,201 @@ impl LongTermMemory {
         }
 
         best_match.map(|(assoc, sim)| (assoc.response, sim * assoc.strength))
+    }
+
+    // ========================================================================
+    // EPISODIC MEMORY METHODS
+    // ========================================================================
+
+    /// Record an episode (a specific moment to remember)
+    /// Returns the episode ID
+    pub fn record_episode(
+        &mut self,
+        input: &str,
+        response: Option<&str>,
+        keywords: Vec<String>,
+        emotion: EpisodeEmotion,
+        importance: f32,
+        category: EpisodeCategory,
+        current_tick: u64,
+    ) -> u64 {
+        let id = self.next_episode_id;
+        self.next_episode_id += 1;
+
+        let mut episode = Episode::new(
+            id,
+            current_tick,
+            input.to_string(),
+            response.map(|s| s.to_string()),
+            keywords.clone(),
+            emotion,
+            importance,
+            category.clone(),
+        );
+
+        // Check for "first time" events
+        let first_of_kind = self.check_first_of_kind(&category, &keywords);
+        if let Some(ref kind) = first_of_kind {
+            episode.mark_first_of_kind(kind);
+            self.first_times.insert(kind.clone(), id);
+            tracing::info!("🌟 FIRST TIME: {} (episode #{})", kind, id);
+        }
+
+        tracing::info!(
+            "📝 Episode #{}: {:?} - \"{}\" (importance: {:.2})",
+            id, category, input, episode.importance
+        );
+
+        self.episodes.push(episode);
+
+        // Keep episodes manageable (max 1000, prune weakest)
+        if self.episodes.len() > 1000 {
+            self.prune_episodes(current_tick);
+        }
+
+        id
+    }
+
+    /// Check if this is a "first time" event
+    fn check_first_of_kind(&self, category: &EpisodeCategory, keywords: &[String]) -> Option<String> {
+        match category {
+            EpisodeCategory::Praise => {
+                if !self.first_times.contains_key("first_praise") {
+                    return Some("first_praise".to_string());
+                }
+            }
+            EpisodeCategory::Correction => {
+                if !self.first_times.contains_key("first_correction") {
+                    return Some("first_correction".to_string());
+                }
+            }
+            EpisodeCategory::Social => {
+                if !self.first_times.contains_key("first_greeting") {
+                    return Some("first_greeting".to_string());
+                }
+            }
+            EpisodeCategory::Emotional => {
+                // First "I love you"
+                if keywords.iter().any(|k| k == "aime" || k == "love") {
+                    if !self.first_times.contains_key("first_love") {
+                        return Some("first_love".to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        // Check for first mention of a specific word
+        for keyword in keywords {
+            let key = format!("first_mention_{}", keyword);
+            if !self.first_times.contains_key(&key) && self.is_significant_word(keyword) {
+                return Some(key);
+            }
+        }
+
+        None
+    }
+
+    /// Is this word significant enough to track "first mention"?
+    fn is_significant_word(&self, word: &str) -> bool {
+        // Check if it's a known name/noun with high familiarity
+        if let Some(freq) = self.word_frequencies.get(word) {
+            return freq.category == WordCategory::Noun && freq.familiarity_boost > 0.5;
+        }
+        false
+    }
+
+    /// Recall episodes relevant to the current context
+    /// Returns episodes sorted by relevance
+    pub fn recall_episodes(&mut self, context_words: &[String], current_tick: u64, limit: usize) -> Vec<&Episode> {
+        if self.episodes.is_empty() {
+            return Vec::new();
+        }
+
+        // Score each episode by relevance
+        let mut scored: Vec<(usize, f32)> = self.episodes.iter()
+            .enumerate()
+            .map(|(i, ep)| {
+                let context_match = ep.matches_context(context_words);
+                let memory_strength = ep.memory_strength(current_tick);
+                let score = context_match * 0.6 + memory_strength * 0.4;
+                (i, score)
+            })
+            .filter(|(_, score)| *score > 0.1)
+            .collect();
+
+        // Sort by score (highest first)
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Take top results
+        scored.truncate(limit);
+
+        // Mark as recalled (strengthens memory)
+        for (idx, _) in &scored {
+            if let Some(ep) = self.episodes.get_mut(*idx) {
+                ep.recall(current_tick);
+            }
+        }
+
+        // Return references (need to re-borrow)
+        scored.iter()
+            .filter_map(|(idx, _)| self.episodes.get(*idx))
+            .collect()
+    }
+
+    /// Get the most significant episodes (for dreaming/consolidation)
+    pub fn get_significant_episodes(&self, current_tick: u64, limit: usize) -> Vec<&Episode> {
+        let mut episodes: Vec<&Episode> = self.episodes.iter().collect();
+
+        episodes.sort_by(|a, b| {
+            let score_a = a.memory_strength(current_tick) * a.importance;
+            let score_b = b.memory_strength(current_tick) * b.importance;
+            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        episodes.truncate(limit);
+        episodes
+    }
+
+    /// Prune weak/old episodes
+    fn prune_episodes(&mut self, current_tick: u64) {
+        // Calculate memory strength for all episodes
+        let mut with_strength: Vec<(usize, f32)> = self.episodes.iter()
+            .enumerate()
+            .map(|(i, ep)| (i, ep.memory_strength(current_tick) * ep.importance))
+            .collect();
+
+        // Sort by strength (weakest first)
+        with_strength.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Remove the weakest 20%
+        let to_remove: Vec<usize> = with_strength.iter()
+            .take(self.episodes.len() / 5)
+            .filter(|(_, strength)| *strength < 0.3) // Only remove truly weak ones
+            .map(|(idx, _)| *idx)
+            .collect();
+
+        // Remove in reverse order to preserve indices
+        for idx in to_remove.into_iter().rev() {
+            let removed = self.episodes.remove(idx);
+            tracing::debug!("Forgot episode #{}: \"{}\"", removed.id, removed.input);
+        }
+    }
+
+    /// Get episode by ID
+    pub fn get_episode(&self, id: u64) -> Option<&Episode> {
+        self.episodes.iter().find(|ep| ep.id == id)
+    }
+
+    /// Count episodes by category
+    pub fn episode_stats(&self) -> HashMap<String, usize> {
+        let mut stats = HashMap::new();
+        for ep in &self.episodes {
+            let key = format!("{:?}", ep.category);
+            *stats.entry(key).or_insert(0) += 1;
+        }
+        stats.insert("total".to_string(), self.episodes.len());
+        stats
     }
 }
 

@@ -2,9 +2,14 @@
 //!
 //! This is where ARIA's cells live, evolve, and think.
 //! Supports GPU acceleration with automatic CPU fallback.
+//!
+//! ## Feature Flags
+//!
+//! - `substrate-v2`: Use the new GPU-ready substrate (experimental)
 
 mod cell;
 mod substrate;
+mod substrate_v2;
 mod signal;
 mod memory;
 mod connection;
@@ -16,7 +21,11 @@ use warp::Filter;
 use futures::{StreamExt, SinkExt};
 use tracing::{info, warn, Level};
 
+#[cfg(not(feature = "substrate-v2"))]
 use substrate::Substrate;
+#[cfg(feature = "substrate-v2")]
+use substrate_v2::SubstrateV2;
+
 use signal::Signal;
 use memory::LongTermMemory;
 use config::{Config, print_banner};
@@ -58,8 +67,20 @@ async fn main() {
     ));
 
     // Create the substrate with configured cell count
+    #[cfg(not(feature = "substrate-v2"))]
     let substrate = Arc::new(Substrate::new(config.cell_count, memory.clone()));
-    info!("Substrate created with {} cells ({:?} backend)", config.cell_count, config.backend);
+
+    #[cfg(feature = "substrate-v2")]
+    let substrate = {
+        let aria_config = aria_core::AriaConfig::cpu_dev();
+        Arc::new(parking_lot::RwLock::new(SubstrateV2::new(aria_config, memory.clone())))
+    };
+
+    #[cfg(not(feature = "substrate-v2"))]
+    info!("Substrate V1 created with {} cells ({:?} backend)", config.cell_count, config.backend);
+
+    #[cfg(feature = "substrate-v2")]
+    info!("🚀 Substrate V2 (GPU-ready) created with {} cells", config.cell_count);
 
     // Channels for perception (input) and expression (output)
     let (perception_tx, _) = broadcast::channel::<Signal>(1000);
@@ -71,8 +92,19 @@ async fn main() {
     let expression_tx_evolution = expression_tx.clone();
     let memory_evolution = memory.clone();
 
+    #[cfg(not(feature = "substrate-v2"))]
     tokio::spawn(async move {
         evolution_loop(
+            substrate_evolution,
+            perception_rx,
+            expression_tx_evolution,
+            memory_evolution
+        ).await;
+    });
+
+    #[cfg(feature = "substrate-v2")]
+    tokio::spawn(async move {
+        evolution_loop_v2(
             substrate_evolution,
             perception_rx,
             expression_tx_evolution,
@@ -107,19 +139,18 @@ async fn main() {
     });
 
     // WebSocket server for communication with the Body
-    let substrate_ws = substrate.clone();
+    // Note: handle_connection doesn't need substrate - it uses broadcast channels
     let perception_tx_ws = perception_tx.clone();
     let expression_tx_ws = expression_tx.clone();
 
     let ws_route = warp::path("aria")
         .and(warp::ws())
         .map(move |ws: warp::ws::Ws| {
-            let substrate = substrate_ws.clone();
             let perception_tx = perception_tx_ws.clone();
             let expression_rx = expression_tx_ws.subscribe();
 
             ws.on_upgrade(move |socket| {
-                handle_connection(socket, substrate, perception_tx, expression_rx)
+                handle_connection(socket, perception_tx, expression_rx)
             })
         });
 
@@ -129,9 +160,17 @@ async fn main() {
 
     // Stats endpoint
     let substrate_stats = substrate.clone();
+    #[cfg(not(feature = "substrate-v2"))]
     let stats = warp::path("stats")
         .map(move || {
             let s = substrate_stats.stats();
+            warp::reply::json(&s)
+        });
+
+    #[cfg(feature = "substrate-v2")]
+    let stats = warp::path("stats")
+        .map(move || {
+            let s = substrate_stats.read().stats();
             warp::reply::json(&s)
         });
 
@@ -183,13 +222,63 @@ async fn main() {
             }))
         });
 
-    let routes = ws_route.or(health).or(stats).or(words).or(associations);
+    // Episodes endpoint - show episodic memories
+    let memory_episodes = memory.clone();
+    let episodes = warp::path("episodes")
+        .map(move || {
+            let mem = memory_episodes.read();
+            let episodes_info: Vec<serde_json::Value> = mem.episodes
+                .iter()
+                .rev()  // Most recent first
+                .take(50)  // Last 50 episodes
+                .map(|ep| {
+                    serde_json::json!({
+                        "id": ep.id,
+                        "timestamp": ep.timestamp,
+                        "real_time": ep.real_time,
+                        "input": ep.input,
+                        "response": ep.response,
+                        "keywords": ep.keywords,
+                        "category": format!("{:?}", ep.category),
+                        "importance": ep.importance,
+                        "recall_count": ep.recall_count,
+                        "first_of_kind": ep.first_of_kind,
+                        "emotion": {
+                            "happiness": ep.emotion.happiness,
+                            "arousal": ep.emotion.arousal,
+                            "comfort": ep.emotion.comfort,
+                            "curiosity": ep.emotion.curiosity
+                        }
+                    })
+                })
+                .collect();
+
+            let first_times: Vec<serde_json::Value> = mem.first_times
+                .iter()
+                .map(|(kind, id)| {
+                    serde_json::json!({
+                        "kind": kind,
+                        "episode_id": id
+                    })
+                })
+                .collect();
+
+            warp::reply::json(&serde_json::json!({
+                "total_episodes": mem.episodes.len(),
+                "showing": episodes_info.len(),
+                "first_times": first_times,
+                "episodes": episodes_info
+            }))
+        });
+
+    let routes = ws_route.or(health).or(stats).or(words).or(associations).or(episodes);
 
     info!("WebSocket ready on ws://0.0.0.0:{}/aria", config.port);
     info!("Health check on http://0.0.0.0:{}/health", config.port);
     info!("Stats on http://0.0.0.0:{}/stats", config.port);
     info!("Words on http://0.0.0.0:{}/words", config.port);
     info!("Associations on http://0.0.0.0:{}/associations", config.port);
+    info!("Episodes on http://0.0.0.0:{}/episodes", config.port);
     println!();
     println!("🧒 ARIA is waiting for her first interaction...");
     println!();
@@ -197,6 +286,7 @@ async fn main() {
     warp::serve(routes).run(([0, 0, 0, 0], config.port)).await;
 }
 
+#[cfg(not(feature = "substrate-v2"))]
 async fn evolution_loop(
     substrate: Arc<Substrate>,
     mut perception: broadcast::Receiver<Signal>,
@@ -255,9 +345,73 @@ async fn evolution_loop(
     }
 }
 
+/// Evolution loop for V2 substrate (GPU-ready)
+#[cfg(feature = "substrate-v2")]
+async fn evolution_loop_v2(
+    substrate: Arc<parking_lot::RwLock<SubstrateV2>>,
+    mut perception: broadcast::Receiver<Signal>,
+    expression: broadcast::Sender<Signal>,
+    memory: Arc<parking_lot::RwLock<LongTermMemory>>,
+) {
+    let mut tick: u64 = 0;
+    let mut last_stats_tick: u64 = 0;
+
+    loop {
+        // 1. Receive incoming perceptions (non-blocking)
+        while let Ok(signal) = perception.try_recv() {
+            let immediate_emergence = {
+                let mut sub = substrate.write();
+                sub.inject_signal(signal)
+            };
+            for em_signal in immediate_emergence {
+                info!("V2 IMMEDIATE EMERGENCE! intensity: {:.3}", em_signal.intensity);
+                if em_signal.intensity > 0.01 {
+                    let _ = expression.send(em_signal);
+                }
+            }
+        }
+
+        // 2. One tick of life
+        let emergent_signals = {
+            let mut sub = substrate.write();
+            sub.tick()
+        };
+
+        // 3. Send emergent expressions
+        for signal in emergent_signals {
+            info!("V2 EMERGENCE! intensity: {:.3}, label: {}", signal.intensity, signal.label);
+            if signal.intensity > 0.01 {
+                let _ = expression.send(signal);
+            }
+        }
+
+        // 4. Periodic stats (every 500 ticks = ~5 seconds)
+        if tick - last_stats_tick >= 500 {
+            let stats = substrate.read().stats();
+            info!(
+                "V2 Tick {}: {} cells ({} sleeping, {:.1}% saved), energy: {:.2}, mood: {}",
+                tick, stats.alive_cells, stats.sleeping_cells, stats.cpu_savings_percent,
+                stats.total_energy, stats.mood
+            );
+
+            // Update global stats in memory
+            {
+                let mut mem = memory.write();
+                mem.stats.total_ticks = tick;
+            }
+
+            last_stats_tick = tick;
+        }
+
+        tick += 1;
+
+        // ~500 ticks per second
+        tokio::time::sleep(tokio::time::Duration::from_millis(2)).await;
+    }
+}
+
 async fn handle_connection(
     ws: warp::ws::WebSocket,
-    _substrate: Arc<Substrate>,
     perception_tx: broadcast::Sender<Signal>,
     mut expression_rx: broadcast::Receiver<Signal>,
 ) {
