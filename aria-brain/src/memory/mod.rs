@@ -407,6 +407,15 @@ impl LongTermMemory {
         let word_lower = word.to_lowercase();
 
         if let Some(freq) = self.word_frequencies.get_mut(&word_lower) {
+            // Don't learn social context for well-known nouns (like names)
+            // They appear in greetings but aren't greeting words themselves!
+            // Example: "Salut ARIA !" - "salut" is a greeting, but "aria" is a name
+            if freq.familiarity_boost > 0.5 && freq.category == WordCategory::Noun {
+                tracing::debug!("Skip social learning for known noun: '{}' (familiarity: {:.2})",
+                    word_lower, freq.familiarity_boost);
+                return;
+            }
+
             // Record the context
             freq.usage_pattern.record_context(context);
 
