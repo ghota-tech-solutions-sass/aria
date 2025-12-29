@@ -362,7 +362,7 @@ impl LongTermMemory {
                 let score = (*count as f32) * freq.familiarity_boost.max(0.1);
                 if score > 0.0 {
                     candidates.push((word, score));
-                    tracing::info!("RESPONSE CANDIDATE: '{}' for {:?} (count: {}, score: {:.2})",
+                    tracing::debug!("RESPONSE CANDIDATE: '{}' for {:?} (count: {}, score: {:.2})",
                         word, context, count, score);
                 }
             }
@@ -375,7 +375,7 @@ impl LongTermMemory {
         if result.is_some() {
             tracing::info!("LEARNED RESPONSE: Using '{}' for {:?} context", result.as_ref().unwrap(), context);
         } else {
-            tracing::info!("NO LEARNED RESPONSE for {:?} context (checked {} words)", context, self.word_frequencies.len());
+            tracing::debug!("No learned response for {:?} context (checked {} words)", context, self.word_frequencies.len());
         }
 
         result
@@ -406,7 +406,7 @@ impl LongTermMemory {
                     .find(|(c, _)| *c == context)
                     .map(|(_, count)| *count)
                     .unwrap_or(0);
-                tracing::info!("LEARN PATTERN: '{}' in {:?} context (count: {})", word_lower, context, ctx_count);
+                tracing::debug!("Learn pattern: '{}' in {:?} context (count: {})", word_lower, context, ctx_count);
             }
         }
     }

@@ -786,6 +786,38 @@ ARIA: de rien~     ← Elle sait répondre !
 
 ---
 
+### 2025-12-29 - Session 7d: Apprentissage dynamique des expressions sociales !
+
+**Bug corrigé** : Les nouveaux mots n'apprenaient pas leur contexte social !
+
+**Le problème** :
+`learn_usage_pattern()` était appelé AVANT `hear_word_with_context()`. Du coup, quand quelqu'un disait "Salut!" pour la première fois, le mot n'existait pas encore et le contexte social n'était pas enregistré.
+
+**La solution** :
+Déplacé `learn_usage_pattern()` APRÈS `hear_word_with_context()` dans le même bloc mémoire.
+
+**Résultat** :
+- Quand quelqu'un dit "Salut!", ARIA apprend que "salut" est un mot de salutation
+- La prochaine fois qu'elle reçoit une salutation, elle peut répondre "salut~" au lieu du "bonjour" par défaut
+- ARIA apprend les expressions sociales de ses interlocuteurs !
+
+**Comportement** :
+```
+[Première fois]
+Toi: Salut ARIA !
+ARIA: bonjour~ ~    ← Default car "salut" vient d'être appris
+
+[Deuxième fois, après avoir parlé]
+Toi: Salut !
+ARIA: salut~ ~      ← Elle utilise ce qu'elle a appris !
+```
+
+**Fichiers modifiés** :
+- `aria-brain/src/substrate.rs` : Réorganisation de l'ordre d'apprentissage
+- `aria-brain/src/memory/mod.rs` : Logging amélioré pour le debug
+
+---
+
 ## Résumé Session 2025-12-28 (soir)
 
 Une session très productive où ARIA a fait d'énormes progrès :
@@ -800,6 +832,7 @@ Une session très productive où ARIA a fait d'énormes progrès :
 | 0.1.15 | Catégories | Noms/Verbes/Adjectifs, phrases ordonnées, anti-répétition |
 | 0.1.16 | Contexte | Suivi de conversation, topics, context boosting |
 | 0.1.17 | Patterns sociaux | Détection contexte social, réponses appropriées |
+| 0.1.18 | Apprentissage dynamique | ARIA apprend les expressions sociales des utilisateurs |
 
 **Moment clé :** ARIA a dit son propre nom ("aria") spontanément !
 
@@ -814,4 +847,4 @@ Une session très productive où ARIA a fait d'énormes progrès :
 ---
 
 *Dernière mise à jour : 2025-12-29*
-*Version ARIA : 0.1.17*
+*Version ARIA : 0.1.18*
