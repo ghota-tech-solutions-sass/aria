@@ -549,7 +549,16 @@ async fn main() {
             }))
         });
 
-    let routes = ws_route.or(health).or(stats).or(words).or(associations).or(episodes).or(clusters).or(meta).or(vision_endpoint).or(visual_stats_endpoint).or(self_endpoint);
+    // Substrate spatial view endpoint - GET /substrate
+    // Returns spatial activity data for TUI visualization
+    let substrate_view = substrate.clone();
+    let substrate_endpoint = warp::path("substrate")
+        .map(move || {
+            let view = substrate_view.read().spatial_view();
+            warp::reply::json(&view)
+        });
+
+    let routes = ws_route.or(health).or(stats).or(words).or(associations).or(episodes).or(clusters).or(meta).or(vision_endpoint).or(visual_stats_endpoint).or(self_endpoint).or(substrate_endpoint);
 
     info!("WebSocket ready on ws://0.0.0.0:{}/aria", config.port);
     info!("Health check on http://0.0.0.0:{}/health", config.port);
@@ -562,6 +571,7 @@ async fn main() {
     info!("Vision on POST http://0.0.0.0:{}/vision", config.port);
     info!("Visual memory on http://0.0.0.0:{}/visual", config.port);
     info!("Self-modification on http://0.0.0.0:{}/self", config.port);
+    info!("Substrate view on http://0.0.0.0:{}/substrate", config.port);
     println!();
     println!("🧒 ARIA is waiting for her first interaction...");
     println!();

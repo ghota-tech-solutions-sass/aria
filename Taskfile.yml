@@ -150,6 +150,11 @@ tasks:
     cmds:
       - curl -s http://{{.BRAIN_HOST}}:{{.BRAIN_PORT}}/self | jq .
 
+  substrate:
+    desc: Show substrate spatial view (for visualization)
+    cmds:
+      - curl -s http://{{.BRAIN_HOST}}:{{.BRAIN_PORT}}/substrate | jq .
+
   # TRAINING
   train:
     desc: Automatically train ARIA with common patterns

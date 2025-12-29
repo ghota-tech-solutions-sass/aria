@@ -552,6 +552,104 @@ impl Substrate {
     pub fn current_tick(&self) -> u64 {
         self.tick.load(Ordering::Relaxed)
     }
+
+    /// Get spatial activity data for visualization
+    ///
+    /// Returns a 16x16 grid of activity levels and energy,
+    /// plus population breakdown for the substrate view.
+    pub fn spatial_view(&self) -> SubstrateView {
+        const GRID_SIZE: usize = 16;
+        let mut activity_grid = vec![0.0f32; GRID_SIZE * GRID_SIZE];
+        let mut energy_grid = vec![0.0f32; GRID_SIZE * GRID_SIZE];
+        let mut cell_count_grid = vec![0usize; GRID_SIZE * GRID_SIZE];
+
+        // Count cells in each grid position
+        // Using first 2 dimensions of position (typically in -10..10 range)
+        for (cell, state) in self.cells.iter().zip(self.states.iter()) {
+            if state.is_dead() {
+                continue;
+            }
+
+            // Map position to grid (position is typically -10..10)
+            let x = ((state.position[0] + 10.0) / 20.0 * GRID_SIZE as f32)
+                .clamp(0.0, (GRID_SIZE - 1) as f32) as usize;
+            let y = ((state.position[1] + 10.0) / 20.0 * GRID_SIZE as f32)
+                .clamp(0.0, (GRID_SIZE - 1) as f32) as usize;
+            let idx = y * GRID_SIZE + x;
+
+            cell_count_grid[idx] += 1;
+            energy_grid[idx] += state.energy;
+
+            // Activity: higher if awake and has high state activation
+            if !cell.activity.sleeping {
+                let activation: f32 = state.state.iter().map(|x| x.abs()).sum();
+                activity_grid[idx] += activation;
+            }
+        }
+
+        // Normalize grids
+        let max_activity = activity_grid.iter().cloned().fold(0.0f32, f32::max).max(1.0);
+        let max_energy = energy_grid.iter().cloned().fold(0.0f32, f32::max).max(1.0);
+
+        for i in 0..activity_grid.len() {
+            activity_grid[i] /= max_activity;
+            energy_grid[i] /= max_energy;
+        }
+
+        // Population breakdown
+        let total = self.cells.len();
+        let alive = self.states.iter().filter(|s| !s.is_dead()).count();
+        let sleeping = self.cells.iter().filter(|c| c.activity.sleeping).count();
+        let dead = total - alive;
+        let awake = alive - sleeping;
+
+        // Energy distribution (histogram)
+        let mut energy_histogram = [0usize; 10];
+        for state in &self.states {
+            if !state.is_dead() {
+                let bucket = ((state.energy / 1.5) * 9.0).clamp(0.0, 9.0) as usize;
+                energy_histogram[bucket] += 1;
+            }
+        }
+
+        SubstrateView {
+            grid_size: GRID_SIZE,
+            activity_grid,
+            energy_grid,
+            cell_count_grid,
+            total_cells: total,
+            alive_cells: alive,
+            sleeping_cells: sleeping,
+            dead_cells: dead,
+            awake_cells: awake,
+            energy_histogram: energy_histogram.to_vec(),
+        }
+    }
+}
+
+/// Spatial view of the substrate for visualization
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct SubstrateView {
+    /// Grid size (16x16)
+    pub grid_size: usize,
+    /// Activity level per grid cell (0.0-1.0)
+    pub activity_grid: Vec<f32>,
+    /// Energy level per grid cell (normalized)
+    pub energy_grid: Vec<f32>,
+    /// Number of cells per grid position
+    pub cell_count_grid: Vec<usize>,
+    /// Total cells (including dead)
+    pub total_cells: usize,
+    /// Alive cells count
+    pub alive_cells: usize,
+    /// Sleeping cells count
+    pub sleeping_cells: usize,
+    /// Dead cells count
+    pub dead_cells: usize,
+    /// Awake cells count
+    pub awake_cells: usize,
+    /// Energy distribution histogram (10 buckets)
+    pub energy_histogram: Vec<usize>,
 }
 
 // ============================================================================
