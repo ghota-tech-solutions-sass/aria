@@ -541,6 +541,21 @@ impl Substrate {
         // Apply feedback to recently expressed words
         if is_positive_feedback || is_negative_feedback {
             let recent_expr = self.recent_expressions.read().clone();
+
+            // Get the words from the last user input (what triggered ARIA's response)
+            let last_input_words: Vec<String> = {
+                let conversation = self.conversation.read();
+                // The last exchange contains what was said before ARIA's response
+                // But we need the one BEFORE the feedback message
+                if conversation.exchanges.len() >= 2 {
+                    conversation.exchanges.get(1)
+                        .map(|e| e.input_words.clone())
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                }
+            };
+
             let mut memory = self.memory.write();
 
             for word in &recent_expr {
@@ -554,6 +569,19 @@ impl Substrate {
                             "FEEDBACK POSITIVE! '{}' reinforced (valence: {:.2} → {:.2})",
                             word, old_valence, freq.emotional_valence
                         );
+                    }
+
+                    // NEW: Learn input→response associations!
+                    // If user said "ça va" and ARIA said "bien" and got "Bravo!"
+                    // → Create association between "ça va" and "bien"
+                    for input_word in &last_input_words {
+                        if input_word != word {
+                            memory.learn_association(input_word, word, 0.5);
+                            tracing::info!(
+                                "FEEDBACK LEARNING: '{}' → '{}' association strengthened",
+                                input_word, word
+                            );
+                        }
                     }
                 } else {
                     // PENALIZE: Decrease emotional valence
