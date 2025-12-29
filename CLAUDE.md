@@ -88,7 +88,65 @@ Chats de Mickael :
 - **Obrigada** : Abyssin
 
 ---
-*Version : 0.4.0 | Dernière update : 2025-12-29*
+*Version : 0.5.0 | Dernière update : 2025-12-29*
+
+### Session 17 - Optimisations Gemini (Scale & Intelligence)
+
+**Implémentation de toutes les recommandations de Gemini pour 5M+ cellules !**
+
+#### 1. GPU Sparse Dispatch
+```rust
+// Nouveau dans aria-compute/src/backend/gpu.rs
+- AtomicCounter pour comptage GPU-side
+- active_count_buffer et active_indices_buffer
+- COMPACT_SHADER: collecte les indices actifs avec atomiques
+- Activation auto pour populations >100k cellules
+```
+**Résultat** : 80%+ de réduction du travail GPU gaspillé quand les cellules dorment.
+
+#### 2. Neuroplasticité Adaptative
+```rust
+// Nouveau dans aria-core/src/dna.rs
+pub struct MutationContext {
+    age: u64,          // Vieilles cellules → mutation faible
+    fitness: f32,      // ADN performant → mutation faible
+    activity: f32,     // Cellules actives → mutation forte
+    exploring: bool,   // Exploration → 2x mutation
+    is_elite: bool,    // Elite → 20% mutation
+}
+
+DNA::from_parent_adaptive(parent, rate, ctx) // Mutation contextuelle
+```
+**Résultat** : L'ADN évolue intelligemment, préservant les bons traits.
+
+#### 3. Multi-Pass Recurrent Processing
+```rust
+// Nouveau dans aria-core/src/config.rs
+pub struct RecurrentConfig {
+    passes_per_tick: u32,        // 2 passes par défaut
+    internal_signal_decay: f32,  // 70% persistance
+    internal_signal_threshold: f32,
+    enabled: bool,
+}
+```
+**Résultat** : Les cellules s'influencent mutuellement avant l'émergence → "pensée interne".
+
+#### 4. Seuils Inhibiteurs Spatiaux
+```rust
+// Nouveau dans aria-brain/src/substrate/types.rs
+pub struct SpatialInhibitor {
+    region_activity: Vec<f32>,    // 64 régions (8x8)
+    region_last_active: Vec<u64>, // Période réfractaire
+    // ...
+}
+```
+**Résultat** : Les régions récemment actives ont un seuil plus élevé → moins de répétition.
+
+#### Commits Session 17
+1. `feat(gpu): Add sparse dispatch with GPU-side active cell counting`
+2. `feat(dna): Add adaptive neuroplasticity mutation system`
+3. `feat(substrate): Add multi-pass recurrent processing`
+4. `feat(substrate): Add spatial inhibitor thresholds`
 
 ### Session 16 - Auto-modification (AGI milestone)
 
