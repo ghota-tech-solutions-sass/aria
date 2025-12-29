@@ -135,6 +135,21 @@ tasks:
     cmds:
       - curl -s http://{{.BRAIN_HOST}}:{{.BRAIN_PORT}}/episodes | jq '.first_times'
 
+  meta:
+    desc: Show meta-learning stats (Session 14)
+    cmds:
+      - curl -s http://{{.BRAIN_HOST}}:{{.BRAIN_PORT}}/meta | jq .
+
+  visual:
+    desc: Show visual memory stats (Session 15)
+    cmds:
+      - curl -s http://{{.BRAIN_HOST}}:{{.BRAIN_PORT}}/visual | jq .
+
+  self:
+    desc: Show self-modification status (Session 16)
+    cmds:
+      - curl -s http://{{.BRAIN_HOST}}:{{.BRAIN_PORT}}/self | jq .
+
   # TRAINING
   train:
     desc: Automatically train ARIA with common patterns
