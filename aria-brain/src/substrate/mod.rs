@@ -52,7 +52,7 @@ use rand::Rng;
 
 // New types from aria-core
 use aria_core::{
-    Cell, CellState, CellAction, DNA,
+    Cell, CellState, CellAction, DNA, MutationContext,
     SignalFragment,
     AriaConfig, ActivityTracker,
     POSITION_DIMS, SIGNAL_DIMS,
@@ -300,9 +300,28 @@ impl Substrate {
                         if parent_state.energy > self.config.metabolism.reproduction_threshold {
                             let new_id = self.next_id.fetch_add(1, Ordering::SeqCst);
 
-                            // Create child DNA (mutated from parent)
+                            // Check if parent DNA is elite (Gemini neuroplasticity)
+                            let is_elite = {
+                                let memory = self.memory.read();
+                                memory.elite_dna.iter().any(|e| e.dna.signature == self.dna_pool[parent.dna_index as usize].signature)
+                            };
+
+                            // Build mutation context (Gemini adaptive neuroplasticity)
+                            let mutation_ctx = MutationContext {
+                                age: parent.age,
+                                fitness: parent_state.energy / self.config.metabolism.energy_cap, // Fitness from energy
+                                activity: parent_state.activity_level,
+                                exploring: !parent.activity.sleeping, // Active cells are exploring
+                                is_elite,
+                            };
+
+                            // Create child DNA with adaptive mutation
                             let parent_dna = &self.dna_pool[parent.dna_index as usize];
-                            let child_dna = DNA::from_parent(parent_dna, self.config.population.mutation_rate);
+                            let child_dna = DNA::from_parent_adaptive(
+                                parent_dna,
+                                self.config.population.mutation_rate,
+                                mutation_ctx,
+                            );
                             let child_dna_index = self.dna_pool.len() as u32;
                             self.dna_pool.push(child_dna);
 

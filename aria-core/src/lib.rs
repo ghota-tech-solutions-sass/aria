@@ -32,7 +32,7 @@ pub mod traits;
 
 // Re-export main types at crate root
 pub use cell::{Cell, CellState, CellAction, Emotion};
-pub use dna::DNA;
+pub use dna::{DNA, MutationContext};
 pub use signal::{Signal, SignalType, SignalFragment};
 pub use activity::{ActivityState, ActivityTracker};
 pub use config::AriaConfig;
