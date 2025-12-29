@@ -711,7 +711,9 @@ impl Substrate {
         // Transform signal to fragments for cells
         // Amplify external signals - they're important!
         // Apply familiarity boost for known words
-        let base_intensity = signal.intensity * 5.0 * familiarity_boost;
+        // Scale amplification based on cell count (tuned for 10k base)
+        let cell_scale = (self.cells.len() as f32 / 10_000.0).sqrt();
+        let base_intensity = signal.intensity * 5.0 * familiarity_boost * cell_scale;
         let fragment = SignalFragment {
             source_id: 0, // External source
             content: signal_vector,
