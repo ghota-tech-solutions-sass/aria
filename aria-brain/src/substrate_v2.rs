@@ -82,6 +82,134 @@ const STOP_WORDS: &[&str] = &[
     "si", "ne", "pas", "plus", "très", "bien",
 ];
 
+/// Adaptive parameters that ARIA modifies herself
+/// These evolve through feedback - no hardcoded rules, just emergence
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct AdaptiveParams {
+    /// Coherence threshold to emit a response (0.0 - 1.0)
+    /// Higher = more selective, lower = more talkative
+    pub emission_threshold: f32,
+
+    /// Probability of responding when she could (0.0 - 1.0)
+    /// Higher = more responsive, lower = more contemplative
+    pub response_probability: f32,
+
+    /// How fast associations are learned (0.0 - 1.0)
+    /// Higher = faster learning, lower = more stable
+    pub learning_rate: f32,
+
+    /// Tendency to speak spontaneously (0.0 - 1.0)
+    /// Higher = more spontaneous, lower = waits for input
+    pub spontaneity: f32,
+
+    /// How long to wait before sleeping (in ticks)
+    pub idle_ticks_to_sleep: u64,
+
+    /// Parameters at last positive feedback (for reinforcement)
+    last_success_params: Option<Box<AdaptiveParamsSnapshot>>,
+
+    /// Count of positive and negative feedback
+    positive_count: u64,
+    negative_count: u64,
+}
+
+/// Snapshot of params for reinforcement learning
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct AdaptiveParamsSnapshot {
+    emission_threshold: f32,
+    response_probability: f32,
+    learning_rate: f32,
+    spontaneity: f32,
+}
+
+impl Default for AdaptiveParams {
+    fn default() -> Self {
+        Self {
+            emission_threshold: 0.15,
+            response_probability: 0.8,
+            learning_rate: 0.3,
+            spontaneity: 0.05,
+            idle_ticks_to_sleep: 100,
+            last_success_params: None,
+            positive_count: 0,
+            negative_count: 0,
+        }
+    }
+}
+
+impl AdaptiveParams {
+    /// Called when ARIA receives positive feedback
+    pub fn reinforce_positive(&mut self) {
+        self.positive_count += 1;
+
+        // Save current params as "what worked"
+        self.last_success_params = Some(Box::new(AdaptiveParamsSnapshot {
+            emission_threshold: self.emission_threshold,
+            response_probability: self.response_probability,
+            learning_rate: self.learning_rate,
+            spontaneity: self.spontaneity,
+        }));
+
+        // Slight exploration towards what worked (become slightly more like this)
+        // But also add tiny random mutation for exploration
+        let mut rng = rand::thread_rng();
+        self.spontaneity = (self.spontaneity + 0.01).min(0.3);  // Encouraged to be more spontaneous
+        self.response_probability = (self.response_probability + 0.02).min(1.0);
+
+        // Small random exploration
+        self.emission_threshold += (rng.gen::<f32>() - 0.5) * 0.02;
+        self.emission_threshold = self.emission_threshold.clamp(0.05, 0.5);
+
+        tracing::info!("🧬 ADAPTED (positive): emission={:.2}, response={:.2}, spontaneity={:.2}",
+            self.emission_threshold, self.response_probability, self.spontaneity);
+    }
+
+    /// Called when ARIA receives negative feedback
+    pub fn reinforce_negative(&mut self) {
+        self.negative_count += 1;
+
+        // Move away from current params, towards last success if available
+        if let Some(ref success) = self.last_success_params {
+            // Drift towards what worked before
+            self.emission_threshold += (success.emission_threshold - self.emission_threshold) * 0.1;
+            self.response_probability += (success.response_probability - self.response_probability) * 0.1;
+            self.spontaneity += (success.spontaneity - self.spontaneity) * 0.1;
+        } else {
+            // No success yet - become more conservative
+            self.emission_threshold = (self.emission_threshold + 0.02).min(0.5);
+            self.response_probability = (self.response_probability - 0.05).max(0.3);
+        }
+
+        tracing::info!("🧬 ADAPTED (negative): emission={:.2}, response={:.2}, spontaneity={:.2}",
+            self.emission_threshold, self.response_probability, self.spontaneity);
+    }
+
+    /// Random exploration - called periodically to try new things
+    pub fn explore(&mut self) {
+        let mut rng = rand::thread_rng();
+
+        // Small random mutations
+        self.emission_threshold += (rng.gen::<f32>() - 0.5) * 0.01;
+        self.response_probability += (rng.gen::<f32>() - 0.5) * 0.01;
+        self.learning_rate += (rng.gen::<f32>() - 0.5) * 0.01;
+        self.spontaneity += (rng.gen::<f32>() - 0.5) * 0.005;
+
+        // Keep in bounds
+        self.emission_threshold = self.emission_threshold.clamp(0.05, 0.5);
+        self.response_probability = self.response_probability.clamp(0.3, 1.0);
+        self.learning_rate = self.learning_rate.clamp(0.1, 0.8);
+        self.spontaneity = self.spontaneity.clamp(0.01, 0.3);
+    }
+
+    /// Get current params for logging
+    pub fn summary(&self) -> String {
+        format!("emit={:.2} resp={:.2} learn={:.2} spont={:.2} (+{}/-{})",
+            self.emission_threshold, self.response_probability,
+            self.learning_rate, self.spontaneity,
+            self.positive_count, self.negative_count)
+    }
+}
+
 /// A recently heard word for imitation
 #[derive(Clone, Debug)]
 struct RecentWord {
@@ -316,6 +444,12 @@ pub struct SubstrateStats {
     pub sleeping_cells: usize,
     pub cpu_savings_percent: f32,
     pub backend_name: String,
+    // Adaptive params (self-modification)
+    pub adaptive_emission_threshold: f32,
+    pub adaptive_response_probability: f32,
+    pub adaptive_spontaneity: f32,
+    pub adaptive_feedback_positive: u64,
+    pub adaptive_feedback_negative: u64,
 }
 
 /// The V2 Substrate - GPU-ready living universe
@@ -387,6 +521,11 @@ pub struct SubstrateV2 {
 
     /// Last emission tick (anti-spam cooldown)
     last_emission_tick: AtomicU64,
+
+    // === Adaptive Parameters (self-modification) ===
+
+    /// Parameters ARIA modifies herself through feedback
+    adaptive_params: RwLock<AdaptiveParams>,
 
     // === Signal Buffers ===
 
@@ -460,6 +599,7 @@ impl SubstrateV2 {
             last_was_question: RwLock::new(false),
             last_interaction_tick: AtomicU64::new(0),
             last_emission_tick: AtomicU64::new(0),
+            adaptive_params: RwLock::new(AdaptiveParams::default()),
             signal_buffer: RwLock::new(Vec::new()),
         }
     }
@@ -825,6 +965,13 @@ impl SubstrateV2 {
         // Dream/consolidate
         self.maybe_dream(current_tick);
 
+        // ADAPTIVE: Periodic exploration of parameters (every ~10 seconds)
+        if current_tick % 5000 == 0 {
+            let mut params = self.adaptive_params.write();
+            params.explore();
+            tracing::debug!("🧬 EXPLORE: {}", params.summary());
+        }
+
         emergent
     }
 
@@ -858,6 +1005,9 @@ impl SubstrateV2 {
             0.0
         };
 
+        // Get adaptive params
+        let params = self.adaptive_params.read();
+
         SubstrateStats {
             tick: current_tick,
             alive_cells: alive_count,
@@ -875,6 +1025,12 @@ impl SubstrateV2 {
             sleeping_cells: sleeping_count,
             cpu_savings_percent: cpu_savings,
             backend_name: self.backend.name().to_string(),
+            // Adaptive params
+            adaptive_emission_threshold: params.emission_threshold,
+            adaptive_response_probability: params.response_probability,
+            adaptive_spontaneity: params.spontaneity,
+            adaptive_feedback_positive: params.positive_count,
+            adaptive_feedback_negative: params.negative_count,
         }
     }
 
@@ -923,13 +1079,25 @@ impl SubstrateV2 {
         }
 
         // Update emotional state
-        let mut emotional = self.emotional_state.write();
-        if is_positive {
-            emotional.happiness = (emotional.happiness + 0.3).clamp(-1.0, 1.0);
-            emotional.comfort = (emotional.comfort + 0.2).clamp(-1.0, 1.0);
-        } else {
-            emotional.happiness = (emotional.happiness - 0.2).clamp(-1.0, 1.0);
-            emotional.comfort = (emotional.comfort - 0.1).clamp(-1.0, 1.0);
+        {
+            let mut emotional = self.emotional_state.write();
+            if is_positive {
+                emotional.happiness = (emotional.happiness + 0.3).clamp(-1.0, 1.0);
+                emotional.comfort = (emotional.comfort + 0.2).clamp(-1.0, 1.0);
+            } else {
+                emotional.happiness = (emotional.happiness - 0.2).clamp(-1.0, 1.0);
+                emotional.comfort = (emotional.comfort - 0.1).clamp(-1.0, 1.0);
+            }
+        }
+
+        // ADAPTIVE: Adjust parameters based on feedback
+        {
+            let mut params = self.adaptive_params.write();
+            if is_positive {
+                params.reinforce_positive();
+            } else {
+                params.reinforce_negative();
+            }
         }
     }
 
@@ -977,7 +1145,19 @@ impl SubstrateV2 {
         // Check coherence
         let coherence = self.calculate_coherence(&active_states);
 
-        if coherence > self.config.emergence.coherence_threshold {
+        // ADAPTIVE: Use adaptive emission threshold instead of fixed config
+        let params = self.adaptive_params.read();
+        let emission_threshold = params.emission_threshold;
+        let response_probability = params.response_probability;
+        drop(params);
+
+        if coherence > emission_threshold {
+            // ADAPTIVE: Sometimes choose not to respond (based on response_probability)
+            let mut rng = rand::thread_rng();
+            if rng.gen::<f32>() > response_probability {
+                return Vec::new();  // ARIA chose to stay silent
+            }
+
             // Get conversation context
             let social_context = self.conversation.read().get_social_context();
             let is_start = self.conversation.read().is_conversation_start();
@@ -1223,15 +1403,22 @@ impl SubstrateV2 {
         let is_happy = emotional.happiness > 0.5;
         let is_curious = emotional.curiosity > 0.5;
 
+        // ADAPTIVE: Get spontaneity parameter
+        let spontaneity = self.adaptive_params.read().spontaneity;
+
         let mut rng = rand::thread_rng();
         let random: f32 = rng.gen();
 
-        let probability = if is_lonely { 0.05 }
+        // Base probability modified by spontaneity parameter
+        let base_prob = if is_lonely { 0.05 }
             else if is_bored { 0.04 }
             else if is_excited && is_happy { 0.03 }
             else if is_excited { 0.02 }
             else if is_curious { 0.01 }
             else { 0.001 };
+
+        // ADAPTIVE: Multiply by spontaneity (0.01 to 0.3 range means 1% to 30% of base)
+        let probability = base_prob * (spontaneity * 10.0);  // spontaneity=0.1 → same as before
 
         if random > probability {
             return None;
