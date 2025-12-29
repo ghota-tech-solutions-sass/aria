@@ -123,6 +123,13 @@ async fn main() {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
         loop {
             interval.tick().await;
+
+            // Rebuild semantic clusters before saving
+            {
+                let mut mem = memory_save.write();
+                mem.rebuild_clusters();
+            }
+
             let mem = memory_save.read();
             if let Err(e) = mem.save(std::path::Path::new("data/aria.memory")) {
                 warn!("Failed to save memory: {}", e);
@@ -131,10 +138,11 @@ async fn main() {
                     .iter()
                     .map(|(w, f)| format!("{}({})", w, f.count))
                     .collect();
-                info!("Memory saved ({} memories, {} patterns, {} words known)",
+                info!("Memory saved ({} memories, {} patterns, {} words known, {} clusters)",
                     mem.memories.len(),
                     mem.learned_patterns.len(),
-                    mem.word_frequencies.len()
+                    mem.word_frequencies.len(),
+                    mem.semantic_clusters.len()
                 );
                 if !familiar_words.is_empty() {
                     info!("Familiar words: {}", familiar_words.join(", "));
@@ -276,7 +284,39 @@ async fn main() {
             }))
         });
 
-    let routes = ws_route.or(health).or(stats).or(words).or(associations).or(episodes);
+    // Clusters endpoint - show semantic word clusters
+    let memory_clusters = memory.clone();
+    let clusters = warp::path("clusters")
+        .map(move || {
+            let mem = memory_clusters.read();
+            let clusters_info: Vec<serde_json::Value> = mem.semantic_clusters
+                .iter()
+                .map(|cluster| {
+                    let words: Vec<serde_json::Value> = cluster.words.iter()
+                        .map(|(word, strength)| {
+                            serde_json::json!({
+                                "word": word,
+                                "strength": strength
+                            })
+                        })
+                        .collect();
+                    serde_json::json!({
+                        "id": cluster.id,
+                        "label": cluster.label,
+                        "words": words,
+                        "word_count": cluster.words.len(),
+                        "emotional_valence": cluster.emotional_valence,
+                        "dominant_category": format!("{:?}", cluster.dominant_category)
+                    })
+                })
+                .collect();
+            warp::reply::json(&serde_json::json!({
+                "total_clusters": mem.semantic_clusters.len(),
+                "clusters": clusters_info
+            }))
+        });
+
+    let routes = ws_route.or(health).or(stats).or(words).or(associations).or(episodes).or(clusters);
 
     info!("WebSocket ready on ws://0.0.0.0:{}/aria", config.port);
     info!("Health check on http://0.0.0.0:{}/health", config.port);
@@ -284,6 +324,7 @@ async fn main() {
     info!("Words on http://0.0.0.0:{}/words", config.port);
     info!("Associations on http://0.0.0.0:{}/associations", config.port);
     info!("Episodes on http://0.0.0.0:{}/episodes", config.port);
+    info!("Clusters on http://0.0.0.0:{}/clusters", config.port);
     println!();
     println!("🧒 ARIA is waiting for her first interaction...");
     println!();

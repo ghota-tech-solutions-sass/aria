@@ -1393,6 +1393,9 @@ impl SubstrateV2 {
             conv.get_topic_words()
         };
 
+        // Get cluster-related words for semantic coherence
+        let cluster_words: Vec<(String, f32)> = memory.get_related_words_from_input(&context_words);
+
         // Helper to check if word was recently said
         let was_recently_said = |word: &str| -> bool {
             recent_said.iter().any(|w| w.to_lowercase() == word.to_lowercase())
@@ -1403,8 +1406,15 @@ impl SubstrateV2 {
             context_words.iter().any(|w| w.to_lowercase() == word.to_lowercase())
         };
 
+        // Helper to check if word is in same semantic cluster (deserves boost)
+        let cluster_boost = |word: &str| -> f32 {
+            cluster_words.iter()
+                .find(|(w, _)| w.to_lowercase() == word.to_lowercase())
+                .map(|(_, strength)| strength * 0.3) // 30% boost per cluster match
+                .unwrap_or(0.0)
+        };
+
         // Collect candidate words with their scores
-        // Use higher threshold (0.4) to reduce noise
         let mut candidates: Vec<(String, f32, f32)> = Vec::new(); // (word, similarity, valence)
 
         // From recent words (most relevant - just heard)
@@ -1418,6 +1428,9 @@ impl SubstrateV2 {
             if is_context_word(&rw.word) {
                 similarity = (similarity * 1.5).min(1.0);
             }
+            // Boost cluster-related words (semantic coherence!)
+            similarity = (similarity + cluster_boost(&rw.word)).min(1.0);
+
             if similarity > 0.35 {
                 let valence = memory.word_frequencies.get(&rw.word)
                     .map(|f| f.emotional_valence)
@@ -1439,6 +1452,8 @@ impl SubstrateV2 {
                 if is_context_word(word) {
                     similarity = (similarity * 1.5).min(1.0);
                 }
+                similarity = (similarity + cluster_boost(word)).min(1.0);
+
                 if similarity > 0.35 {
                     candidates.push((word.clone(), similarity, freq.emotional_valence));
                 }

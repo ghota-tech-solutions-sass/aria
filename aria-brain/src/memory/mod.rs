@@ -131,6 +131,10 @@ pub struct LongTermMemory {
     #[serde(default)]
     pub word_associations: HashMap<String, WordAssociation>,
 
+    /// Semantic clusters - groups of related words (rebuilt periodically from associations)
+    #[serde(default)]
+    pub semantic_clusters: Vec<SemanticCluster>,
+
     // === EPISODIC MEMORY ===
 
     /// Episodes - specific moments ARIA remembers
@@ -217,6 +221,22 @@ pub struct WordAssociation {
     pub last_seen: u64,
     /// Emotional context of the association
     pub emotional_valence: f32,
+}
+
+/// Semantic cluster - group of related words
+/// Words in the same cluster are semantically connected
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SemanticCluster {
+    /// Unique cluster ID
+    pub id: u32,
+    /// Human-readable label (optional, can be inferred)
+    pub label: Option<String>,
+    /// Words in this cluster with their membership strength
+    pub words: Vec<(String, f32)>,
+    /// Average emotional valence of the cluster
+    pub emotional_valence: f32,
+    /// Dominant category in this cluster
+    pub dominant_category: WordCategory,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -472,6 +492,7 @@ impl LongTermMemory {
             vocabulary: HashMap::new(),
             word_frequencies: HashMap::new(),
             word_associations: HashMap::new(),
+            semantic_clusters: Vec::new(),
             episodes: Vec::new(),
             next_episode_id: 0,
             first_times: HashMap::new(),
@@ -1577,6 +1598,151 @@ impl LongTermMemory {
         }
         stats.insert("total".to_string(), self.episodes.len());
         stats
+    }
+
+    // === SEMANTIC CLUSTERING ===
+
+    /// Rebuild semantic clusters from word associations
+    /// Uses connected components algorithm with strength threshold
+    pub fn rebuild_clusters(&mut self) {
+        let min_strength = 0.3; // Associations with moderate strength form clusters
+        let min_words = 2;      // Need at least 2 words for a cluster
+
+        // Build adjacency list from associations
+        let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
+
+        for (key, assoc) in &self.word_associations {
+            if assoc.strength < min_strength {
+                continue;
+            }
+            let parts: Vec<&str> = key.split(':').collect();
+            if parts.len() != 2 {
+                continue;
+            }
+            let (w1, w2) = (parts[0].to_string(), parts[1].to_string());
+
+            adjacency.entry(w1.clone()).or_default().push(w2.clone());
+            adjacency.entry(w2.clone()).or_default().push(w1.clone());
+        }
+
+        // Find connected components using BFS
+        let mut visited: HashMap<String, bool> = HashMap::new();
+        let mut clusters: Vec<SemanticCluster> = Vec::new();
+        let mut cluster_id: u32 = 0;
+
+        for word in adjacency.keys() {
+            if visited.get(word).copied().unwrap_or(false) {
+                continue;
+            }
+
+            // BFS to find all connected words
+            let mut component: Vec<(String, f32)> = Vec::new();
+            let mut queue: Vec<String> = vec![word.clone()];
+            visited.insert(word.clone(), true);
+
+            while let Some(current) = queue.pop() {
+                // Add word with its familiarity as membership strength
+                let membership = self.word_frequencies
+                    .get(&current)
+                    .map(|f| f.familiarity_boost)
+                    .unwrap_or(0.5);
+                component.push((current.clone(), membership));
+
+                if let Some(neighbors) = adjacency.get(&current) {
+                    for neighbor in neighbors {
+                        if !visited.get(neighbor).copied().unwrap_or(false) {
+                            visited.insert(neighbor.clone(), true);
+                            queue.push(neighbor.clone());
+                        }
+                    }
+                }
+            }
+
+            // Only keep clusters with enough words
+            if component.len() >= min_words {
+                // Calculate cluster properties
+                let mut total_valence = 0.0;
+                let mut category_counts = [0u32; 3]; // noun, verb, adjective
+
+                for (word, _) in &component {
+                    if let Some(freq) = self.word_frequencies.get(word) {
+                        total_valence += freq.emotional_valence;
+                        match freq.category {
+                            WordCategory::Noun => category_counts[0] += 1,
+                            WordCategory::Verb => category_counts[1] += 1,
+                            WordCategory::Adjective => category_counts[2] += 1,
+                            WordCategory::Unknown => {}
+                        }
+                    }
+                }
+
+                let avg_valence = total_valence / component.len() as f32;
+                let dominant_cat = if category_counts[0] >= category_counts[1] && category_counts[0] >= category_counts[2] {
+                    WordCategory::Noun
+                } else if category_counts[1] >= category_counts[2] {
+                    WordCategory::Verb
+                } else {
+                    WordCategory::Adjective
+                };
+
+                clusters.push(SemanticCluster {
+                    id: cluster_id,
+                    label: None, // Could infer from most common word
+                    words: component,
+                    emotional_valence: avg_valence,
+                    dominant_category: dominant_cat,
+                });
+                cluster_id += 1;
+            }
+        }
+
+        self.semantic_clusters = clusters;
+        tracing::info!("Rebuilt {} semantic clusters", self.semantic_clusters.len());
+    }
+
+    /// Find which cluster a word belongs to
+    pub fn get_cluster_for_word(&self, word: &str) -> Option<&SemanticCluster> {
+        let word_lower = word.to_lowercase();
+        self.semantic_clusters.iter().find(|c| {
+            c.words.iter().any(|(w, _)| w.to_lowercase() == word_lower)
+        })
+    }
+
+    /// Get all words in the same cluster as the given word
+    /// Returns words sorted by membership strength (strongest first)
+    pub fn get_cluster_words(&self, word: &str) -> Vec<String> {
+        if let Some(cluster) = self.get_cluster_for_word(word) {
+            let mut words: Vec<(String, f32)> = cluster.words.clone();
+            words.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            words.into_iter()
+                .filter(|(w, _)| w.to_lowercase() != word.to_lowercase())
+                .map(|(w, _)| w)
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Get words related to the input via clusters
+    /// Checks all words in input and returns cluster-related words
+    pub fn get_related_words_from_input(&self, input_words: &[String]) -> Vec<(String, f32)> {
+        let mut related: HashMap<String, f32> = HashMap::new();
+
+        for word in input_words {
+            if let Some(cluster) = self.get_cluster_for_word(word) {
+                for (cluster_word, strength) in &cluster.words {
+                    // Don't include original input words
+                    if !input_words.iter().any(|w| w.to_lowercase() == cluster_word.to_lowercase()) {
+                        let entry = related.entry(cluster_word.clone()).or_insert(0.0);
+                        *entry = (*entry + strength).min(2.0); // Cap at 2.0
+                    }
+                }
+            }
+        }
+
+        let mut result: Vec<(String, f32)> = related.into_iter().collect();
+        result.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        result
     }
 }
 
