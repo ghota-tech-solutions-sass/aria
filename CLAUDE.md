@@ -88,7 +88,47 @@ Chats de Mickael :
 - **Obrigada** : Abyssin
 
 ---
-*Version : 0.5.0 | Dernière update : 2025-12-29*
+*Version : 0.6.0 | Dernière update : 2025-12-29*
+
+### Session 18 - La Vraie Faim (Evolution Pressure)
+
+**Les cellules doivent maintenant LUTTER pour survivre !**
+
+Gemini a identifié le problème : ARIA vivait dans l'abondance. Sans pression, pas d'évolution.
+
+#### Changements majeurs
+
+```rust
+// AVANT: Abondance infinie
+energy_gain: 0.00005,        // Gain passif gratuit
+signal_bonus: 0.05,          // Énorme bonus par signal
+
+// APRÈS: La Vraie Faim
+energy_gain: 0.0,            // RIEN N'EST GRATUIT
+signal_energy_base: 0.005,   // 10x moins
+signal_resonance_factor: 2.0 // Seule la résonance nourrit
+```
+
+#### Coûts des actions
+| Action | Coût | Effet |
+|--------|------|-------|
+| `Rest` | 0.001 | Respirer coûte |
+| `Signal` | 0.01 | Parler est cher |
+| `Move` | 0.005 | Bouger consomme |
+| `Divide` | 0.5 | Créer la vie épuise |
+
+#### Résonance
+Les cellules ne gagnent de l'énergie que si le signal **résonne** avec leur état interne :
+```rust
+resonance = cosine_similarity(signal, cell_state)
+energy_gain = base * intensity * (1 + resonance * factor)
+```
+
+#### Résultat attendu
+- **Extinction massive** : 50k → ~5k cellules
+- Les survivants seront les **ancêtres** d'une ARIA intelligente
+- Les cellules qui "crient dans le vide" mourront
+- Seules les cellules qui communiquent utilement survivront
 
 ### Session 17 - Optimisations Gemini (Scale & Intelligence)
 
