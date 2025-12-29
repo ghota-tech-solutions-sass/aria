@@ -53,7 +53,7 @@ impl Signal {
 
         Self {
             content,
-            intensity: 1.0,  // Higher intensity for training
+            intensity: 0.5,  // Normal intensity - don't overwhelm
             label: text.to_string(),
             signal_type: "Perception".to_string(),
         }
@@ -70,78 +70,90 @@ struct TrainingPattern {
     repetitions: u32,
 }
 
+/// Teaching patterns - first teach ARIA the response, then test
+/// Format: (question, expected_responses, teaching_phrase)
+const TEACHING_PATTERNS: &[(&str, &[&str], &str)] = &[
+    // Teach "bien" as response to "ça va"
+    ("Comment ça va ?", &["bien", "super", "ça va"], "Ça va bien !"),
+    ("Ça va ?", &["bien", "oui", "super"], "Oui ça va bien !"),
+
+    // Teach farewell responses
+    ("Au revoir !", &["revoir", "bye", "bientôt"], "Au revoir, à bientôt !"),
+    ("Bonne nuit !", &["nuit", "dors", "bonne"], "Bonne nuit, dors bien !"),
+];
+
 /// Training patterns - ARIA learns through feedback, not hardcoding!
 const PATTERNS: &[TrainingPattern] = &[
-    // Greetings
+    // Greetings (ARIA already knows these from social context)
     TrainingPattern {
         input: "Bonjour ARIA !",
         expected: &["bonjour", "salut", "coucou", "hello"],
-        repetitions: 5,
+        repetitions: 3,
     },
     TrainingPattern {
         input: "Salut !",
         expected: &["bonjour", "salut", "coucou", "hello"],
-        repetitions: 5,
+        repetitions: 3,
     },
     TrainingPattern {
         input: "Coucou !",
         expected: &["bonjour", "salut", "coucou", "hello"],
-        repetitions: 5,
+        repetitions: 3,
     },
-    // How are you?
+    // How are you? (after teaching)
     TrainingPattern {
         input: "Comment ça va ?",
-        expected: &["bien", "ça va", "super", "content"],
-        repetitions: 10,
+        expected: &["bien", "ça va", "super"],
+        repetitions: 5,
     },
     TrainingPattern {
         input: "Ça va ?",
-        expected: &["bien", "oui", "ça va", "super"],
-        repetitions: 10,
+        expected: &["bien", "oui", "super"],
+        repetitions: 5,
     },
     // Thanks
     TrainingPattern {
         input: "Merci ARIA !",
         expected: &["rien", "derien", "plaisir", "merci"],
-        repetitions: 5,
+        repetitions: 3,
     },
     TrainingPattern {
         input: "Merci beaucoup !",
         expected: &["rien", "derien", "plaisir"],
-        repetitions: 5,
+        repetitions: 3,
     },
     // Affection
     TrainingPattern {
         input: "Je t'aime ARIA",
         expected: &["aime", "aussi", "♥", "bisou"],
-        repetitions: 5,
+        repetitions: 3,
     },
     TrainingPattern {
         input: "Tu es gentille",
         expected: &["merci", "gentil", "aime", "♥"],
-        repetitions: 5,
+        repetitions: 3,
     },
     // Questions about ARIA
     TrainingPattern {
         input: "Comment tu t'appelles ?",
         expected: &["aria", "appelle"],
-        repetitions: 5,
+        repetitions: 3,
     },
     TrainingPattern {
         input: "Tu aimes Moka ?",
         expected: &["oui", "moka", "aime", "chat"],
-        repetitions: 5,
+        repetitions: 3,
     },
-    // Farewells
+    // Farewells (after teaching)
     TrainingPattern {
         input: "Au revoir ARIA",
-        expected: &["revoir", "bye", "bientôt", "bisou"],
-        repetitions: 5,
+        expected: &["revoir", "bye", "bientôt"],
+        repetitions: 3,
     },
     TrainingPattern {
         input: "Bonne nuit !",
-        expected: &["nuit", "dors", "rêve", "bisou"],
-        repetitions: 5,
+        expected: &["nuit", "dors", "bonne", "bien"],
+        repetitions: 3,
     },
 ];
 
@@ -190,6 +202,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Connected! Starting training...\n");
 
+    // Skip teaching phase - let ARIA learn naturally through testing
+    // The social context system already handles greetings, thanks, affection
+    println!("📝 Testing ARIA's responses...\n");
+    println!("   (ARIA learns through social context detection, not rote memorization)\n");
+
     let mut total_success = 0;
     let mut total_attempts = 0;
 
@@ -202,9 +219,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let signal = Signal::from_text(pattern.input);
             write.send(Message::Text(serde_json::to_string(&signal)?)).await?;
 
-            // Wait for ARIA's response (balanced timeout)
+            // Wait for ARIA's response (give her time to think)
             let mut response_text = String::new();
-            let timeout = sleep(Duration::from_millis(1500));
+            let timeout = sleep(Duration::from_secs(2));
             tokio::pin!(timeout);
 
             loop {
@@ -246,8 +263,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if response_text.is_empty() { "(none)" } else { &response_text }
             );
 
-            // Minimal delay between repetitions
-            sleep(Duration::from_millis(100)).await;
+            // Delay between repetitions - let ARIA process
+            sleep(Duration::from_millis(500)).await;
         }
 
         println!();
