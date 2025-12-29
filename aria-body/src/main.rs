@@ -273,11 +273,10 @@ async fn run_visual_mode() -> Result<(), Box<dyn std::error::Error>> {
                     let stats = visualizer::BrainStats {
                         tick: json.get("tick").and_then(|v| v.as_u64()).unwrap_or(0),
                         alive_cells: json.get("alive_cells").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+                        sleeping_cells: json.get("sleeping_cells").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
                         total_energy: json.get("total_energy").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
                         entropy: json.get("entropy").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
-                        active_clusters: json.get("active_clusters").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
                         dominant_emotion: json.get("dominant_emotion").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                        signals_per_second: json.get("signals_per_second").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
                         mood: json.get("mood").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                         happiness: json.get("happiness").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
                         arousal: json.get("arousal").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,

@@ -39,12 +39,11 @@ pub struct AriaVisualizer {
 pub struct BrainStats {
     pub tick: u64,
     pub alive_cells: usize,
+    pub sleeping_cells: usize,
     pub total_energy: f32,
     pub entropy: f32,
-    pub active_clusters: usize,
     pub dominant_emotion: String,
-    pub signals_per_second: f32,
-    // Emotional state (new in v0.1.6)
+    // Emotional state
     pub mood: String,
     pub happiness: f32,
     pub arousal: f32,
@@ -78,7 +77,9 @@ impl AriaVisualizer {
         self.entropy_history.push((stats.entropy * 100.0) as u64);
         self.entropy_history.remove(0);
 
-        self.activity_history.push(stats.signals_per_second as u64);
+        // Activity = awake cells (alive - sleeping)
+        let awake_cells = stats.alive_cells.saturating_sub(stats.sleeping_cells);
+        self.activity_history.push(awake_cells as u64);
         self.activity_history.remove(0);
     }
 
@@ -176,9 +177,9 @@ impl AriaVisualizer {
             .label(format!("{:.2}", self.current_stats.entropy));
         frame.render_widget(entropy_gauge, chunks[1]);
 
-        // Activity sparkline
+        // Awake cells sparkline
         let activity = Sparkline::default()
-            .block(Block::default().title(" Activity ").borders(Borders::ALL))
+            .block(Block::default().title(" Awake ").borders(Borders::ALL))
             .data(&self.activity_history)
             .style(Style::default().fg(Color::Yellow));
         frame.render_widget(activity, chunks[2]);
