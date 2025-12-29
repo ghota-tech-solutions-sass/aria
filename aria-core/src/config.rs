@@ -82,12 +82,16 @@ impl Default for PopulationConfig {
 }
 
 /// Metabolism (energy flow)
+///
+/// "La Vraie Faim" - Cells must struggle to survive.
+/// No free energy, actions cost, only resonance feeds.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MetabolismConfig {
-    /// Energy consumed per tick (just existing costs energy)
+    /// Base energy consumed per tick (just breathing costs energy)
     pub energy_consumption: f32,
 
-    /// Passive energy gain per tick ("photosynthesis")
+    /// Passive energy gain per tick - SET TO 0 FOR TRUE LIFE
+    /// In nature, nothing is free.
     pub energy_gain: f32,
 
     /// Maximum energy a cell can hold
@@ -98,16 +102,49 @@ pub struct MetabolismConfig {
 
     /// Energy given to child on division
     pub child_energy: f32,
+
+    // === ACTION COSTS (La Vraie Faim) ===
+
+    /// Cost to emit a signal (speaking is expensive!)
+    pub cost_signal: f32,
+
+    /// Cost to divide (creating life is exhausting)
+    pub cost_divide: f32,
+
+    /// Cost to move in semantic space
+    pub cost_move: f32,
+
+    /// Cost to just rest (breathing)
+    pub cost_rest: f32,
+
+    // === SIGNAL ENERGY ===
+
+    /// Base energy gain from signals (reduced from 0.05)
+    pub signal_energy_base: f32,
+
+    /// Resonance multiplier (coherent signals give more energy)
+    pub signal_resonance_factor: f32,
 }
 
 impl Default for MetabolismConfig {
     fn default() -> Self {
         Self {
-            energy_consumption: 0.0001,
-            energy_gain: 0.00005,
+            // Base metabolism - NO FREE LUNCH
+            energy_consumption: 0.0,    // Replaced by action costs
+            energy_gain: 0.0,           // NO PASSIVE GAIN - must earn it!
             energy_cap: 1.5,
-            reproduction_threshold: 0.6,
-            child_energy: 0.5,
+            reproduction_threshold: 0.8, // Higher threshold - must be strong to divide
+            child_energy: 0.3,           // Children start weaker
+
+            // Action costs - "La Vraie Faim"
+            cost_signal: 0.01,   // Speaking costs energy
+            cost_divide: 0.5,    // Creating life is exhausting
+            cost_move: 0.005,    // Moving costs energy
+            cost_rest: 0.001,    // Just breathing costs energy
+
+            // Signal energy - quality over quantity
+            signal_energy_base: 0.005,      // 10x less than before
+            signal_resonance_factor: 2.0,   // Resonant signals give 2x
         }
     }
 }

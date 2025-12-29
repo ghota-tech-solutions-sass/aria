@@ -62,6 +62,8 @@ impl CpuBackend {
     }
 
     /// Process a single cell for one tick
+    ///
+    /// "La Vraie Faim" - Cells must struggle to survive.
     fn process_cell(
         cell: &mut Cell,
         state: &mut CellState,
@@ -72,6 +74,9 @@ impl CpuBackend {
     ) -> Option<CellAction> {
         // Skip sleeping cells unless they receive a signal
         if cell.activity.sleeping {
+            // Sleeping cells still consume a tiny bit (hibernation cost)
+            state.energy -= config.metabolism.cost_rest * 0.1;
+
             // Check if any signal should wake this cell
             let max_stimulus: f32 = signals
                 .iter()
@@ -82,7 +87,11 @@ impl CpuBackend {
             if cell.activity.should_wake(max_stimulus, sleep_config) {
                 cell.activity.wake();
             } else {
-                // Stay asleep
+                // Stay asleep - but check for death even while sleeping
+                if state.energy <= 0.0 {
+                    state.set_dead();
+                    return Some(CellAction::Die);
+                }
                 cell.activity.update(0.0, 0.0, sleep_config);
                 return None;
             }
@@ -94,13 +103,11 @@ impl CpuBackend {
         // Age
         cell.age += 1;
 
-        // Metabolism
-        state.energy -= config.metabolism.energy_consumption;
-        state.energy += config.metabolism.energy_gain;
-        state.energy = state.energy.min(config.metabolism.energy_cap);
-
-        // Process signals
+        // === LA VRAIE FAIM: Process signals with RESONANCE ===
         for signal in signals {
+            // Calculate resonance: how similar is this signal to cell's state?
+            let resonance = Self::calculate_resonance(&signal.content, &state.state);
+
             for (i, s) in signal.content.iter().enumerate() {
                 if i < SIGNAL_DIMS {
                     let reaction = dna.reactions[i];
@@ -117,8 +124,13 @@ impl CpuBackend {
                 }
             }
 
-            // Energy from interaction
-            state.energy += signal.intensity * 0.05;
+            // === ENERGY FROM RESONANCE ===
+            // Only coherent signals give meaningful energy
+            // resonance ranges from 0.0 (noise) to 1.0 (perfect match)
+            let energy_gain = config.metabolism.signal_energy_base
+                * signal.intensity
+                * (1.0 + resonance * config.metabolism.signal_resonance_factor);
+            state.energy += energy_gain;
         }
 
         // Normalize state
@@ -138,7 +150,7 @@ impl CpuBackend {
             state.set_sleeping(true);
         }
 
-        // Death check
+        // Death check BEFORE action
         if state.energy <= 0.0 {
             state.set_dead();
             return Some(CellAction::Die);
@@ -149,10 +161,67 @@ impl CpuBackend {
 
         if state.tension > action_threshold {
             state.tension = 0.0;
-            return Some(Self::choose_action(state, dna, config));
+            let action = Self::choose_action(state, dna, config);
+
+            // === LA VRAIE FAIM: Actions cost energy ===
+            let action_cost = match &action {
+                CellAction::Signal(_) => config.metabolism.cost_signal,
+                CellAction::Divide => config.metabolism.cost_divide,
+                CellAction::Move(_) => config.metabolism.cost_move,
+                CellAction::Rest => config.metabolism.cost_rest,
+                CellAction::Die => 0.0,
+                CellAction::Connect(_) => config.metabolism.cost_signal * 0.5,
+            };
+            state.energy -= action_cost;
+
+            // Cap energy
+            state.energy = state.energy.clamp(0.0, config.metabolism.energy_cap);
+
+            // Check death after action cost
+            if state.energy <= 0.0 {
+                state.set_dead();
+                return Some(CellAction::Die);
+            }
+
+            return Some(action);
+        }
+
+        // Resting still costs energy (breathing)
+        state.energy -= config.metabolism.cost_rest;
+        state.energy = state.energy.clamp(0.0, config.metabolism.energy_cap);
+
+        // Final death check
+        if state.energy <= 0.0 {
+            state.set_dead();
+            return Some(CellAction::Die);
         }
 
         Some(CellAction::Rest)
+    }
+
+    /// Calculate resonance between a signal and cell state
+    ///
+    /// Returns 0.0 for noise, 1.0 for perfect match.
+    /// Cells that receive signals matching their internal state gain more energy.
+    fn calculate_resonance(signal: &[f32; SIGNAL_DIMS], state: &[f32; STATE_DIMS]) -> f32 {
+        // Cosine similarity between signal and first SIGNAL_DIMS of state
+        let mut dot = 0.0f32;
+        let mut norm_sig = 0.0f32;
+        let mut norm_state = 0.0f32;
+
+        for i in 0..SIGNAL_DIMS {
+            dot += signal[i] * state[i];
+            norm_sig += signal[i] * signal[i];
+            norm_state += state[i] * state[i];
+        }
+
+        let denom = (norm_sig * norm_state).sqrt();
+        if denom > 0.001 {
+            // Map from [-1, 1] to [0, 1]
+            (dot / denom + 1.0) * 0.5
+        } else {
+            0.5 // Neutral if no signal or state
+        }
     }
 
     /// Choose an action based on state and DNA

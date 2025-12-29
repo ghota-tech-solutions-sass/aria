@@ -24,29 +24,49 @@ use aria_core::traits::{BackendStats, ComputeBackend};
 use bytemuck::{Pod, Zeroable};
 
 /// GPU-compatible config (matches shader struct)
+/// "La Vraie Faim" - action costs and resonance-based energy
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 #[repr(C)]
 struct GpuConfig {
-    energy_consumption: f32,
-    energy_gain: f32,
+    // Basic metabolism
     energy_cap: f32,
     reaction_amplification: f32,
     state_cap: f32,
-    tick: u32,
     signal_radius: f32,
+
+    // Action costs (La Vraie Faim)
+    cost_rest: f32,
+    cost_signal: f32,
+    cost_move: f32,
+    cost_divide: f32,
+
+    // Signal energy (resonance-based)
+    signal_energy_base: f32,
+    signal_resonance_factor: f32,
+
+    tick: u32,
     _pad: f32,
 }
 
 impl GpuConfig {
     fn from_config(config: &AriaConfig, tick: u64) -> Self {
         Self {
-            energy_consumption: config.metabolism.energy_consumption,
-            energy_gain: config.metabolism.energy_gain,
             energy_cap: config.metabolism.energy_cap,
             reaction_amplification: config.signals.reaction_amplification,
             state_cap: config.signals.state_cap,
-            tick: tick as u32,
             signal_radius: config.signals.signal_radius,
+
+            // Action costs
+            cost_rest: config.metabolism.cost_rest,
+            cost_signal: config.metabolism.cost_signal,
+            cost_move: config.metabolism.cost_move,
+            cost_divide: config.metabolism.cost_divide,
+
+            // Signal energy
+            signal_energy_base: config.metabolism.signal_energy_base,
+            signal_resonance_factor: config.metabolism.signal_resonance_factor,
+
+            tick: tick as u32,
             _pad: 0.0,
         }
     }
@@ -944,9 +964,10 @@ impl ComputeBackend for GpuBackend {
 // ============================================================================
 
 /// Cell update compute shader
+/// "La Vraie Faim" - cells must struggle to survive
 pub const CELL_UPDATE_SHADER: &str = r#"
 // Cell update compute shader for ARIA
-// Updates cell states in parallel on the GPU
+// "La Vraie Faim" - cells must struggle to survive
 
 struct CellState {
     position: array<f32, 16>,
@@ -959,13 +980,23 @@ struct CellState {
 }
 
 struct Config {
-    energy_consumption: f32,
-    energy_gain: f32,
+    // Basic metabolism
     energy_cap: f32,
     reaction_amplification: f32,
     state_cap: f32,
-    tick: u32,
     signal_radius: f32,
+
+    // Action costs (La Vraie Faim)
+    cost_rest: f32,
+    cost_signal: f32,
+    cost_move: f32,
+    cost_divide: f32,
+
+    // Signal energy
+    signal_energy_base: f32,
+    signal_resonance_factor: f32,
+
+    tick: u32,
     _pad: f32,
 }
 
@@ -981,16 +1012,26 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     var cell = cells[cell_idx];
+    let is_sleeping = (cell.flags & 1u) != 0u;
+    let is_dead = (cell.flags & 32u) != 0u;
 
-    // Check if sleeping (bit 0) or dead (bit 5)
-    if (cell.flags & 1u) != 0u || (cell.flags & 32u) != 0u {
+    // Skip dead cells
+    if is_dead {
         return;
     }
 
-    // Metabolism
-    cell.energy -= config.energy_consumption;
-    cell.energy += config.energy_gain;
-    cell.energy = clamp(cell.energy, 0.0, config.energy_cap);
+    // Sleeping cells still consume (hibernation cost)
+    if is_sleeping {
+        cell.energy -= config.cost_rest * 0.1;
+        if cell.energy <= 0.0 {
+            cell.flags = cell.flags | 32u; // Die
+        }
+        cells[cell_idx] = cell;
+        return;
+    }
+
+    // === LA VRAIE FAIM: Resting costs energy (breathing) ===
+    cell.energy -= config.cost_rest;
 
     // Death check
     if cell.energy <= 0.0 {
@@ -1006,16 +1047,15 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     cell.activity_level *= 0.99;
 
     // Action check - if tension exceeds threshold, reset it
-    // This allows cells to eventually become inactive and sleep
     if cell.tension > 1.0 {
         cell.tension = 0.0;
-        // No activity boost here - let cells naturally decay to sleep
+        // Actions would cost more energy (handled in CPU for now)
     }
 
-    // Decay tension when activity is low - more aggressive decay
+    // Decay tension when activity is low
     if cell.activity_level < 0.1 {
-        cell.tension *= 0.9;  // Faster decay
-        cell.tension -= 0.005; // Also subtract a bit
+        cell.tension *= 0.9;
+        cell.tension -= 0.005;
         if cell.tension < 0.0 {
             cell.tension = 0.0;
         }
@@ -1035,6 +1075,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         }
     }
 
+    // Cap energy
+    cell.energy = clamp(cell.energy, 0.0, config.energy_cap);
+
     // Sleep if inactive (low activity AND low tension)
     if cell.activity_level < 0.05 && cell.tension < 0.1 {
         cell.flags = cell.flags | 1u;
@@ -1045,8 +1088,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 "#;
 
 /// Signal propagation compute shader
+/// "La Vraie Faim" - resonance-based energy gain
 pub const SIGNAL_PROPAGATE_SHADER: &str = r#"
 // Signal propagation for ARIA
+// "La Vraie Faim" - only resonant signals give energy
 
 struct SignalFragment {
     source_id_low: u32,
@@ -1067,19 +1112,49 @@ struct CellState {
 }
 
 struct Config {
-    energy_consumption: f32,
-    energy_gain: f32,
+    // Basic metabolism
     energy_cap: f32,
     reaction_amplification: f32,
     state_cap: f32,
-    tick: u32,
     signal_radius: f32,
+
+    // Action costs (La Vraie Faim)
+    cost_rest: f32,
+    cost_signal: f32,
+    cost_move: f32,
+    cost_divide: f32,
+
+    // Signal energy
+    signal_energy_base: f32,
+    signal_resonance_factor: f32,
+
+    tick: u32,
     _pad: f32,
 }
 
 @group(0) @binding(0) var<storage, read_write> cells: array<CellState>;
 @group(0) @binding(1) var<storage, read> signals: array<SignalFragment>;
 @group(0) @binding(2) var<uniform> config: Config;
+
+// Calculate resonance between signal and cell state (cosine similarity)
+fn calculate_resonance(signal_content: array<f32, 8>, cell_state: array<f32, 32>) -> f32 {
+    var dot: f32 = 0.0;
+    var norm_sig: f32 = 0.0;
+    var norm_state: f32 = 0.0;
+
+    for (var i = 0u; i < 8u; i++) {
+        dot += signal_content[i] * cell_state[i];
+        norm_sig += signal_content[i] * signal_content[i];
+        norm_state += cell_state[i] * cell_state[i];
+    }
+
+    let denom = sqrt(norm_sig * norm_state);
+    if denom > 0.001 {
+        // Map from [-1, 1] to [0, 1]
+        return (dot / denom + 1.0) * 0.5;
+    }
+    return 0.5; // Neutral if no signal or state
+}
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -1132,7 +1207,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                 for (var i = 0u; i < 8u; i++) {
                     cell.state[i] += signal.content[i] * intensity;
                 }
-                cell.energy = min(cell.energy + intensity * 0.05, config.energy_cap);
+
+                // === LA VRAIE FAIM: Resonance-based energy gain ===
+                let resonance = calculate_resonance(signal.content, cell.state);
+                let energy_gain = config.signal_energy_base
+                    * intensity
+                    * (1.0 + resonance * config.signal_resonance_factor);
+                cell.energy = min(cell.energy + energy_gain, config.energy_cap);
+
                 cell.activity_level += intensity;
                 received_signal = true;
             }
@@ -1204,7 +1286,8 @@ mod tests {
 
     #[test]
     fn test_gpu_config_size() {
-        assert_eq!(std::mem::size_of::<GpuConfig>(), 32);
+        // 12 f32 fields = 48 bytes (La Vraie Faim config)
+        assert_eq!(std::mem::size_of::<GpuConfig>(), 48);
     }
 
     #[test]
