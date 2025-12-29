@@ -35,8 +35,28 @@ tasks:
     dir: aria-brain
     env:
       ARIA_PORT: '{{.BRAIN_PORT}}'
+      ARIA_CELLS: '{{.ARIA_CELLS | default "10000"}}'
     cmds:
       - cargo run --release
+
+  brain-50k:
+    desc: Start the brain with 50k cells
+    dir: aria-brain
+    env:
+      ARIA_PORT: '{{.BRAIN_PORT}}'
+      ARIA_CELLS: '50000'
+    cmds:
+      - cargo run --release
+
+  brain-gpu:
+    desc: Start the brain with GPU acceleration
+    dir: aria-brain
+    env:
+      ARIA_PORT: '{{.BRAIN_PORT}}'
+      ARIA_GPU: '1'
+      ARIA_CELLS: '{{.ARIA_CELLS | default "100000"}}'
+    cmds:
+      - cargo run --release --features cuda
 
   body:
     desc: Start the body interface

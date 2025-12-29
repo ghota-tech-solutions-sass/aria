@@ -219,9 +219,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let signal = Signal::from_text(pattern.input);
             write.send(Message::Text(serde_json::to_string(&signal)?)).await?;
 
-            // Wait for ARIA's response (give her time to think)
+            // Wait for ARIA's response (faster brain = faster response)
             let mut response_text = String::new();
-            let timeout = sleep(Duration::from_secs(2));
+            let timeout = sleep(Duration::from_millis(800));
             tokio::pin!(timeout);
 
             loop {
@@ -263,8 +263,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if response_text.is_empty() { "(none)" } else { &response_text }
             );
 
-            // Delay between repetitions - let ARIA process
-            sleep(Duration::from_millis(500)).await;
+            // Delay between repetitions
+            sleep(Duration::from_millis(200)).await;
         }
 
         println!();

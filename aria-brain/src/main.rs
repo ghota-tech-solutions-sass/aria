@@ -1,13 +1,14 @@
 //! ARIA Brain - The Living Substrate
 //!
 //! This is where ARIA's cells live, evolve, and think.
-//! The brain runs on the GPU-enabled machine for maximum parallel processing.
+//! Supports GPU acceleration with automatic CPU fallback.
 
 mod cell;
 mod substrate;
 mod signal;
 mod memory;
 mod connection;
+mod config;
 
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -18,10 +19,9 @@ use tracing::{info, warn, Level};
 use substrate::Substrate;
 use signal::Signal;
 use memory::LongTermMemory;
+use config::{Config, print_banner};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const DEFAULT_PORT: u16 = 8765;
-const INITIAL_CELLS: usize = 10_000;
 
 #[tokio::main]
 async fn main() {
@@ -29,6 +29,9 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_max_level(Level::INFO)
         .init();
+
+    // Load configuration with GPU detection
+    let config = Config::from_env();
 
     println!();
     println!("╔═══════════════════════════════════════════════════════════╗");
@@ -44,7 +47,8 @@ async fn main() {
     println!("║    Brain v{}                                           ║", VERSION);
     println!("║                                                           ║");
     println!("╚═══════════════════════════════════════════════════════════╝");
-    println!();
+
+    print_banner(&config);
 
     // Load or create long-term memory
     let memory_path = std::path::Path::new("data/aria.memory");
@@ -53,9 +57,9 @@ async fn main() {
         LongTermMemory::load_or_create(memory_path)
     ));
 
-    // Create the substrate with initial cells
-    let substrate = Arc::new(Substrate::new(INITIAL_CELLS, memory.clone()));
-    info!("Substrate created with {} primordial cells", INITIAL_CELLS);
+    // Create the substrate with configured cell count
+    let substrate = Arc::new(Substrate::new(config.cell_count, memory.clone()));
+    info!("Substrate created with {} cells ({:?} backend)", config.cell_count, config.backend);
 
     // Channels for perception (input) and expression (output)
     let (perception_tx, _) = broadcast::channel::<Signal>(1000);
@@ -181,21 +185,16 @@ async fn main() {
 
     let routes = ws_route.or(health).or(stats).or(words).or(associations);
 
-    let port = std::env::var("ARIA_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(DEFAULT_PORT);
-
-    info!("WebSocket ready on ws://0.0.0.0:{}/aria", port);
-    info!("Health check on http://0.0.0.0:{}/health", port);
-    info!("Stats on http://0.0.0.0:{}/stats", port);
-    info!("Words on http://0.0.0.0:{}/words", port);
-    info!("Associations on http://0.0.0.0:{}/associations", port);
+    info!("WebSocket ready on ws://0.0.0.0:{}/aria", config.port);
+    info!("Health check on http://0.0.0.0:{}/health", config.port);
+    info!("Stats on http://0.0.0.0:{}/stats", config.port);
+    info!("Words on http://0.0.0.0:{}/words", config.port);
+    info!("Associations on http://0.0.0.0:{}/associations", config.port);
     println!();
     println!("🧒 ARIA is waiting for her first interaction...");
     println!();
 
-    warp::serve(routes).run(([0, 0, 0, 0], port)).await;
+    warp::serve(routes).run(([0, 0, 0, 0], config.port)).await;
 }
 
 async fn evolution_loop(
@@ -251,8 +250,8 @@ async fn evolution_loop(
 
         tick += 1;
 
-        // ~100 ticks per second
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        // ~500 ticks per second (fast mode)
+        tokio::time::sleep(tokio::time::Duration::from_millis(2)).await;
     }
 }
 

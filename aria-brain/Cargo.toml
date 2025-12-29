@@ -25,12 +25,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # GPU support (optional, for RTX 2070)
-[target.'cfg(target_os = "linux")'.dependencies]
-# cudarc = { version = "0.10", optional = true }
+cudarc = { version = "0.11", optional = true }
 
 [features]
 default = []
-# cuda = ["cudarc"]
+cuda = ["cudarc"]
 
 [[bin]]
 name = "aria-brain"
