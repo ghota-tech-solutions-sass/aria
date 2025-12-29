@@ -24,8 +24,7 @@ pub use strategy::{StrategyType, ExplorationStrategy};
 pub use goals::{InternalGoal, GoalType};
 pub use progress::{ProgressTracker, LearningTrend};
 pub use self_modifier::{
-    ModifiableParam, MetricsSnapshot, SelfModification,
-    CurrentParams, SelfModifier,
+    ModifiableParam, CurrentParams, SelfModifier,
 };
 
 use serde::{Deserialize, Serialize};
@@ -80,6 +79,7 @@ impl Default for MetaLearnerConfig {
     }
 }
 
+#[allow(dead_code)]
 impl MetaLearner {
     pub fn new() -> Self {
         // Initialize all strategies

@@ -24,6 +24,7 @@ use visualizer::AriaVisualizer;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone)]
+#[allow(dead_code)]
 enum UiMode {
     Simple,      // Just text chat
     Visual,      // Full TUI with stats

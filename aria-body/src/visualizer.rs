@@ -40,6 +40,7 @@ pub struct AriaVisualizer {
 }
 
 #[derive(Default, Clone)]
+#[allow(dead_code)]
 pub struct BrainStats {
     pub tick: u64,
     pub alive_cells: usize,

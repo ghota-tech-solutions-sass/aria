@@ -59,3 +59,9 @@ base64 = "0.22"
 # Core crate (internal)
 aria-core = { path = "aria-core" }
 aria-compute = { path = "aria-compute" }
+
+# Release profile for optimized builds
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

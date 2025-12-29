@@ -22,7 +22,7 @@ use aria_core::activity::SleepConfig;
 use aria_core::cell::{Cell, CellAction, CellState};
 use aria_core::config::AriaConfig;
 use aria_core::dna::DNA;
-use aria_core::error::{AriaError, AriaResult};
+use aria_core::error::AriaResult;
 use aria_core::signal::{Signal, SignalFragment, SignalType};
 use aria_core::traits::{BackendStats, ComputeBackend};
 use aria_core::{POSITION_DIMS, SIGNAL_DIMS, STATE_DIMS};
@@ -305,7 +305,7 @@ impl ComputeBackend for CpuBackend {
 
     fn detect_emergence(
         &self,
-        cells: &[Cell],
+        _cells: &[Cell],
         states: &[CellState],
         config: &AriaConfig,
     ) -> AriaResult<Vec<Signal>> {
@@ -320,7 +320,7 @@ impl ComputeBackend for CpuBackend {
         let active: Vec<(usize, &CellState)> = states
             .iter()
             .enumerate()
-            .filter(|(i, s)| {
+            .filter(|(_i, s)| {
                 !s.is_sleeping()
                     && !s.is_dead()
                     && s.activity_level > config.emergence.activation_threshold

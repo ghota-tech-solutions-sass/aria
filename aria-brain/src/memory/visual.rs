@@ -27,6 +27,7 @@ pub struct VisualMemory {
     pub source: String,
 }
 
+#[allow(dead_code)]
 impl VisualMemory {
     pub fn new(id: u64, signature: [f32; 32], description: String, source: String, tick: u64, emotional_context: f32) -> Self {
         Self {

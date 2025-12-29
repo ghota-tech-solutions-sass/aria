@@ -21,7 +21,6 @@ use bytemuck::{Pod, Zeroable};
 use serde::{Deserialize, Serialize};
 
 use crate::activity::ActivityState;
-use crate::dna::DNA;
 use crate::{POSITION_DIMS, STATE_DIMS};
 
 /// Core cell metadata (CPU-side, 32 bytes)

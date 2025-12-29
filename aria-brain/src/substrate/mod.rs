@@ -42,7 +42,7 @@ mod lifecycle;
 // Re-exports for convenience
 pub use types::{AdaptiveParams, SubstrateStats, RecentWord, STOP_WORDS, EMISSION_COOLDOWN_TICKS};
 pub use emotion::EmotionalState;
-pub use conversation::{ConversationContext, ConversationExchange};
+pub use conversation::ConversationContext;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -55,7 +55,7 @@ use aria_core::{
     Cell, CellState, CellAction, DNA,
     SignalFragment,
     AriaConfig, ActivityTracker,
-    POSITION_DIMS, STATE_DIMS, SIGNAL_DIMS,
+    POSITION_DIMS, SIGNAL_DIMS,
 };
 use aria_core::traits::ComputeBackend;
 

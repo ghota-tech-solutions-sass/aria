@@ -25,12 +25,11 @@ pub use vocabulary::{WordFrequency, WordAssociation, SemanticCluster, WordMeanin
 pub use episodic::{Episode, EpisodeEmotion, EpisodeCategory, CompressedEpisode};
 pub use visual::{VisualMemory, VisualWordLink};
 pub use exploration::ExplorationResult;
-pub use hierarchy::{WorkingMemory, ShortTermMemory, WorkingContent, WorkingMemoryItem, ShortTermItem};
+pub use hierarchy::{WorkingMemory, ShortTermMemory, WorkingContent};
 
 // Re-export meta_learning types for external use
 pub use crate::meta_learning::{
-    MetaLearner, InternalReward, StrategyType, ProgressTracker, LearningTrend,
-    SelfModifier, SelfModification, ModifiableParam, CurrentParams,
+    MetaLearner, InternalReward, SelfModifier, ModifiableParam, CurrentParams,
 };
 
 use aria_core::DNA;
@@ -236,6 +235,7 @@ pub struct LongTermMemory {
     pub working: WorkingMemory,
 }
 
+#[allow(dead_code)]
 impl LongTermMemory {
     pub fn new() -> Self {
         Self {

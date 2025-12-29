@@ -98,6 +98,7 @@ struct MetaStats {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct StrategyStats {
     #[serde(rename = "type")]
     strategy_type: String,
@@ -115,6 +116,7 @@ struct GoalStats {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct ProgressStats {
     learning_quality: f32,
     competence_level: f32,

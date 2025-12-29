@@ -246,6 +246,7 @@ impl Default for VisualPerception {
     }
 }
 
+#[allow(dead_code)]
 impl VisualPerception {
     pub fn new() -> Self {
         Self {

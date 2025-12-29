@@ -21,6 +21,7 @@ pub enum ModifiableParam {
     ExplorationRate,
 }
 
+#[allow(dead_code)]
 impl ModifiableParam {
     pub fn all() -> &'static [ModifiableParam] {
         &[
@@ -178,6 +179,7 @@ pub struct SelfModifier {
     pub successful_modifications: u64,
 }
 
+#[allow(dead_code)]
 impl SelfModifier {
     pub fn new() -> Self {
         Self {

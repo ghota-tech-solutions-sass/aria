@@ -25,6 +25,7 @@ use aria_core::POSITION_DIMS;
 /// Spatial hash for efficient neighbor lookup
 pub struct SpatialHash {
     /// Grid resolution (cells per dimension)
+    #[allow(dead_code)]
     resolution: usize,
 
     /// Cell indices by region

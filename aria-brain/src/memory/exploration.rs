@@ -19,6 +19,7 @@ pub struct ExplorationResult {
     pub last_attempt: u64,
 }
 
+#[allow(dead_code)]
 impl ExplorationResult {
     pub fn new(tick: u64, intensity: f32) -> Self {
         Self {

@@ -53,6 +53,7 @@ pub struct WorkingMemory {
     pub total_processed: u64,
 }
 
+#[allow(dead_code)]
 impl WorkingMemory {
     pub fn new() -> Self {
         Self::default()
@@ -157,6 +158,7 @@ pub struct ShortTermMemory {
     capacity: usize,
 }
 
+#[allow(dead_code)]
 impl ShortTermMemory {
     pub fn new(capacity: usize) -> Self {
         Self {

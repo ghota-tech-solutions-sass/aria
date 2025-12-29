@@ -31,7 +31,3 @@ chrono = "0.4"
 [[bin]]
 name = "aria-body"
 path = "src/main.rs"
-
-[profile.release]
-opt-level = 3
-lto = true

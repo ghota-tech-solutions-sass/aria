@@ -9,6 +9,7 @@ use crate::memory::SocialContext;
 
 /// A single exchange in conversation (input + optional response)
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct ConversationExchange {
     /// The user's input text
     pub input: String,
@@ -39,6 +40,7 @@ pub struct ConversationContext {
     pub exchange_count: u32,
 }
 
+#[allow(dead_code)]
 impl ConversationContext {
     /// Maximum number of exchanges to keep in memory
     pub const MAX_EXCHANGES: usize = 5;

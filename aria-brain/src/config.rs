@@ -37,6 +37,7 @@ impl Default for Config {
     }
 }
 
+#[allow(dead_code)]
 impl Config {
     /// Create config from environment variables and GPU detection
     pub fn from_env() -> Self {
