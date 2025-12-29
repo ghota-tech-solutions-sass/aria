@@ -1163,10 +1163,12 @@ impl Substrate {
             let is_conversation_start = self.conversation.read().is_conversation_start();
 
             // SOCIAL CONTEXT RESPONSES - respond appropriately to greetings, etc.
-            // - Greeting/Farewell: only at conversation start (exchanges 1-2)
+            // - Greeting: anytime (someone might say "coucou" to get attention)
+            // - Farewell: only at conversation start/end (exchanges 1-2)
             // - Thanks/Affection: anytime!
             let should_respond_socially = match social_context {
-                SocialContext::Greeting | SocialContext::Farewell => is_conversation_start,
+                SocialContext::Greeting => true,  // Greetings can happen anytime!
+                SocialContext::Farewell => is_conversation_start,
                 SocialContext::Thanks | SocialContext::Affection => true,
                 _ => false,
             };
