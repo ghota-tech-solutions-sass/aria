@@ -13,8 +13,8 @@ Cargo.lock
 # macOS
 .DS_Store
 
-# ARIA data (optional - you may want to keep memory)
-aria.memory
+# ARIA data (memory is local, not versioned)
+**/aria.memory
 
 # Logs
 *.log
