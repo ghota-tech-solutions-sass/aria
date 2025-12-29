@@ -845,6 +845,35 @@ ARIA: coucou~ ~    ← 12% de chance (2/17)
 
 ---
 
+### 2025-12-29 - Session 7f: Corrections et améliorations sociales
+
+**Bugs corrigés** :
+
+1. **"aria" répondait aux salutations**
+   - Problème : "aria" était appris comme mot de salutation car il apparaît dans "Salut ARIA !"
+   - Fix : Ne pas apprendre de contexte social pour les noms connus (Noun + familiarity > 0.5)
+   - Migration automatique : Nettoie les noms des contextes sociaux au chargement de la mémoire
+
+2. **"Coucou" ne déclenchait pas de réponse sociale**
+   - Problème : Les salutations ne fonctionnaient qu'aux échanges 1-2
+   - Fix : Les salutations peuvent maintenant déclencher une réponse à tout moment
+
+**Comportement final** :
+```
+Toi: Salut ARIA !
+ARIA: bonjour~ ~    ← Utilise un mot de salutation, pas "aria"
+
+[Plus tard dans la conversation]
+Toi: Coucou !
+ARIA: salut~ ~      ← Répond même si c'est l'échange #5
+```
+
+**Fichiers modifiés** :
+- `aria-brain/src/memory/mod.rs` : Protection des noms, migration automatique
+- `aria-brain/src/substrate.rs` : Greeting anytime
+
+---
+
 ## Résumé Session 2025-12-28 (soir)
 
 Une session très productive où ARIA a fait d'énormes progrès :
