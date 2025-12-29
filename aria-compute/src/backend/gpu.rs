@@ -137,6 +137,8 @@ pub struct GpuBackend {
 
     /// Current cell count
     cell_count: usize,
+    /// Maximum cell count (buffer capacity with headroom)
+    max_cell_count: usize,
     /// Is initialized?
     initialized: bool,
     /// Use sparse dispatch (enabled for large populations)
@@ -212,6 +214,7 @@ impl GpuBackend {
             bind_group_layout: None,
             sparse_bind_group_layout: None,
             cell_count: 0,
+            max_cell_count: 0,
             initialized: false,
             use_sparse_dispatch: use_sparse,
         })
@@ -223,13 +226,20 @@ impl GpuBackend {
         let dna_size = std::mem::size_of::<DNA>();
         let signal_size = std::mem::size_of::<SignalFragment>();
 
-        let cells_bytes = cell_size * cell_count;
-        let dna_bytes = dna_size * dna_count;
+        // Add 20% headroom for population fluctuations
+        let cell_count_with_headroom = cell_count + cell_count / 5;
+        let dna_count_with_headroom = dna_count + dna_count / 5;
+
+        let cells_bytes = cell_size * cell_count_with_headroom;
+        let dna_bytes = dna_size * dna_count_with_headroom;
         let max_signals = 1024; // Max signals per tick
         let signals_bytes = signal_size * max_signals;
 
-        // Sparse dispatch buffers
-        let active_indices_bytes = std::mem::size_of::<u32>() * cell_count;
+        // Store max capacity for bounds checking
+        self.max_cell_count = cell_count_with_headroom;
+
+        // Sparse dispatch buffers (also with headroom)
+        let active_indices_bytes = std::mem::size_of::<u32>() * cell_count_with_headroom;
         let counter_bytes = std::mem::size_of::<AtomicCounter>();
 
         let total_bytes = cells_bytes + dna_bytes + signals_bytes + active_indices_bytes + counter_bytes;
@@ -504,16 +514,28 @@ impl GpuBackend {
     /// Upload cell states to GPU
     fn upload_cells(&self, states: &[CellState]) {
         if let Some(buffer) = &self.cells_buffer {
+            // Bounds check: only upload up to max_cell_count
+            let safe_count = states.len().min(self.max_cell_count);
+            if safe_count < states.len() {
+                tracing::warn!(
+                    "⚠️ GPU: Truncating cell upload from {} to {} (buffer limit)",
+                    states.len(),
+                    safe_count
+                );
+            }
             self.queue
-                .write_buffer(buffer, 0, bytemuck::cast_slice(states));
+                .write_buffer(buffer, 0, bytemuck::cast_slice(&states[..safe_count]));
         }
     }
 
     /// Upload DNA pool to GPU
     fn upload_dna(&self, dna_pool: &[DNA]) {
         if let Some(buffer) = &self.dna_buffer {
+            // Bounds check: DNA buffer has same headroom as cells
+            let max_dna = self.max_cell_count;
+            let safe_count = dna_pool.len().min(max_dna);
             self.queue
-                .write_buffer(buffer, 0, bytemuck::cast_slice(dna_pool));
+                .write_buffer(buffer, 0, bytemuck::cast_slice(&dna_pool[..safe_count]));
         }
     }
 

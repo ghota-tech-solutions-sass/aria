@@ -74,7 +74,7 @@ impl Default for PopulationConfig {
         Self {
             target_population: 10_000,
             population_buffer: 2_000,
-            min_population: 1_000,
+            min_population: 100,  // Allow near-extinction for evolution pressure
             selection_interval: 10,
             mutation_rate: 0.1,
         }
