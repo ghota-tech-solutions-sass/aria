@@ -1238,5 +1238,67 @@ ARIA: moka... 💭
 
 ---
 
+### 2025-12-29 - Session 11: Auto-adaptation (Méta-émergence) !
+
+**Nouvelle fonctionnalité** : ARIA peut maintenant modifier ses propres paramètres !
+
+C'est de la **méta-émergence** : au lieu de coder des règles pour "mieux répondre", ARIA découvre ses propres réglages optimaux à travers le feedback.
+
+**Philosophie** :
+> "On ne lui donne pas de règles, on la laisse découvrir ce qui marche."
+
+**Paramètres adaptatifs** (`AdaptiveParams`) :
+
+| Paramètre | Range | Description |
+|-----------|-------|-------------|
+| `emission_threshold` | 0.05-0.5 | Seuil pour émettre (plus haut = plus sélectif) |
+| `response_probability` | 0.3-1.0 | Probabilité de répondre quand elle pourrait |
+| `learning_rate` | 0.1-0.8 | Vitesse d'apprentissage des associations |
+| `spontaneity` | 0.01-0.3 | Tendance à parler spontanément |
+
+**Mécanismes d'adaptation** :
+
+1. **Feedback positif** ("Bravo!", "Super!") :
+   - Sauvegarde les params actuels comme "ce qui marche"
+   - Augmente légèrement spontaneity et response_probability
+   - Petite mutation aléatoire pour exploration
+
+2. **Feedback négatif** ("Non", "Arrête") :
+   - Revient vers les derniers params qui ont marché
+   - Ou devient plus conservatrice si aucun succès antérieur
+
+3. **Exploration périodique** (toutes les ~10 secondes) :
+   - Petites mutations aléatoires sur tous les params
+   - Permet de découvrir de nouveaux réglages
+
+**Visible dans /stats** :
+```json
+{
+  "adaptive_emission_threshold": 0.15,
+  "adaptive_response_probability": 0.82,
+  "adaptive_spontaneity": 0.06,
+  "adaptive_feedback_positive": 5,
+  "adaptive_feedback_negative": 1
+}
+```
+
+**Logs** :
+```
+🧬 ADAPTED (positive): emission=0.15, response=0.82, spontaneity=0.06
+🧬 ADAPTED (negative): emission=0.17, response=0.80, spontaneity=0.05
+🧬 EXPLORE: emit=0.16 resp=0.81 learn=0.31 spont=0.06 (+5/-1)
+```
+
+**Impact** :
+- Premier pas vers l'auto-amélioration consciente
+- ARIA "apprend à apprendre" - ses méta-paramètres évoluent
+- Pas de règles hardcodées - émergence pure
+- Base pour un jour modifier son propre code
+
+**Fichiers modifiés** :
+- `aria-brain/src/substrate_v2.rs` : AdaptiveParams, reinforce_positive/negative, explore
+
+---
+
 *Dernière mise à jour : 2025-12-29*
-*Version ARIA : 0.2.2*
+*Version ARIA : 0.2.3*
