@@ -211,6 +211,7 @@ impl Default for SpatialInhibitor {
     }
 }
 
+#[allow(dead_code)]
 impl SpatialInhibitor {
     /// Create with custom grid size
     pub fn new(grid_size: usize) -> Self {
