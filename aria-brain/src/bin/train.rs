@@ -102,12 +102,12 @@ const PATTERNS: &[TrainingPattern] = &[
     // Thanks
     TrainingPattern {
         input: "Merci ARIA !",
-        expected: &["rien", "plaisir", "merci"],
+        expected: &["rien", "derien", "plaisir", "merci"],
         repetitions: 5,
     },
     TrainingPattern {
         input: "Merci beaucoup !",
-        expected: &["rien", "plaisir"],
+        expected: &["rien", "derien", "plaisir"],
         repetitions: 5,
     },
     // Affection
@@ -154,24 +154,24 @@ struct AriaResponse {
     intensity: f32,
 }
 
-/// Extract the word from a label like "word:moka" or "social:bonjour"
+/// Extract the word from a label like "word:moka" or "greeting:bonjour"
 fn extract_word(label: &str) -> String {
-    // Handle formats like "word:moka|emotion:♥" or "social:bonjour"
+    // Handle formats like "word:moka|emotion:♥" or "greeting:bonjour"
     let base = label.split('|').next().unwrap_or(label);
 
-    if let Some(word) = base.strip_prefix("word:") {
-        word.to_lowercase()
-    } else if let Some(word) = base.strip_prefix("social:") {
-        word.to_lowercase()
-    } else if let Some(word) = base.strip_prefix("phrase:") {
-        word.replace('+', " ").to_lowercase()
-    } else if let Some(word) = base.strip_prefix("answer:") {
-        word.replace('+', " ").to_lowercase()
-    } else if let Some(word) = base.strip_prefix("spontaneous:") {
-        word.to_lowercase()
-    } else {
-        base.to_lowercase()
+    // Try all known prefixes
+    let prefixes = [
+        "word:", "phrase:", "answer:", "spontaneous:",
+        "greeting:", "farewell:", "thanks:", "affection:", "social:",
+    ];
+
+    for prefix in prefixes {
+        if let Some(word) = base.strip_prefix(prefix) {
+            return word.replace('+', " ").to_lowercase();
+        }
     }
+
+    base.to_lowercase()
 }
 
 #[tokio::main]
