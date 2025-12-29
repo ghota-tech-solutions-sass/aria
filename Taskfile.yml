@@ -98,6 +98,15 @@ tasks:
     cmds:
       - curl -s http://{{.BRAIN_HOST}}:{{.BRAIN_PORT}}/associations | jq .
 
+  # TRAINING
+  train:
+    desc: Automatically train ARIA with common patterns
+    dir: aria-brain
+    env:
+      ARIA_BRAIN_URL: '{{.BRAIN_URL}}'
+    cmds:
+      - cargo run --release --bin aria-train
+
   # DATA MANAGEMENT
   reset:
     desc: Reset ARIA memory (start fresh)
