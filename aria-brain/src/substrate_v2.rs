@@ -1387,23 +1387,38 @@ impl SubstrateV2 {
         let emotional = self.emotional_state.read();
         let mut rng = rand::thread_rng();
 
+        // Get context words from conversation for boosting
+        let context_words: Vec<String> = {
+            let conv = self.conversation.read();
+            conv.get_topic_words()
+        };
+
         // Helper to check if word was recently said
         let was_recently_said = |word: &str| -> bool {
             recent_said.iter().any(|w| w.to_lowercase() == word.to_lowercase())
         };
 
-        // Collect ALL candidate words with their scores
+        // Helper to check if word is in current context (deserves boost)
+        let is_context_word = |word: &str| -> bool {
+            context_words.iter().any(|w| w.to_lowercase() == word.to_lowercase())
+        };
+
+        // Collect candidate words with their scores
+        // Use higher threshold (0.4) to reduce noise
         let mut candidates: Vec<(String, f32, f32)> = Vec::new(); // (word, similarity, valence)
 
-        // From recent words
+        // From recent words (most relevant - just heard)
         for rw in recent.iter() {
-            // Skip if we said this recently (diversity!)
             if was_recently_said(&rw.word) {
                 continue;
             }
 
-            let similarity = Self::vector_similarity(state, &rw.vector);
-            if similarity > 0.2 {
+            let mut similarity = Self::vector_similarity(state, &rw.vector);
+            // Boost context words significantly
+            if is_context_word(&rw.word) {
+                similarity = (similarity * 1.5).min(1.0);
+            }
+            if similarity > 0.35 {
                 let valence = memory.word_frequencies.get(&rw.word)
                     .map(|f| f.emotional_valence)
                     .unwrap_or(0.0);
@@ -1411,28 +1426,33 @@ impl SubstrateV2 {
             }
         }
 
-        // From learned words (memory)
-        for (word, freq) in memory.word_frequencies.iter() {
-            if was_recently_said(word) {
-                continue;
-            }
-            if candidates.iter().any(|(w, _, _)| w == word) {
-                continue; // Already added
-            }
-            let similarity = Self::vector_similarity(state, &freq.learned_vector);
-            if similarity > 0.2 {
-                candidates.push((word.clone(), similarity, freq.emotional_valence));
+        // From learned words (memory) - only if not enough recent candidates
+        if candidates.len() < 3 {
+            for (word, freq) in memory.word_frequencies.iter() {
+                if was_recently_said(word) {
+                    continue;
+                }
+                if candidates.iter().any(|(w, _, _)| w == word) {
+                    continue;
+                }
+                let mut similarity = Self::vector_similarity(state, &freq.learned_vector);
+                if is_context_word(word) {
+                    similarity = (similarity * 1.5).min(1.0);
+                }
+                if similarity > 0.35 {
+                    candidates.push((word.clone(), similarity, freq.emotional_valence));
+                }
             }
         }
 
-        // Weighted random selection (similarity^2 as weight for more bias toward good matches)
+        // Weighted random selection (similarity^3 for strong bias toward best matches)
         let chosen = if !candidates.is_empty() {
-            let total_weight: f32 = candidates.iter().map(|(_, s, _)| s * s).sum();
+            let total_weight: f32 = candidates.iter().map(|(_, s, _)| s * s * s).sum();
             if total_weight > 0.0 {
                 let mut pick = rng.gen::<f32>() * total_weight;
                 let mut selected = &candidates[0];
                 for candidate in &candidates {
-                    pick -= candidate.1 * candidate.1;
+                    pick -= candidate.1 * candidate.1 * candidate.1;
                     if pick <= 0.0 {
                         selected = candidate;
                         break;
@@ -1459,13 +1479,21 @@ impl SubstrateV2 {
             }
 
             // Build label
+            // For questions: only add oui/non if the word is relevant (high similarity)
+            // Otherwise, just respond with the word and a question mark
             let label = if was_question {
-                if valence > 0.3 {
-                    format!("answer:oui+{}", word)
-                } else if valence < -0.3 {
-                    format!("answer:non+{}", word)
+                if similarity > 0.5 {
+                    // Word is clearly related to the question
+                    if valence > 0.3 {
+                        format!("answer:oui+{}", word)
+                    } else if valence < -0.3 {
+                        format!("answer:non+{}", word)
+                    } else {
+                        format!("word:{}?", word)
+                    }
                 } else {
-                    format!("word:{}?", word)
+                    // Word is not strongly related - just respond with it
+                    format!("word:{}", word)
                 }
             } else {
                 format!("word:{}", word)

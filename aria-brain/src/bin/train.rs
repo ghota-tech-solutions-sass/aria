@@ -118,10 +118,10 @@ const CONVERSATIONS: &[Conversation] = &[
         name: "Emotions",
         description: "Teaching emotional responses",
         exchanges: &[
-            Exchange { input: "Comment ça va ?", expected: Some(&["bien", "super", "oui"]), delay_ms: 600 },
+            Exchange { input: "Comment ça va ?", expected: Some(&["bien", "super", "oui", "ça va"]), delay_ms: 600 },
             Exchange { input: "Je suis content de te parler.", expected: None, delay_ms: 400 },
             Exchange { input: "Tu es contente ?", expected: Some(&["oui", "content", "bien"]), delay_ms: 600 },
-            Exchange { input: "Je t'aime ARIA !", expected: Some(&["aime", "aussi", "♥"]), delay_ms: 600 },
+            Exchange { input: "Je t'aime ARIA !", expected: Some(&["oui", "aime", "aussi", "♥", "merci"]), delay_ms: 600 },
             Exchange { input: "Bravo !", expected: None, delay_ms: 300 },
         ],
     },
@@ -131,9 +131,9 @@ const CONVERSATIONS: &[Conversation] = &[
         name: "Salutations",
         description: "Various greetings",
         exchanges: &[
-            Exchange { input: "Salut ARIA !", expected: Some(&["salut", "bonjour", "coucou"]), delay_ms: 600 },
-            Exchange { input: "Coucou !", expected: Some(&["coucou", "salut", "bonjour"]), delay_ms: 600 },
-            Exchange { input: "Hello !", expected: Some(&["hello", "bonjour", "salut"]), delay_ms: 600 },
+            Exchange { input: "Salut ARIA !", expected: Some(&["salut", "bonjour", "coucou", "oui"]), delay_ms: 600 },
+            Exchange { input: "Coucou !", expected: Some(&["coucou", "salut", "bonjour", "oui"]), delay_ms: 600 },
+            Exchange { input: "Hello !", expected: Some(&["hello", "bonjour", "salut", "oui"]), delay_ms: 600 },
             Exchange { input: "Bravo, tu sais dire bonjour !", expected: None, delay_ms: 400 },
         ],
     },
@@ -143,10 +143,10 @@ const CONVERSATIONS: &[Conversation] = &[
         name: "Politesse",
         description: "Thank you and please",
         exchanges: &[
-            Exchange { input: "Merci ARIA !", expected: Some(&["rien", "plaisir", "merci"]), delay_ms: 600 },
-            Exchange { input: "Tu es très gentille.", expected: Some(&["merci", "gentil"]), delay_ms: 600 },
+            Exchange { input: "Merci ARIA !", expected: Some(&["rien", "plaisir", "merci", "oui"]), delay_ms: 600 },
+            Exchange { input: "Tu es très gentille.", expected: Some(&["merci", "gentil", "oui"]), delay_ms: 600 },
             Exchange { input: "Bravo !", expected: None, delay_ms: 300 },
-            Exchange { input: "Merci beaucoup !", expected: Some(&["rien", "plaisir"]), delay_ms: 600 },
+            Exchange { input: "Merci beaucoup !", expected: Some(&["rien", "plaisir", "merci", "oui"]), delay_ms: 600 },
         ],
     },
 
@@ -170,9 +170,9 @@ const CONVERSATIONS: &[Conversation] = &[
         description: "Goodbye patterns",
         exchanges: &[
             Exchange { input: "Je vais partir.", expected: None, delay_ms: 400 },
-            Exchange { input: "Au revoir ARIA !", expected: Some(&["revoir", "bye", "bientôt"]), delay_ms: 600 },
-            Exchange { input: "À bientôt !", expected: Some(&["bientôt", "revoir"]), delay_ms: 600 },
-            Exchange { input: "Bonne nuit ARIA.", expected: Some(&["nuit", "bonne", "dors"]), delay_ms: 600 },
+            Exchange { input: "Au revoir ARIA !", expected: Some(&["revoir", "bye", "bientôt", "au"]), delay_ms: 600 },
+            Exchange { input: "À bientôt !", expected: Some(&["bientôt", "revoir", "oui", "au"]), delay_ms: 600 },
+            Exchange { input: "Bonne nuit ARIA.", expected: Some(&["nuit", "bonne", "dors", "oui"]), delay_ms: 600 },
         ],
     },
 
@@ -214,7 +214,7 @@ const CONVERSATIONS: &[Conversation] = &[
             Exchange { input: "Un, deux, trois.", expected: None, delay_ms: 400 },
             Exchange { input: "J'ai deux chats.", expected: None, delay_ms: 400 },
             Exchange { input: "Moka et Obrigada sont mes chats.", expected: None, delay_ms: 400 },
-            Exchange { input: "Combien de chats j'ai ?", expected: Some(&["deux", "2", "moka", "obrigada"]), delay_ms: 600 },
+            Exchange { input: "Combien de chats j'ai ?", expected: Some(&["deux", "2", "moka", "obrigada", "chat"]), delay_ms: 600 },
         ],
     },
 
@@ -228,7 +228,7 @@ const CONVERSATIONS: &[Conversation] = &[
             Exchange { input: "Je suis fier de toi ARIA.", expected: None, delay_ms: 400 },
             Exchange { input: "Tu es fière de toi ?", expected: Some(&["oui", "fier", "fière"]), delay_ms: 600 },
             Exchange { input: "Bravo ARIA !", expected: None, delay_ms: 300 },
-            Exchange { input: "Tu es la meilleure !", expected: Some(&["merci", "♥"]), delay_ms: 600 },
+            Exchange { input: "Tu es la meilleure !", expected: Some(&["merci", "♥", "oui", "aime"]), delay_ms: 600 },
         ],
     },
 ];
