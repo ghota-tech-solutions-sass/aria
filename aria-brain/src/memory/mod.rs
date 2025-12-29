@@ -893,13 +893,17 @@ impl LongTermMemory {
                 Ok(data) => {
                     match bincode::deserialize(&data) {
                         Ok(memory) => {
-                            let mem: LongTermMemory = memory;
+                            let mut mem: LongTermMemory = memory;
                             tracing::info!(
                                 "Memory loaded: {} memories, {} patterns, {} elite DNA",
                                 mem.memories.len(),
                                 mem.learned_patterns.len(),
                                 mem.elite_dna.len()
                             );
+
+                            // Run migrations
+                            mem.migrate_clean_nouns_from_social_contexts();
+
                             return mem;
                         }
                         Err(e) => {
@@ -915,6 +919,36 @@ impl LongTermMemory {
 
         tracing::info!("Creating new memory");
         Self::new()
+    }
+
+    /// Migration: Remove social contexts from nouns
+    /// This fixes the bug where names like "aria" were learned as greeting words
+    fn migrate_clean_nouns_from_social_contexts(&mut self) {
+        let social_contexts = [
+            SocialContext::Greeting,
+            SocialContext::Farewell,
+            SocialContext::Thanks,
+            SocialContext::Affection,
+        ];
+
+        let mut cleaned = 0;
+        for (word, freq) in &mut self.word_frequencies {
+            if freq.category == WordCategory::Noun && freq.familiarity_boost > 0.3 {
+                // Remove social contexts from this noun
+                let before_len = freq.usage_pattern.contexts.len();
+                freq.usage_pattern.contexts.retain(|(ctx, _)| !social_contexts.contains(ctx));
+                let after_len = freq.usage_pattern.contexts.len();
+
+                if before_len != after_len {
+                    tracing::info!("Migration: Cleaned social contexts from noun '{}'", word);
+                    cleaned += 1;
+                }
+            }
+        }
+
+        if cleaned > 0 {
+            tracing::info!("Migration complete: Cleaned {} nouns from social contexts", cleaned);
+        }
     }
 
     pub fn save(&self, path: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
