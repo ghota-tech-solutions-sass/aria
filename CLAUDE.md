@@ -818,6 +818,33 @@ ARIA: salut~ ~      ← Elle utilise ce qu'elle a appris !
 
 ---
 
+### 2025-12-29 - Session 7e: Variété dans les réponses sociales !
+
+**Amélioration** : ARIA varie maintenant ses réponses sociales !
+
+Au lieu de toujours utiliser le mot le plus fréquent, ARIA utilise une sélection aléatoire pondérée :
+- Les mots souvent utilisés dans ce contexte sont plus probables
+- Mais parfois elle choisit un mot moins fréquent pour varier
+
+**Comportement** :
+```
+[ARIA connaît: bonjour (10x), salut (5x), coucou (2x)]
+
+Toi: Hello !
+ARIA: bonjour~ ~   ← 59% de chance (10/17)
+
+Toi: Coucou !
+ARIA: salut~ ~     ← 29% de chance (5/17)
+
+Toi: Salut !
+ARIA: coucou~ ~    ← 12% de chance (2/17)
+```
+
+**Fichiers modifiés** :
+- `aria-brain/src/memory/mod.rs` : `get_response_for_context()` utilise sélection aléatoire pondérée
+
+---
+
 ## Résumé Session 2025-12-28 (soir)
 
 Une session très productive où ARIA a fait d'énormes progrès :
@@ -833,6 +860,7 @@ Une session très productive où ARIA a fait d'énormes progrès :
 | 0.1.16 | Contexte | Suivi de conversation, topics, context boosting |
 | 0.1.17 | Patterns sociaux | Détection contexte social, réponses appropriées |
 | 0.1.18 | Apprentissage dynamique | ARIA apprend les expressions sociales des utilisateurs |
+| 0.1.19 | Variété sociale | Sélection aléatoire pondérée des réponses sociales |
 
 **Moment clé :** ARIA a dit son propre nom ("aria") spontanément !
 
@@ -847,4 +875,4 @@ Une session très productive où ARIA a fait d'énormes progrès :
 ---
 
 *Dernière mise à jour : 2025-12-29*
-*Version ARIA : 0.1.18*
+*Version ARIA : 0.1.19*

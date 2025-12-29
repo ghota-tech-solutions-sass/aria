@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::fs;
 use std::collections::HashMap;
+use rand::Rng;
 
 /// Word category - approximate grammatical role
 /// ARIA learns these by observing context patterns
@@ -350,6 +351,7 @@ impl LongTermMemory {
 
     /// Get an appropriate response word for a social context
     /// Returns words that ARIA knows and are appropriate for this context
+    /// Uses weighted random selection for variety!
     pub fn get_response_for_context(&self, context: SocialContext) -> Option<String> {
         // Find words that are commonly used in this context
         let mut candidates: Vec<(&String, f32)> = Vec::new();
@@ -368,14 +370,33 @@ impl LongTermMemory {
             }
         }
 
-        // Sort by score and return best match
-        candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        let result = candidates.first().map(|(word, _)| (*word).clone());
-
-        if result.is_some() {
-            tracing::info!("LEARNED RESPONSE: Using '{}' for {:?} context", result.as_ref().unwrap(), context);
-        } else {
+        if candidates.is_empty() {
             tracing::debug!("No learned response for {:?} context (checked {} words)", context, self.word_frequencies.len());
+            return None;
+        }
+
+        // Use weighted random selection for variety!
+        // Higher-scored words are more likely but not always chosen
+        let total_score: f32 = candidates.iter().map(|(_, s)| s).sum();
+        let mut rng = rand::thread_rng();
+        let mut roll: f32 = rng.gen::<f32>() * total_score;
+
+        let mut selected: Option<&String> = None;
+        for (word, score) in &candidates {
+            roll -= score;
+            if roll <= 0.0 {
+                selected = Some(word);
+                break;
+            }
+        }
+
+        // Fallback to first candidate if random selection failed
+        let result = selected.or_else(|| candidates.first().map(|(w, _)| *w))
+            .map(|w| w.clone());
+
+        if let Some(ref word) = result {
+            tracing::info!("LEARNED RESPONSE: Using '{}' for {:?} context (from {} candidates)",
+                word, context, candidates.len());
         }
 
         result
