@@ -176,6 +176,121 @@ pub struct RecentWord {
     pub heard_at: u64,
 }
 
+/// Spatial inhibitor for adaptive regional thresholds (Gemini optimization)
+///
+/// Divides semantic space into regions and tracks activity per region.
+/// Recently active regions have higher inhibition thresholds (refractory period).
+#[derive(Clone, Debug)]
+pub struct SpatialInhibitor {
+    /// Activity levels per region (grid_size^2 regions)
+    region_activity: Vec<f32>,
+    /// Last activation tick per region
+    region_last_active: Vec<u64>,
+    /// Grid size (number of divisions per dimension)
+    grid_size: usize,
+    /// Base threshold (from adaptive params)
+    base_threshold: f32,
+    /// Maximum threshold multiplier (for very active regions)
+    max_multiplier: f32,
+    /// Decay rate per tick (how fast refractory period fades)
+    decay_rate: f32,
+}
+
+impl Default for SpatialInhibitor {
+    fn default() -> Self {
+        let grid_size = 8; // 8x8 = 64 regions
+        let region_count = grid_size * grid_size;
+        Self {
+            region_activity: vec![0.0; region_count],
+            region_last_active: vec![0; region_count],
+            grid_size,
+            base_threshold: 0.15,
+            max_multiplier: 3.0,
+            decay_rate: 0.02,
+        }
+    }
+}
+
+impl SpatialInhibitor {
+    /// Create with custom grid size
+    pub fn new(grid_size: usize) -> Self {
+        let region_count = grid_size * grid_size;
+        Self {
+            region_activity: vec![0.0; region_count],
+            region_last_active: vec![0; region_count],
+            grid_size,
+            base_threshold: 0.15,
+            max_multiplier: 3.0,
+            decay_rate: 0.02,
+        }
+    }
+
+    /// Update base threshold from adaptive params
+    pub fn set_base_threshold(&mut self, threshold: f32) {
+        self.base_threshold = threshold;
+    }
+
+    /// Map a position in semantic space to a region index
+    /// Position values are typically in [-10, 10] range
+    fn position_to_region(&self, position: &[f32]) -> usize {
+        // Use first 2 dimensions for 2D grid
+        let x = ((position.get(0).unwrap_or(&0.0) + 10.0) / 20.0 * self.grid_size as f32)
+            .clamp(0.0, (self.grid_size - 1) as f32) as usize;
+        let y = ((position.get(1).unwrap_or(&0.0) + 10.0) / 20.0 * self.grid_size as f32)
+            .clamp(0.0, (self.grid_size - 1) as f32) as usize;
+        y * self.grid_size + x
+    }
+
+    /// Record activity at a position
+    pub fn record_activity(&mut self, position: &[f32], intensity: f32, tick: u64) {
+        let region = self.position_to_region(position);
+        if region < self.region_activity.len() {
+            self.region_activity[region] = (self.region_activity[region] + intensity).min(1.0);
+            self.region_last_active[region] = tick;
+        }
+    }
+
+    /// Decay all regions (call once per tick)
+    pub fn decay(&mut self, current_tick: u64) {
+        for i in 0..self.region_activity.len() {
+            // Decay based on time since last activity
+            let ticks_since_active = current_tick.saturating_sub(self.region_last_active[i]);
+            if ticks_since_active > 10 {
+                self.region_activity[i] *= 1.0 - self.decay_rate;
+            }
+        }
+    }
+
+    /// Get adaptive threshold for a position
+    ///
+    /// Returns higher threshold for recently active regions (refractory period)
+    pub fn get_threshold(&self, position: &[f32]) -> f32 {
+        let region = self.position_to_region(position);
+        if region < self.region_activity.len() {
+            let activity = self.region_activity[region];
+            // Scale threshold: more active = higher threshold
+            let multiplier = 1.0 + activity * (self.max_multiplier - 1.0);
+            self.base_threshold * multiplier
+        } else {
+            self.base_threshold
+        }
+    }
+
+    /// Get average activity across all regions
+    pub fn average_activity(&self) -> f32 {
+        if self.region_activity.is_empty() {
+            0.0
+        } else {
+            self.region_activity.iter().sum::<f32>() / self.region_activity.len() as f32
+        }
+    }
+
+    /// Get number of highly active regions (activity > 0.5)
+    pub fn active_region_count(&self) -> usize {
+        self.region_activity.iter().filter(|&&a| a > 0.5).count()
+    }
+}
+
 /// Statistics about the substrate
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SubstrateStats {

@@ -52,11 +52,39 @@ impl Substrate {
 
         // ADAPTIVE: Use adaptive emission threshold instead of fixed config
         let params = self.adaptive_params.read();
-        let emission_threshold = params.emission_threshold;
+        let _base_threshold = params.emission_threshold; // Used by spatial_inhibitor
         let response_probability = params.response_probability;
         drop(params);
 
+        // SPATIAL INHIBITION: Get threshold based on average position of active cells (Gemini)
+        // This creates regional refractory periods - recently active regions have higher thresholds
+        let avg_position: Vec<f32> = if !active_states.is_empty() {
+            let mut avg = vec![0.0f32; POSITION_DIMS];
+            for (i, _) in &active_states {
+                for (j, p) in self.states[*i].position.iter().enumerate() {
+                    avg[j] += p;
+                }
+            }
+            let n = active_states.len() as f32;
+            for v in &mut avg {
+                *v /= n;
+            }
+            avg
+        } else {
+            vec![0.0f32; POSITION_DIMS]
+        };
+
+        let emission_threshold = {
+            let inhibitor = self.spatial_inhibitor.read();
+            inhibitor.get_threshold(&avg_position)
+        };
+
         if coherence > emission_threshold {
+            // Record activity in this region for future inhibition
+            {
+                let mut inhibitor = self.spatial_inhibitor.write();
+                inhibitor.record_activity(&avg_position, coherence, current_tick);
+            }
             // ADAPTIVE: Sometimes choose not to respond (based on response_probability)
             let mut rng = rand::thread_rng();
             if rng.gen::<f32>() > response_probability {

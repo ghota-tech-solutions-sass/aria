@@ -40,7 +40,7 @@ mod self_modify;
 mod lifecycle;
 
 // Re-exports for convenience
-pub use types::{AdaptiveParams, SubstrateStats, RecentWord, STOP_WORDS, EMISSION_COOLDOWN_TICKS};
+pub use types::{AdaptiveParams, SubstrateStats, RecentWord, SpatialInhibitor, STOP_WORDS, EMISSION_COOLDOWN_TICKS};
 pub use emotion::EmotionalState;
 pub use conversation::ConversationContext;
 
@@ -157,6 +157,11 @@ pub struct Substrate {
 
     /// Pending signals for cells
     signal_buffer: RwLock<Vec<SignalFragment>>,
+
+    // === Spatial Inhibition (Gemini optimization) ===
+
+    /// Spatial inhibitor for adaptive regional thresholds
+    spatial_inhibitor: RwLock<SpatialInhibitor>,
 }
 
 // ============================================================================
@@ -249,6 +254,7 @@ impl Substrate {
             last_spontaneous_tick: AtomicU64::new(0),
             adaptive_params: RwLock::new(adaptive_params),
             signal_buffer: RwLock::new(Vec::new()),
+            spatial_inhibitor: RwLock::new(SpatialInhibitor::default()),
         }
     }
 
@@ -266,6 +272,15 @@ impl Substrate {
         {
             let mut memory = self.memory.write();
             memory.tick_working_memory(0.02); // 2% decay per tick
+        }
+
+        // Decay spatial inhibition (Gemini optimization)
+        {
+            let mut inhibitor = self.spatial_inhibitor.write();
+            inhibitor.decay(current_tick);
+            // Sync base threshold with adaptive params
+            let params = self.adaptive_params.read();
+            inhibitor.set_base_threshold(params.emission_threshold);
         }
 
         // Get external signals from buffer
