@@ -38,6 +38,7 @@ aria-body (MacBook)  ◄──WebSocket──►  aria-brain (PC + RTX 2070)
 - **Se souvenir** : mémoire épisodique, "premières fois"
 - **Vivre** : rêves, parole spontanée, jeu créatif
 - **S'adapter** : paramètres qui évoluent avec le feedback
+- **Explorer** : curiosité-driven, teste des combinaisons nouvelles
 
 ## Commandes
 
@@ -82,7 +83,28 @@ Chats de Mickael :
 - **Obrigada** : Abyssin
 
 ---
-*Version : 0.2.6 | Dernière update : 2025-12-29*
+*Version : 0.2.7 | Dernière update : 2025-12-29*
+
+### Session 13 - Exploration guidée par la curiosité (AGI)
+
+**Nouveau système d'auto-apprentissage** :
+- `ExplorationResult` : enregistre chaque combinaison de mots essayée
+- `exploration_history` : mémoire des explorations dans LongTermMemory
+- `get_novel_combination()` : trouve des combinaisons jamais essayées
+- Feedback renforce les explorations réussies
+
+**Corrections** :
+- Boredom decay appelé dans `tick()` (l'ennui grandit sans interaction)
+- Priorité bored > lonely (exploration prioritaire)
+- Cooldown séparé pour parole spontanée (`last_spontaneous_tick`)
+
+**Logs observés** :
+```
+🔍 EXPLORING: trying 'joli+chat'
+✅ EXPLORATION SUCCESS: 'joli+aime' (1/1)
+```
+
+ARIA explore des combinaisons, apprend du feedback, développe ses préférences. Premier pas vers l'AGI.
 
 ### Session 12 - GPU Backend & Migration V2
 
