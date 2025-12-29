@@ -232,16 +232,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let success = pattern.expected.iter()
                 .any(|exp| response_text.contains(exp));
 
-            // Send feedback (use "hmm" for negative to avoid ARIA learning "non")
-            let feedback_text = if success {
+            // Only send POSITIVE feedback - no negative feedback to avoid polluting vocabulary
+            if success {
                 total_success += 1;
-                "Bravo !"
-            } else {
-                "hmm..."
-            };
-
-            let feedback_signal = Signal::from_text(feedback_text);
-            write.send(Message::Text(serde_json::to_string(&feedback_signal)?)).await?;
+                let feedback_signal = Signal::from_text("Bravo !");
+                write.send(Message::Text(serde_json::to_string(&feedback_signal)?)).await?;
+            }
+            // When wrong, we just stay silent - no "non" or "hmm" to learn
 
             let status = if success { "✅" } else { "❌" };
             println!("   Rep {}/{}: {} (response: {})",
