@@ -191,6 +191,11 @@ impl ConversationContext {
         context
     }
 
+    /// Get just the topic words as strings (for memory recall)
+    fn get_topic_words(&self) -> Vec<String> {
+        self.topic_words.iter().map(|(w, _)| w.clone()).collect()
+    }
+
     fn is_conversation_start(&self) -> bool {
         self.exchange_count <= 2
     }
@@ -990,9 +995,74 @@ impl SubstrateV2 {
                 self.last_emission_tick.store(current_tick, Ordering::Relaxed);
                 return vec![response];
             }
+
+            // Try to recall a relevant memory
+            if let Some(response) = self.maybe_recall_memory(&average_state, coherence, current_tick) {
+                self.last_emission_tick.store(current_tick, Ordering::Relaxed);
+                return vec![response];
+            }
         }
 
         Vec::new()
+    }
+
+    /// Try to recall a relevant episodic memory
+    fn maybe_recall_memory(&self, state: &[f32; SIGNAL_DIMS], coherence: f32, current_tick: u64) -> Option<OldSignal> {
+        // Only sometimes try to recall (10% chance when coherence is high)
+        let mut rng = rand::thread_rng();
+        if rng.gen::<f32>() > 0.1 || coherence < 0.3 {
+            return None;
+        }
+
+        // Get context words from recent conversation
+        let context_words: Vec<String> = {
+            let conv = self.conversation.read();
+            conv.get_topic_words()
+        };
+
+        if context_words.is_empty() {
+            return None;
+        }
+
+        // Try to find a relevant episode
+        let mut memory = self.memory.write();
+        let episodes = memory.recall_episodes(&context_words, current_tick, 3);
+
+        if episodes.is_empty() {
+            return None;
+        }
+
+        // Pick the most relevant episode
+        let episode = episodes[0];
+
+        // Check if it's important enough to mention
+        if episode.importance < 0.4 {
+            return None;
+        }
+
+        // Generate a memory-based response
+        let (label, intensity) = if episode.first_of_kind.is_some() {
+            // First time memory - special!
+            let kind = episode.first_of_kind.as_ref().unwrap();
+            let keyword = episode.keywords.first().map(|s| s.as_str()).unwrap_or("ça");
+            tracing::info!("🌟 RECALLING FIRST TIME: {} - \"{}\"", kind, episode.input);
+            (format!("memory:first|{}|{}", kind, keyword), 0.7)
+        } else if episode.category == EpisodeCategory::Emotional {
+            // Emotional memory
+            let keyword = episode.keywords.first().map(|s| s.as_str()).unwrap_or("moment");
+            tracing::info!("💭 RECALLING EMOTION: \"{}\"", episode.input);
+            (format!("memory:emotion|{}", keyword), 0.6)
+        } else {
+            // General memory
+            let keyword = episode.keywords.first().map(|s| s.as_str()).unwrap_or("souviens");
+            tracing::info!("💭 RECALLING: \"{}\"", episode.input);
+            (format!("memory:recall|{}", keyword), 0.5)
+        };
+
+        let mut signal = OldSignal::from_vector(*state, label);
+        signal.intensity = intensity * coherence;
+
+        Some(signal)
     }
 
     fn generate_social_response(&self, context: SocialContext, is_start: bool, state: &[f32; SIGNAL_DIMS], coherence: f32) -> Option<OldSignal> {

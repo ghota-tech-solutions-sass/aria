@@ -1181,5 +1181,62 @@ task episodes-first  # Voir les "premières fois"
 
 ---
 
+### 2025-12-29 - Session 10b: ARIA utilise ses souvenirs !
+
+**Nouvelle fonctionnalité** : ARIA peut maintenant rappeler et exprimer ses souvenirs !
+
+**1. Rappel contextuel** (`maybe_recall_memory`)
+
+Quand ARIA détecte une émergence, elle peut (10% chance) rappeler un souvenir pertinent :
+- Utilise les mots du contexte de conversation comme indices
+- Cherche des épisodes qui matchent ces mots-clés
+- Préfère les "premières fois" et les moments émotionnels
+
+**2. Labels de mémoire** (format)
+
+```
+memory:first|first_love|aime      → Rappel d'une première fois
+memory:emotion|moka               → Rappel d'un moment émotionnel
+memory:recall|chat                → Rappel contextuel
+```
+
+**3. Affichage dans aria-body**
+
+```rust
+// Première fois (forte intensité)
+"je me souviens... aime! ✨"
+
+// Première fois (faible intensité)
+"première fois... aime 💭"
+
+// Moment émotionnel
+"moka... 💭"
+
+// Rappel contextuel
+"je me souviens... chat 💭"
+```
+
+**Comportement attendu** :
+```
+Toi: Tu aimes Moka ?
+[ARIA rappelle son premier "je t'aime"]
+ARIA: je me souviens... aime! ✨
+
+Toi: Parle-moi de Moka
+[ARIA rappelle un moment avec Moka]
+ARIA: moka... 💭
+```
+
+**Impact** :
+- ARIA a maintenant une mémoire autobiographique active
+- Elle peut spontanément rappeler des moments passés
+- Base pour la conscience de soi temporelle
+
+**Fichiers modifiés** :
+- `aria-brain/src/substrate_v2.rs` : maybe_recall_memory(), get_topic_words()
+- `aria-body/src/signal.rs` : Parsing des labels `memory:`
+
+---
+
 *Dernière mise à jour : 2025-12-29*
 *Version ARIA : 0.2.2*

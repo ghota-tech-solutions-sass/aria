@@ -279,6 +279,49 @@ impl Signal {
             };
         }
 
+        // If the brain is recalling a memory
+        if main_label.starts_with("memory:") {
+            let memory_content = main_label.strip_prefix("memory:").unwrap_or(&main_label);
+            let parts: Vec<&str> = memory_content.split('|').collect();
+
+            let base_expression = if parts.len() >= 2 {
+                match parts[0] {
+                    "first" => {
+                        // First time memory - "Je me souviens... [keyword]!"
+                        let keyword = parts.get(2).unwrap_or(&"ça");
+                        if self.intensity > 0.5 {
+                            format!("je me souviens... {}! ✨", keyword)
+                        } else {
+                            format!("première fois... {} 💭", keyword)
+                        }
+                    }
+                    "emotion" => {
+                        // Emotional memory
+                        let keyword = parts.get(1).unwrap_or(&"moment");
+                        format!("{}... 💭", keyword)
+                    }
+                    "recall" => {
+                        // General memory recall
+                        let keyword = parts.get(1).unwrap_or(&"souviens");
+                        format!("{}... 💭", keyword)
+                    }
+                    _ => {
+                        // Unknown memory type
+                        format!("souviens... 💭")
+                    }
+                }
+            } else {
+                format!("souviens... 💭")
+            };
+
+            // Add emotional marker if present
+            return if let Some(marker) = emotional_marker {
+                format!("{} {}", base_expression, marker)
+            } else {
+                base_expression
+            };
+        }
+
         // If the brain matched a known word, use it!
         if main_label.starts_with("word:") {
             let word = main_label.strip_prefix("word:").unwrap_or(&main_label);
