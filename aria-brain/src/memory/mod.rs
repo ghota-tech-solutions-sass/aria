@@ -3,11 +3,11 @@
 //! This persists between sessions, allowing ARIA to remember
 //! and learn over time.
 
-use crate::cell::DNA;
+use aria_core::DNA;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::fs;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use rand::Rng;
 
 /// Word category - approximate grammatical role
@@ -1604,9 +1604,11 @@ impl LongTermMemory {
 
     /// Rebuild semantic clusters from word associations
     /// Uses connected components algorithm with strength threshold
+    /// Detects "hub words" (words with too many connections) to avoid giant clusters
     pub fn rebuild_clusters(&mut self) {
         let min_strength = 0.3; // Associations with moderate strength form clusters
         let min_words = 2;      // Need at least 2 words for a cluster
+        let hub_threshold = 5;  // Words with more than N connections are hubs
 
         // Build adjacency list from associations
         let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
@@ -1623,6 +1625,29 @@ impl LongTermMemory {
 
             adjacency.entry(w1.clone()).or_default().push(w2.clone());
             adjacency.entry(w2.clone()).or_default().push(w1.clone());
+        }
+
+        // Detect hub words (words with too many connections)
+        let hub_words: HashSet<String> = adjacency
+            .iter()
+            .filter(|(_, neighbors)| neighbors.len() > hub_threshold)
+            .map(|(word, neighbors)| {
+                println!(
+                    "🔗 HUB WORD detected: '{}' with {} connections (excluded from clustering)",
+                    word,
+                    neighbors.len()
+                );
+                word.clone()
+            })
+            .collect();
+
+        // Remove hub words from adjacency (they'd merge everything into one cluster)
+        for hub in &hub_words {
+            adjacency.remove(hub);
+        }
+        // Also remove hub words from neighbor lists
+        for neighbors in adjacency.values_mut() {
+            neighbors.retain(|n| !hub_words.contains(n));
         }
 
         // Find connected components using BFS

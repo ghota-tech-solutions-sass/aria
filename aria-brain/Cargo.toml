@@ -38,10 +38,6 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 chrono = "0.4"
 
-[features]
-default = []
-substrate-v2 = []  # Use new GPU-ready substrate (experimental)
-
 [[bin]]
 name = "aria-brain"
 path = "src/main.rs"

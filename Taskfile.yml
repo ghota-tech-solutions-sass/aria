@@ -17,11 +17,10 @@ tasks:
     deps: [build-brain, build-body]
 
   build-brain:
-    desc: Build the brain (substrate V1 + V2) and trainer
+    desc: Build the brain and trainer
     dir: aria-brain
     cmds:
       - cargo build --release --bin aria-brain
-      - cargo build --release --bin aria-brain --features substrate-v2
       - cargo build --release --bin aria-train
 
   build-body:
@@ -32,50 +31,32 @@ tasks:
 
   # RUN
   brain:
-    desc: Start the brain (run this first)
-    dir: aria-brain
-    env:
-      ARIA_PORT: '{{.BRAIN_PORT}}'
-      ARIA_CELLS: '{{.ARIA_CELLS | default "10000"}}'
-    cmds:
-      - cargo run --release
-
-  brain-50k:
-    desc: Start the brain with 50k cells
-    dir: aria-brain
-    env:
-      ARIA_PORT: '{{.BRAIN_PORT}}'
-      ARIA_CELLS: '50000'
-    cmds:
-      - cargo run --release
-
-  brain-v2:
-    desc: Start the brain with substrate V2 (50k cells, sparse updates)
+    desc: Start the brain (50k cells, auto GPU/CPU)
     dir: aria-brain
     env:
       ARIA_PORT: '{{.BRAIN_PORT}}'
       ARIA_CELLS: '{{.ARIA_CELLS | default "50000"}}'
     cmds:
-      - cargo run --release --features substrate-v2
+      - cargo run --release
 
-  brain-v2-100k:
-    desc: Start brain V2 with 100k cells (sparse updates save CPU)
+  brain-100k:
+    desc: Start the brain with 100k cells
     dir: aria-brain
     env:
       ARIA_PORT: '{{.BRAIN_PORT}}'
       ARIA_CELLS: '100000'
     cmds:
-      - cargo run --release --features substrate-v2
+      - cargo run --release
 
   brain-gpu:
-    desc: Start the brain with GPU acceleration (V1 - deprecated)
+    desc: Start the brain with GPU (wgpu/Vulkan)
     dir: aria-brain
     env:
       ARIA_PORT: '{{.BRAIN_PORT}}'
-      ARIA_GPU: '1'
+      ARIA_BACKEND: 'gpu'
       ARIA_CELLS: '{{.ARIA_CELLS | default "100000"}}'
     cmds:
-      - cargo run --release --features cuda
+      - cargo run --release
 
   body:
     desc: Start the body interface
@@ -103,12 +84,11 @@ tasks:
       - cd aria-body && cargo test
 
   check:
-    desc: Check code without building (V1 and V2)
+    desc: Check code without building
     cmds:
-      - cd aria-brain && cargo check
-      - cd aria-brain && cargo check --features substrate-v2
       - cd aria-core && cargo check
       - cd aria-compute && cargo check
+      - cd aria-brain && cargo check
       - cd aria-body && cargo check
 
   fmt:

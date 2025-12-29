@@ -9,7 +9,7 @@ use std::env;
 pub enum ComputeBackend {
     /// CPU with Rayon parallelism
     Cpu,
-    /// NVIDIA GPU with CUDA
+    /// GPU with wgpu (Vulkan/Metal/DX12)
     Gpu,
 }
 
@@ -62,9 +62,9 @@ impl Config {
         if gpu_requested {
             if Self::detect_gpu() {
                 config.backend = ComputeBackend::Gpu;
-                tracing::info!("🎮 GPU mode enabled (CUDA detected)");
+                tracing::info!("🎮 GPU mode enabled (wgpu detected)");
             } else {
-                tracing::warn!("⚠️ GPU requested but CUDA not available, falling back to CPU");
+                tracing::warn!("⚠️ GPU requested but not available, falling back to CPU");
                 config.backend = ComputeBackend::Cpu;
             }
         } else {
@@ -75,25 +75,9 @@ impl Config {
         config
     }
 
-    /// Detect if CUDA GPU is available
-    #[cfg(feature = "cuda")]
+    /// Detect if GPU is available using wgpu
     fn detect_gpu() -> bool {
-        match cudarc::driver::CudaDevice::new(0) {
-            Ok(device) => {
-                tracing::info!("CUDA device found: {:?}", device);
-                true
-            }
-            Err(e) => {
-                tracing::debug!("CUDA not available: {}", e);
-                false
-            }
-        }
-    }
-
-    #[cfg(not(feature = "cuda"))]
-    fn detect_gpu() -> bool {
-        tracing::debug!("CUDA support not compiled in (build with --features cuda)");
-        false
+        aria_compute::gpu_available()
     }
 
     /// Get recommended cell count based on backend

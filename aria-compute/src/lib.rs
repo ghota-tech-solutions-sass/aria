@@ -5,20 +5,6 @@
 //! This crate provides two backends:
 //! - **CPU**: Uses Rayon for parallel computation (development, small populations)
 //! - **GPU**: Uses wgpu for massive parallelism (production, millions of cells)
-//!
-//! ## Usage
-//!
-//! ```rust,ignore
-//! use aria_compute::create_backend;
-//! use aria_core::config::ComputeBackendType;
-//!
-//! let backend = create_backend(ComputeBackendType::Auto)?;
-//! ```
-//!
-//! ## Sparse Updates
-//!
-//! Both backends support sparse updates - only computing active cells.
-//! This can reduce CPU/GPU usage by 90% in stable states.
 
 pub mod backend;
 pub mod spatial;
@@ -27,7 +13,7 @@ pub use backend::{CpuBackend, GpuBackend};
 pub use spatial::SpatialHash;
 
 use aria_core::config::{AriaConfig, ComputeBackendType};
-use aria_core::error::{AriaError, AriaResult};
+use aria_core::error::AriaResult;
 use aria_core::traits::ComputeBackend;
 
 /// Create the appropriate compute backend based on configuration
@@ -59,22 +45,21 @@ pub fn create_backend(config: &AriaConfig) -> AriaResult<Box<dyn ComputeBackend>
 
 /// Check if GPU is available on this system
 pub fn gpu_available() -> bool {
-    // Quick check without full initialization
-    std::env::var("ARIA_FORCE_CPU").is_err() && {
-        // Try to create a minimal wgpu instance
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
-        !instance
-            .enumerate_adapters(wgpu::Backends::all())
-            .is_empty()
+    if std::env::var("ARIA_FORCE_CPU").is_ok() {
+        return false;
     }
+
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
+    !adapters.is_empty()
 }
 
 /// Get information about available compute devices
 pub fn device_info() -> Vec<DeviceInfo> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
 
-    instance
-        .enumerate_adapters(wgpu::Backends::all())
+    adapters
         .into_iter()
         .map(|adapter| {
             let info = adapter.get_info();

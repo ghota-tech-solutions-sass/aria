@@ -34,7 +34,7 @@ dashmap = { version = "5.5", features = ["rayon"] }
 parking_lot = "0.12"
 
 # GPU compute
-wgpu = "0.19"
+wgpu = "28.0"
 bytemuck = { version = "1.14", features = ["derive"] }
 
 # Randomness

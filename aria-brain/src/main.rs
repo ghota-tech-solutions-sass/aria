@@ -2,17 +2,10 @@
 //!
 //! This is where ARIA's cells live, evolve, and think.
 //! Supports GPU acceleration with automatic CPU fallback.
-//!
-//! ## Feature Flags
-//!
-//! - `substrate-v2`: Use the new GPU-ready substrate (experimental)
 
-mod cell;
 mod substrate;
-mod substrate_v2;
 mod signal;
 mod memory;
-mod connection;
 mod config;
 
 use std::sync::Arc;
@@ -21,11 +14,7 @@ use warp::Filter;
 use futures::{StreamExt, SinkExt};
 use tracing::{info, warn, Level};
 
-#[cfg(not(feature = "substrate-v2"))]
 use substrate::Substrate;
-#[cfg(feature = "substrate-v2")]
-use substrate_v2::SubstrateV2;
-
 use signal::Signal;
 use memory::LongTermMemory;
 use config::{Config, print_banner};
@@ -66,26 +55,16 @@ async fn main() {
         LongTermMemory::load_or_create(memory_path)
     ));
 
-    // Create the substrate with configured cell count
-    #[cfg(not(feature = "substrate-v2"))]
-    let substrate = Arc::new(Substrate::new(config.cell_count, memory.clone()));
+    // Create the substrate with aria-core config
+    let aria_config = aria_core::AriaConfig::from_env();
+    info!("🧠 Substrate: {} cells ({:?} backend, sparse={})",
+        aria_config.population.target_population,
+        aria_config.compute.backend,
+        aria_config.compute.sparse_updates);
 
-    #[cfg(feature = "substrate-v2")]
-    let substrate = {
-        // Load config from environment (default: 50k cells with sparse updates)
-        let aria_config = aria_core::AriaConfig::from_env();
-        info!("🧠 Substrate V2: {} cells ({:?} backend, sparse={})",
-            aria_config.population.target_population,
-            aria_config.compute.backend,
-            aria_config.compute.sparse_updates);
-        Arc::new(parking_lot::RwLock::new(SubstrateV2::new(aria_config, memory.clone())))
-    };
-
-    #[cfg(not(feature = "substrate-v2"))]
-    info!("Substrate V1 created with {} cells ({:?} backend)", config.cell_count, config.backend);
-
-    #[cfg(feature = "substrate-v2")]
-    info!("🚀 Substrate V2 (GPU-ready) created with {} cells", config.cell_count);
+    let substrate = Arc::new(parking_lot::RwLock::new(
+        Substrate::new(aria_config, memory.clone())
+    ));
 
     // Channels for perception (input) and expression (output)
     let (perception_tx, _) = broadcast::channel::<Signal>(1000);
@@ -97,19 +76,8 @@ async fn main() {
     let expression_tx_evolution = expression_tx.clone();
     let memory_evolution = memory.clone();
 
-    #[cfg(not(feature = "substrate-v2"))]
     tokio::spawn(async move {
         evolution_loop(
-            substrate_evolution,
-            perception_rx,
-            expression_tx_evolution,
-            memory_evolution
-        ).await;
-    });
-
-    #[cfg(feature = "substrate-v2")]
-    tokio::spawn(async move {
-        evolution_loop_v2(
             substrate_evolution,
             perception_rx,
             expression_tx_evolution,
@@ -152,7 +120,6 @@ async fn main() {
     });
 
     // WebSocket server for communication with the Body
-    // Note: handle_connection doesn't need substrate - it uses broadcast channels
     let perception_tx_ws = perception_tx.clone();
     let expression_tx_ws = expression_tx.clone();
 
@@ -173,14 +140,6 @@ async fn main() {
 
     // Stats endpoint
     let substrate_stats = substrate.clone();
-    #[cfg(not(feature = "substrate-v2"))]
-    let stats = warp::path("stats")
-        .map(move || {
-            let s = substrate_stats.stats();
-            warp::reply::json(&s)
-        });
-
-    #[cfg(feature = "substrate-v2")]
     let stats = warp::path("stats")
         .map(move || {
             let s = substrate_stats.read().stats();
@@ -332,69 +291,9 @@ async fn main() {
     warp::serve(routes).run(([0, 0, 0, 0], config.port)).await;
 }
 
-#[cfg(not(feature = "substrate-v2"))]
+/// Main evolution loop - ARIA's heartbeat
 async fn evolution_loop(
-    substrate: Arc<Substrate>,
-    mut perception: broadcast::Receiver<Signal>,
-    expression: broadcast::Sender<Signal>,
-    memory: Arc<parking_lot::RwLock<LongTermMemory>>,
-) {
-    let mut tick: u64 = 0;
-    let mut last_stats_tick: u64 = 0;
-
-    loop {
-        // 1. Receive incoming perceptions (non-blocking)
-        // Immediate emergence check for each signal
-        while let Ok(signal) = perception.try_recv() {
-            let immediate_emergence = substrate.inject_signal(signal);
-            for em_signal in immediate_emergence {
-                info!("IMMEDIATE EMERGENCE! intensity: {:.3}", em_signal.intensity);
-                if em_signal.intensity > 0.01 {
-                    let _ = expression.send(em_signal);
-                }
-            }
-        }
-
-        // 2. One tick of life
-        let emergent_signals = substrate.tick();
-
-        // 3. Send emergent expressions (lowered threshold for baby ARIA)
-        for signal in emergent_signals {
-            info!("EMERGENCE! intensity: {:.3}, label: {}", signal.intensity, signal.label);
-            // Send all emergent signals - even weak ones
-            if signal.intensity > 0.01 {
-                let _ = expression.send(signal);
-            }
-        }
-
-        // 4. Periodic stats (every 500 ticks = ~5 seconds)
-        if tick - last_stats_tick >= 500 {
-            let stats = substrate.stats();
-            info!(
-                "Tick {}: {} cells, energy: {:.2}, entropy: {:.4}, emotion: {}",
-                tick, stats.alive_cells, stats.total_energy, stats.entropy, stats.dominant_emotion
-            );
-
-            // Update global stats in memory
-            {
-                let mut mem = memory.write();
-                mem.stats.total_ticks = tick;
-            }
-
-            last_stats_tick = tick;
-        }
-
-        tick += 1;
-
-        // ~500 ticks per second (fast mode)
-        tokio::time::sleep(tokio::time::Duration::from_millis(2)).await;
-    }
-}
-
-/// Evolution loop for V2 substrate (GPU-ready)
-#[cfg(feature = "substrate-v2")]
-async fn evolution_loop_v2(
-    substrate: Arc<parking_lot::RwLock<SubstrateV2>>,
+    substrate: Arc<parking_lot::RwLock<Substrate>>,
     mut perception: broadcast::Receiver<Signal>,
     expression: broadcast::Sender<Signal>,
     memory: Arc<parking_lot::RwLock<LongTermMemory>>,
@@ -410,7 +309,7 @@ async fn evolution_loop_v2(
                 sub.inject_signal(signal)
             };
             for em_signal in immediate_emergence {
-                info!("V2 IMMEDIATE EMERGENCE! intensity: {:.3}", em_signal.intensity);
+                info!("IMMEDIATE EMERGENCE! intensity: {:.3}", em_signal.intensity);
                 if em_signal.intensity > 0.01 {
                     let _ = expression.send(em_signal);
                 }
@@ -425,17 +324,17 @@ async fn evolution_loop_v2(
 
         // 3. Send emergent expressions
         for signal in emergent_signals {
-            info!("V2 EMERGENCE! intensity: {:.3}, label: {}", signal.intensity, signal.label);
+            info!("EMERGENCE! intensity: {:.3}, label: {}", signal.intensity, signal.label);
             if signal.intensity > 0.01 {
                 let _ = expression.send(signal);
             }
         }
 
-        // 4. Periodic stats (every 500 ticks = ~5 seconds)
+        // 4. Periodic stats (every 500 ticks)
         if tick - last_stats_tick >= 500 {
             let stats = substrate.read().stats();
             info!(
-                "V2 Tick {}: {} cells ({} sleeping, {:.1}% saved), energy: {:.2}, mood: {}",
+                "Tick {}: {} cells ({} sleeping, {:.1}% saved), energy: {:.2}, mood: {}",
                 tick, stats.alive_cells, stats.sleeping_cells, stats.cpu_savings_percent,
                 stats.total_energy, stats.mood
             );
@@ -451,8 +350,7 @@ async fn evolution_loop_v2(
 
         tick += 1;
 
-        // Fast mode: just yield, don't sleep
-        // Let the CPU work at full speed
+        // Fast mode: yield to allow other tasks
         tokio::task::yield_now().await;
     }
 }
@@ -484,8 +382,6 @@ async fn handle_connection(
                     // Try to parse as a signal
                     if let Ok(signal) = serde_json::from_str::<Signal>(text) {
                         let _ = perception_tx.send(signal);
-                    } else if text.contains("\"type\":\"stats\"") {
-                        // Stats request - handled by HTTP endpoint now
                     }
                 }
             }
