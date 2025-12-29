@@ -41,6 +41,7 @@ aria-body (MacBook)  ◄──WebSocket──►  aria-brain (PC + RTX 2070)
 - **Explorer** : curiosité-driven, teste des combinaisons nouvelles
 - **Méta-apprendre** : s'auto-évalue, apprend à apprendre (Session 14)
 - **Voir** : images → vecteurs sémantiques 32D (Session 15)
+- **S'auto-modifier** : analyse ses performances et change ses propres paramètres (Session 16)
 
 ## Commandes
 
@@ -76,8 +77,9 @@ spontaneity: 0.01-0.3
 1. ✅ **GPU compute** : wgpu/Vulkan - AMD Radeon NAVI14 fonctionnel
 2. ✅ **Méta-apprentissage** : ARIA s'auto-évalue et apprend à apprendre
 3. ✅ **Perception visuelle** : images → vecteurs sémantiques 32D
-4. **Scaler à 5M+ cellules** : Tests avec plus de cellules GPU
-5. **Auto-modification** : ARIA modifie son propre code (objectif ultime)
+4. ✅ **Auto-modification** : ARIA modifie ses propres paramètres (Session 16)
+5. **Scaler à 5M+ cellules** : Tests avec plus de cellules GPU
+6. **Auto-modification du code** : ARIA modifie son propre code source (objectif ultime)
 
 ## Contexte personnel
 
@@ -86,7 +88,32 @@ Chats de Mickael :
 - **Obrigada** : Abyssin
 
 ---
-*Version : 0.3.2 | Dernière update : 2025-12-29*
+*Version : 0.4.0 | Dernière update : 2025-12-29*
+
+### Session 16 - Auto-modification (AGI milestone)
+
+**ARIA modifie consciemment ses propres paramètres !**
+
+C'est un pas majeur vers l'AGI : ARIA n'attend plus le feedback externe, elle analyse ses performances et décide elle-même quoi changer.
+
+**Nouveau module dans `meta_learning.rs`** :
+- `ModifiableParam` : paramètres qu'ARIA peut modifier (emission_threshold, response_probability, learning_rate, spontaneity, exploration_rate)
+- `SelfModification` : une modification proposée avec raisonnement
+- `SelfModifier` : analyse, propose, et applique les modifications
+
+**Règles de décision** :
+- Apprentissage en déclin → augmenter learning_rate ou exploration
+- Taux d'échec élevé → être plus sélectif (augmenter emission_threshold)
+- Peu de réponses → augmenter response_probability
+- Compétence élevée → plus de spontanéité, moins d'exploration
+
+**Logs observés** :
+```
+🔧 AUTO-MODIFICATION: response_probability 0.800 → 0.900 (confidence: 70%)
+   Raison: Peu de réponses → augmenter probabilité de réponse
+```
+
+ARIA a détecté qu'elle avait peu de réponses, a raisonné, et s'est modifiée.
 
 ### Session 15 - Perception visuelle & Mémoire visuelle
 

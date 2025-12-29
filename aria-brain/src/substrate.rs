@@ -1013,7 +1013,86 @@ impl Substrate {
             self.sync_adaptive_params_to_memory();
         }
 
+        // SELF-MODIFICATION: ARIA consciously decides to change herself (Session 16)
+        self.maybe_self_modify(current_tick);
+
         emergent
+    }
+
+    /// ARIA consciously analyzes herself and decides to change parameters
+    fn maybe_self_modify(&self, current_tick: u64) {
+        use crate::memory::CurrentParams;
+
+        // Check if it's time to consider self-modification
+        let should_modify = {
+            let memory = self.memory.read();
+            memory.self_modifier.should_modify(current_tick)
+        };
+
+        if !should_modify {
+            return;
+        }
+
+        // Gather current state
+        let (progress, current_params, exploration_rate) = {
+            let memory = self.memory.read();
+            let params = self.adaptive_params.read();
+
+            let current = CurrentParams {
+                emission_threshold: params.emission_threshold,
+                response_probability: params.response_probability,
+                learning_rate: params.learning_rate,
+                spontaneity: params.spontaneity,
+                exploration_rate: memory.meta_learner.config.exploration_rate,
+            };
+
+            (memory.meta_learner.progress.clone(), current, memory.meta_learner.config.exploration_rate)
+        };
+
+        // Analyze and propose modifications
+        let proposals = {
+            let memory = self.memory.read();
+            memory.self_modifier.analyze_and_propose(&progress, &current_params, current_tick)
+        };
+
+        // Decide and apply
+        if !proposals.is_empty() {
+            let mut memory = self.memory.write();
+            memory.self_modifier.mark_modified(current_tick);
+
+            if let Some(modification) = memory.self_modifier.decide(proposals) {
+                // Apply the modification
+                match modification.param {
+                    crate::memory::ModifiableParam::EmissionThreshold => {
+                        let mut params = self.adaptive_params.write();
+                        params.emission_threshold = modification.new_value;
+                    }
+                    crate::memory::ModifiableParam::ResponseProbability => {
+                        let mut params = self.adaptive_params.write();
+                        params.response_probability = modification.new_value;
+                    }
+                    crate::memory::ModifiableParam::LearningRate => {
+                        let mut params = self.adaptive_params.write();
+                        params.learning_rate = modification.new_value;
+                    }
+                    crate::memory::ModifiableParam::Spontaneity => {
+                        let mut params = self.adaptive_params.write();
+                        params.spontaneity = modification.new_value;
+                    }
+                    crate::memory::ModifiableParam::ExplorationRate => {
+                        memory.meta_learner.config.exploration_rate = modification.new_value;
+                    }
+                }
+
+                // Sync to memory
+                drop(memory);
+                self.sync_adaptive_params_to_memory();
+            }
+        } else {
+            // Just mark that we checked
+            let mut memory = self.memory.write();
+            memory.self_modifier.mark_modified(current_tick);
+        }
     }
 
     /// Get substrate statistics

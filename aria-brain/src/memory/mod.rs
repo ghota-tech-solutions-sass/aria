@@ -11,7 +11,10 @@ use std::collections::{HashMap, HashSet};
 use rand::Rng;
 
 // Re-export meta_learning types for external use
-pub use crate::meta_learning::{MetaLearner, InternalReward, StrategyType, ProgressTracker};
+pub use crate::meta_learning::{
+    MetaLearner, InternalReward, StrategyType, ProgressTracker, LearningTrend,
+    SelfModifier, SelfModification, ModifiableParam, CurrentParams,
+};
 
 /// Word category - approximate grammatical role
 /// ARIA learns these by observing context patterns
@@ -199,6 +202,12 @@ pub struct LongTermMemory {
     /// Visual-word associations - connects what ARIA sees to words she knows
     #[serde(default)]
     pub visual_word_links: HashMap<String, VisualWordLink>,
+
+    // === SELF-MODIFICATION (Session 16) ===
+
+    /// Self-modifier - ARIA changes herself
+    #[serde(default)]
+    pub self_modifier: SelfModifier,
 }
 
 /// A visual memory - ARIA remembers seeing this
@@ -658,6 +667,8 @@ impl LongTermMemory {
             // Visual memory (Session 15)
             visual_memories: Vec::new(),
             visual_word_links: HashMap::new(),
+            // Self-modification (Session 16)
+            self_modifier: SelfModifier::new(),
         }
     }
 
