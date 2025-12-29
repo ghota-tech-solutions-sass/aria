@@ -1034,7 +1034,7 @@ impl Substrate {
         }
 
         // Gather current state
-        let (progress, current_params, exploration_rate) = {
+        let (progress, current_params, _exploration_rate) = {
             let memory = self.memory.read();
             let params = self.adaptive_params.read();
 
@@ -1049,7 +1049,13 @@ impl Substrate {
             (memory.meta_learner.progress.clone(), current, memory.meta_learner.config.exploration_rate)
         };
 
-        // Analyze and propose modifications
+        // First, check outcomes of past modifications (evaluate after 2000 ticks)
+        {
+            let mut memory = self.memory.write();
+            memory.self_modifier.check_outcomes(&progress, current_tick, 2000);
+        }
+
+        // Analyze and propose new modifications
         let proposals = {
             let memory = self.memory.read();
             memory.self_modifier.analyze_and_propose(&progress, &current_params, current_tick)
@@ -1060,7 +1066,7 @@ impl Substrate {
             let mut memory = self.memory.write();
             memory.self_modifier.mark_modified(current_tick);
 
-            if let Some(modification) = memory.self_modifier.decide(proposals) {
+            if let Some(modification) = memory.self_modifier.decide(proposals, &progress, current_tick) {
                 // Apply the modification
                 match modification.param {
                     crate::memory::ModifiableParam::EmissionThreshold => {

@@ -815,6 +815,38 @@ impl ModifiableParam {
     }
 }
 
+/// Snapshot of metrics at a given time (for measuring modification success)
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MetricsSnapshot {
+    pub competence_level: f32,
+    pub learning_quality: f32,
+    pub recent_successes: u32,
+    pub recent_failures: u32,
+    pub tick: u64,
+}
+
+impl MetricsSnapshot {
+    pub fn from_progress(progress: &ProgressTracker, tick: u64) -> Self {
+        Self {
+            competence_level: progress.competence_level,
+            learning_quality: progress.learning_quality,
+            recent_successes: progress.recent_successes,
+            recent_failures: progress.recent_failures,
+            tick,
+        }
+    }
+
+    /// Calculate overall score (higher = better)
+    pub fn score(&self) -> f32 {
+        let success_rate = if self.recent_successes + self.recent_failures > 0 {
+            self.recent_successes as f32 / (self.recent_successes + self.recent_failures) as f32
+        } else {
+            0.5
+        };
+        self.competence_level * 0.4 + self.learning_quality * 0.3 + success_rate * 0.3
+    }
+}
+
 /// A proposed self-modification
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelfModification {
@@ -834,6 +866,15 @@ pub struct SelfModification {
     pub proposed_at: u64,
     /// Was this applied?
     pub applied: bool,
+    /// Baseline metrics when this was applied (for measuring success)
+    #[serde(default)]
+    pub baseline: Option<MetricsSnapshot>,
+    /// Was this modification evaluated?
+    #[serde(default)]
+    pub evaluated: bool,
+    /// Was this modification successful? (metrics improved)
+    #[serde(default)]
+    pub was_successful: Option<bool>,
 }
 
 impl SelfModification {
@@ -855,7 +896,15 @@ impl SelfModification {
             confidence,
             proposed_at: tick,
             applied: false,
+            baseline: None,
+            evaluated: false,
+            was_successful: None,
         }
+    }
+
+    /// Set baseline metrics (called when modification is applied)
+    pub fn set_baseline(&mut self, progress: &ProgressTracker, tick: u64) {
+        self.baseline = Some(MetricsSnapshot::from_progress(progress, tick));
     }
 
     pub fn clamp_to_range(&mut self) {
@@ -1000,7 +1049,7 @@ impl SelfModifier {
     }
 
     /// Decide which modification to apply (if any)
-    pub fn decide(&mut self, proposals: Vec<SelfModification>) -> Option<SelfModification> {
+    pub fn decide(&mut self, proposals: Vec<SelfModification>, progress: &ProgressTracker, current_tick: u64) -> Option<SelfModification> {
         if proposals.is_empty() {
             return None;
         }
@@ -1012,6 +1061,7 @@ impl SelfModifier {
         if let Some(mut modification) = best {
             if modification.confidence >= self.min_confidence {
                 modification.applied = true;
+                modification.set_baseline(progress, current_tick);
                 self.modification_history.push(modification.clone());
                 self.total_modifications += 1;
 
@@ -1029,6 +1079,56 @@ impl SelfModifier {
         }
 
         None
+    }
+
+    /// Check outcomes of past modifications
+    /// Returns number of modifications that were evaluated as successful
+    pub fn check_outcomes(&mut self, progress: &ProgressTracker, current_tick: u64, eval_delay: u64) -> u32 {
+        let current_snapshot = MetricsSnapshot::from_progress(progress, current_tick);
+        let current_score = current_snapshot.score();
+        let mut successes = 0;
+
+        for modification in &mut self.modification_history {
+            // Skip already evaluated or unapplied modifications
+            if modification.evaluated || !modification.applied {
+                continue;
+            }
+
+            // Check if enough time has passed
+            if let Some(ref baseline) = modification.baseline {
+                if current_tick >= baseline.tick + eval_delay {
+                    let baseline_score = baseline.score();
+                    let improved = current_score > baseline_score + 0.01; // Small threshold
+
+                    modification.evaluated = true;
+                    modification.was_successful = Some(improved);
+
+                    if improved {
+                        self.successful_modifications += 1;
+                        successes += 1;
+                        tracing::info!(
+                            "✅ MODIFICATION SUCCESS: {} {:.3} → {:.3} (score: {:.2} → {:.2})",
+                            modification.param.name(),
+                            modification.current_value,
+                            modification.new_value,
+                            baseline_score,
+                            current_score
+                        );
+                    } else {
+                        tracing::info!(
+                            "❌ MODIFICATION NEUTRAL/FAIL: {} {:.3} → {:.3} (score: {:.2} → {:.2})",
+                            modification.param.name(),
+                            modification.current_value,
+                            modification.new_value,
+                            baseline_score,
+                            current_score
+                        );
+                    }
+                }
+            }
+        }
+
+        successes
     }
 
     /// Record that a modification was successful (metrics improved after)

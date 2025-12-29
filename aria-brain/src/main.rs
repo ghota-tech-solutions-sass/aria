@@ -521,7 +521,9 @@ async fn main() {
                     "to": m.new_value,
                     "reasoning": m.reasoning,
                     "confidence": m.confidence,
-                    "tick": m.proposed_at
+                    "tick": m.proposed_at,
+                    "evaluated": m.evaluated,
+                    "successful": m.was_successful
                 }))
                 .collect();
 
