@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use parking_lot::RwLock;
 use rand::Rng;
+use rayon::prelude::*;
 use serde::{Serialize, Deserialize};
 
 /// A recently heard word with its context
@@ -727,9 +728,9 @@ impl Substrate {
         tracing::info!("Signal received: '{}' intensity={:.2} (familiarity_boost: {:.2})",
             signal.label, fragment.intensity, familiarity_boost);
 
-        // Distribute to ALL cells (external signals are broadcast)
+        // Distribute to ALL cells (external signals are broadcast) - PARALLEL!
         // Minimal attenuation - we want all cells to "hear" external input
-        self.cells.iter_mut().for_each(|mut entry| {
+        self.cells.par_iter_mut().for_each(|mut entry| {
             let cell = entry.value_mut();
             let distance = semantic_distance(&cell.position, &target_position);
 
@@ -787,8 +788,8 @@ impl Substrate {
         let _connection_requests: Vec<(u64, u64)> = Vec::new();
         let _emitted_signals: Vec<([f32; 8], [f32; 16], f32)> = Vec::new();
 
-        // Phase 1: Each cell lives (parallel)
-        self.cells.iter_mut().for_each(|mut entry| {
+        // Phase 1: Each cell lives (PARALLEL with rayon)
+        self.cells.par_iter_mut().for_each(|mut entry| {
             let cell = entry.value_mut();
             let action = cell.live();
 
@@ -1124,9 +1125,9 @@ impl Substrate {
             })
             .collect();
 
-        // Distribute to nearby cells
+        // Distribute to nearby cells (PARALLEL inner loop)
         for (source_id, source_pos, content, intensity) in signals {
-            self.cells.iter_mut().for_each(|mut entry| {
+            self.cells.par_iter_mut().for_each(|mut entry| {
                 let cell = entry.value_mut();
                 if cell.id != source_id {
                     let distance = semantic_distance(&cell.position, &source_pos);
@@ -1622,7 +1623,8 @@ impl Substrate {
             return;
         }
 
-        self.cells.iter_mut().for_each(|mut entry| {
+        // PARALLEL cell attraction
+        self.cells.par_iter_mut().for_each(|mut entry| {
             let cell = entry.value_mut();
 
             for attractor in &attractors {
