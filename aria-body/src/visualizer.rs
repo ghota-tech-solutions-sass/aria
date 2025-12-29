@@ -277,7 +277,15 @@ impl AriaVisualizer {
             Span::styled("█", Style::default().fg(Color::White)), // Cursor
         ]))
         .block(Block::default()
-            .title(" Type message (ESC to quit) ")
+            .title(Line::from(vec![
+                Span::raw(" "),
+                Span::styled("y", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::raw("=Good "),
+                Span::styled("n", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::raw("=No "),
+                Span::styled("ESC", Style::default().fg(Color::DarkGray)),
+                Span::raw("=Quit "),
+            ]))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray)));
 

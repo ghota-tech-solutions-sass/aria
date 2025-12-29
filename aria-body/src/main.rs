@@ -94,7 +94,11 @@ async fn run_simple_mode() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("═══════════════════════════════════════════════════════════════");
     println!("  Talk to ARIA. She's young, be patient.");
-    println!("  Type your message and press Enter. ESC to quit.");
+    println!();
+    println!("  \x1B[33mShortcuts:\x1B[0m");
+    println!("    \x1B[32my\x1B[0m = Good! (positive feedback)");
+    println!("    \x1B[31mn\x1B[0m = No! (negative feedback)");
+    println!("    \x1B[90mESC\x1B[0m = Quit");
     println!("═══════════════════════════════════════════════════════════════");
     println!();
 
@@ -187,6 +191,32 @@ async fn run_simple_mode() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     KeyCode::Char(c) => {
+                        // Quick feedback shortcuts (only when buffer is empty)
+                        if input_buffer.is_empty() {
+                            if c == 'y' || c == 'Y' {
+                                // Positive feedback
+                                print!("\r\x1B[K");
+                                println!("  \x1B[32m✓ Good!\x1B[0m");
+                                print!("  \x1B[32mYou:\x1B[0m ");
+                                io::stdout().flush()?;
+                                let signal = Signal::from_text("Bravo!");
+                                if let Ok(json) = serde_json::to_string(&signal) {
+                                    let _ = write.send(Message::Text(json)).await;
+                                }
+                                continue;
+                            } else if c == 'n' || c == 'N' {
+                                // Negative feedback
+                                print!("\r\x1B[K");
+                                println!("  \x1B[31m✗ No!\x1B[0m");
+                                print!("  \x1B[32mYou:\x1B[0m ");
+                                io::stdout().flush()?;
+                                let signal = Signal::from_text("Non");
+                                if let Ok(json) = serde_json::to_string(&signal) {
+                                    let _ = write.send(Message::Text(json)).await;
+                                }
+                                continue;
+                            }
+                        }
                         input_buffer.push(c);
                         print!("{}", c);
                         io::stdout().flush()?;
@@ -331,6 +361,26 @@ async fn run_visual_mode() -> Result<(), Box<dyn std::error::Error>> {
                         input_buffer.pop();
                     }
                     KeyCode::Char(c) => {
+                        // Quick feedback shortcuts (only when buffer is empty)
+                        if input_buffer.is_empty() {
+                            if c == 'y' || c == 'Y' {
+                                // Positive feedback
+                                visualizer.add_input("✓ Good!".to_string());
+                                let signal = Signal::from_text("Bravo!");
+                                if let Ok(json) = serde_json::to_string(&signal) {
+                                    let _ = write.send(Message::Text(json)).await;
+                                }
+                                continue;
+                            } else if c == 'n' || c == 'N' {
+                                // Negative feedback
+                                visualizer.add_input("✗ No!".to_string());
+                                let signal = Signal::from_text("Non");
+                                if let Ok(json) = serde_json::to_string(&signal) {
+                                    let _ = write.send(Message::Text(json)).await;
+                                }
+                                continue;
+                            }
+                        }
                         input_buffer.push(c);
                     }
                     _ => {}
