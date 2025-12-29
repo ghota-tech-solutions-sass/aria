@@ -115,10 +115,16 @@ C'est un pas majeur vers l'AGI : ARIA n'attend plus le feedback externe, elle an
 
 ARIA a détecté qu'elle avait peu de réponses, a raisonné, et s'est modifiée.
 
+**Évaluation des modifications** :
+ARIA évalue si ses modifications améliorent réellement ses performances :
+- Snapshot des métriques au moment de la modification (baseline)
+- Après 2000 ticks, compare avec les métriques actuelles
+- Logs: `✅ MODIFICATION SUCCESS` ou `❌ MODIFICATION NEUTRAL/FAIL`
+
 **Endpoint de visibilité** :
 ```bash
 curl http://localhost:8765/self
-# → current_params, recent_modifications (avec reasoning), meta_learning status
+# → current_params, recent_modifications (avec reasoning, evaluated, successful), meta_learning status
 ```
 
 ### Session 15 - Perception visuelle & Mémoire visuelle
