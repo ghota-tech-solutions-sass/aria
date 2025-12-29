@@ -330,7 +330,10 @@ async fn main() {
         });
 
     // Visual perception endpoint - POST /vision with base64 image
+    // Accepts: { "image": "<base64>", "source": "name", "labels": ["chat", "moka"] }
     let perception_tx_vision = perception_tx.clone();
+    let memory_vision = memory.clone();
+    let substrate_vision = substrate.clone();
     let vision_endpoint = warp::path("vision")
         .and(warp::post())
         .and(warp::body::json())
@@ -345,6 +348,15 @@ async fn main() {
                 .unwrap_or("upload")
                 .to_string();
 
+            // Optional labels to associate with this image (for teaching)
+            let labels: Vec<String> = body.get("labels")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .collect())
+                .unwrap_or_default();
+
             if b64.is_empty() {
                 return warp::reply::json(&serde_json::json!({
                     "error": "Missing 'image' field with base64 data"
@@ -352,10 +364,51 @@ async fn main() {
             }
 
             // Process the image
-            let vision = vision::VisualPerception::new();
-            match vision.process_base64(b64) {
+            let vision_processor = vision::VisualPerception::new();
+            match vision_processor.process_base64(b64) {
                 Ok(features) => {
-                    let visual_signal = vision::VisualSignal::new(features.clone(), source);
+                    let visual_signal = vision::VisualSignal::new(features.clone(), source.clone());
+
+                    // Get current tick from substrate
+                    let current_tick = substrate_vision.read().current_tick();
+
+                    // Convert 32-element vector to fixed array
+                    let mut signature = [0.0f32; 32];
+                    for (i, v) in visual_signal.vector.iter().take(32).enumerate() {
+                        signature[i] = *v;
+                    }
+
+                    // Store in visual memory and check for recognition
+                    let (memory_id, is_new, recognition) = {
+                        let mut mem = memory_vision.write();
+                        mem.see(
+                            signature,
+                            visual_signal.description.clone(),
+                            source,
+                            current_tick,
+                            features.emotional_valence
+                        )
+                    };
+
+                    // If labels provided, link them to this visual
+                    if !labels.is_empty() {
+                        let mut mem = memory_vision.write();
+                        for label in &labels {
+                            mem.link_vision_to_word(&signature, label, current_tick);
+                        }
+                    }
+
+                    // Ask memory what words this image evokes
+                    let suggested_words: Vec<serde_json::Value> = {
+                        let mem = memory_vision.read();
+                        mem.visual_to_words(&signature)
+                            .into_iter()
+                            .map(|(word, score)| serde_json::json!({
+                                "word": word,
+                                "confidence": score
+                            }))
+                            .collect()
+                    };
 
                     // Convert to internal signal and send to substrate
                     let signal = Signal {
@@ -363,10 +416,11 @@ async fn main() {
                         intensity: visual_signal.intensity,
                         label: format!("vision:{}", visual_signal.description),
                         signal_type: signal::SignalType::Visual,
-                        timestamp: 0,
+                        timestamp: current_tick,
                     };
 
-                    info!("👁️ VISION: {} (intensity: {:.2})", visual_signal.description, visual_signal.intensity);
+                    info!("👁️ VISION: {} (intensity: {:.2}, memory_id: {}, new: {})",
+                        visual_signal.description, visual_signal.intensity, memory_id, is_new);
 
                     if let Err(e) = perception_tx_vision.send(signal) {
                         warn!("Failed to send visual signal: {}", e);
@@ -376,6 +430,13 @@ async fn main() {
                         "success": true,
                         "description": visual_signal.description,
                         "intensity": visual_signal.intensity,
+                        "memory": {
+                            "id": memory_id,
+                            "is_new": is_new,
+                            "recognition": recognition,
+                            "labels_learned": labels
+                        },
+                        "suggested_words": suggested_words,
                         "features": {
                             "brightness": features.brightness,
                             "warmth": features.warmth,
@@ -395,7 +456,43 @@ async fn main() {
             }
         });
 
-    let routes = ws_route.or(health).or(stats).or(words).or(associations).or(episodes).or(clusters).or(meta).or(vision_endpoint);
+    // Visual memory stats endpoint - GET /visual
+    let memory_visual_stats = memory.clone();
+    let visual_stats_endpoint = warp::path("visual")
+        .map(move || {
+            let mem = memory_visual_stats.read();
+            let (total_memories, total_links, top_words) = mem.visual_stats();
+
+            // Get recent memories
+            let recent_memories: Vec<serde_json::Value> = mem.visual_memories
+                .iter()
+                .rev()
+                .take(10)
+                .map(|m| serde_json::json!({
+                    "id": m.id,
+                    "description": m.description,
+                    "labels": m.labels,
+                    "times_seen": m.times_seen,
+                    "source": m.source
+                }))
+                .collect();
+
+            let top_links: Vec<serde_json::Value> = top_words.iter()
+                .map(|(word, count)| serde_json::json!({
+                    "word": word,
+                    "associations": count
+                }))
+                .collect();
+
+            warp::reply::json(&serde_json::json!({
+                "total_visual_memories": total_memories,
+                "total_word_links": total_links,
+                "recent_memories": recent_memories,
+                "top_word_links": top_links
+            }))
+        });
+
+    let routes = ws_route.or(health).or(stats).or(words).or(associations).or(episodes).or(clusters).or(meta).or(vision_endpoint).or(visual_stats_endpoint);
 
     info!("WebSocket ready on ws://0.0.0.0:{}/aria", config.port);
     info!("Health check on http://0.0.0.0:{}/health", config.port);
@@ -406,6 +503,7 @@ async fn main() {
     info!("Clusters on http://0.0.0.0:{}/clusters", config.port);
     info!("Meta-learning on http://0.0.0.0:{}/meta", config.port);
     info!("Vision on POST http://0.0.0.0:{}/vision", config.port);
+    info!("Visual memory on http://0.0.0.0:{}/visual", config.port);
     println!();
     println!("🧒 ARIA is waiting for her first interaction...");
     println!();

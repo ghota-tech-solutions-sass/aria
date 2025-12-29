@@ -86,40 +86,64 @@ Chats de Mickael :
 - **Obrigada** : Abyssin
 
 ---
-*Version : 0.3.1 | Dernière update : 2025-12-29*
+*Version : 0.3.2 | Dernière update : 2025-12-29*
 
-### Session 15 - Perception visuelle
+### Session 15 - Perception visuelle & Mémoire visuelle
 
-**ARIA peut maintenant VOIR !** Images → vecteurs sémantiques 32D.
+**ARIA peut maintenant VOIR, SE SOUVENIR, et PARLER de ce qu'elle voit !**
 
-**Nouveau module `vision.rs`** :
-- `VisualFeatures` : 32 caractéristiques extraites (couleur, luminosité, texture, spatial, émotionnel)
-- `VisualPerception` : analyse images base64 et extrait features
-- `VisualSignal` : convertit features en vecteur compatible avec le substrate
+#### Partie 1 : Perception visuelle
+Images → vecteurs sémantiques 32D.
 
-**Features extraites** :
-- **Couleurs (8)** : RGB moyens, teinte dominante, warmth, saturation, colorfulness, contrast
-- **Luminosité (4)** : brightness, variance, min/max
-- **Texture (4)** : edge_density, gradients, uniformity, noise
-- **Spatial (8)** : center vs edges, quadrants, patterns
-- **Émotionnel (8)** : valence, arousal, nature_score, face_likelihood...
+**Module `vision.rs`** :
+- `VisualFeatures` : 32 caractéristiques extraites
+- `VisualPerception` : analyse images base64
+- `VisualSignal` : convertit en vecteur substrate-compatible
 
-**Nouveau endpoint HTTP** :
+#### Partie 2 : Mémoire visuelle
+ARIA se souvient des images et apprend à les nommer.
+
+**Nouveaux types dans `memory/mod.rs`** :
+- `VisualMemory` : signature 32D + labels + métadonnées
+- `VisualWordLink` : prototype visuel associé à un mot
+
+**Méthodes** :
+- `see()` : stocke/reconnaît une image
+- `link_vision_to_word()` : associe image + mot
+- `visual_to_words()` : image → mots suggérés
+- `word_to_visual()` : mot → prototype visuel
+
+#### Partie 3 : Expression visuelle
+Quand ARIA voit une image qu'elle reconnaît, elle dit le mot associé.
+
+**Logs** :
+```
+👁️→💬 VISUAL RECOGNITION: ARIA sees 'moka' (confidence: 1.00)
+```
+
+**Endpoints HTTP** :
 ```bash
+# Envoyer une image (+ optionnel: enseigner des mots)
 curl -X POST http://localhost:8765/vision \
   -H "Content-Type: application/json" \
-  -d '{"image": "<base64>", "source": "test"}'
+  -d '{"image": "<base64>", "labels": ["moka", "chat"]}'
+
+# Voir les stats de mémoire visuelle
+curl http://localhost:8765/visual
 ```
 
-**Tests** :
-```
-Rouge  → "sombre chaud coloré simple joyeux" (warmth=1.0)
-Vert   → "coloré simple naturel joyeux" (nature=1.0)
-Bleu   → "sombre froid coloré simple" (warmth=-1.0)
-Jaune  → "lumineux chaud coloré simple joyeux"
+**Test** :
+```python
+# 1. Enseigner: orange = "moka"
+send_image("moka_photo", 180, 100, 50, labels=["moka"])
+
+# 2. Montrer image similaire → ARIA dit "moka"
+send_image("test", 175, 95, 55)
+# → Recognition: "Je reconnais: moka ! (vu 2 fois)"
+# → Log: 👁️→💬 VISUAL RECOGNITION: ARIA sees 'moka'
 ```
 
-ARIA peut maintenant recevoir des images et les convertir en signaux internes.
+ARIA peut maintenant apprendre à reconnaître Moka et Obrigada sur photo !
 
 ### Session 14 - Méta-apprentissage (AGI)
 

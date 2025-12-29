@@ -795,8 +795,14 @@ impl Substrate {
             current_tick,
         );
 
+        // === VISUAL-LINGUISTIC RESPONSE ===
+        // If this is a visual signal, check if ARIA recognizes it and can name it
+        let visual_emergences = self.process_visual_signal(&signal, current_tick);
+
         // Check for immediate emergence
-        self.detect_emergence(current_tick)
+        let mut emergences = self.detect_emergence(current_tick);
+        emergences.extend(visual_emergences);
+        emergences
     }
 
     /// Decide whether to record an episode and record it
@@ -1069,6 +1075,70 @@ impl Substrate {
             // Boredom
             boredom: emotional.boredom,
         }
+    }
+
+    /// Get current tick (for external use)
+    pub fn current_tick(&self) -> u64 {
+        self.tick.load(Ordering::Relaxed)
+    }
+
+    /// Process visual signals - ARIA speaks what she sees
+    fn process_visual_signal(&self, signal: &OldSignal, current_tick: u64) -> Vec<OldSignal> {
+        use crate::signal::SignalType as OldSignalType;
+
+        // Only process Visual signals
+        if signal.signal_type != OldSignalType::Visual {
+            return Vec::new();
+        }
+
+        // Extract visual signature from signal content
+        let mut signature = [0.0f32; 32];
+        for (i, v) in signal.content.iter().take(32).enumerate() {
+            signature[i] = *v;
+        }
+
+        // Check memory for visual-word links
+        let memory = self.memory.read();
+        let suggested_words = memory.visual_to_words(&signature);
+
+        if suggested_words.is_empty() {
+            return Vec::new();
+        }
+
+        // Get the top word (highest confidence)
+        let (top_word, confidence) = &suggested_words[0];
+
+        // Only speak if confidence is high enough
+        if *confidence < 0.5 {
+            return Vec::new();
+        }
+
+        // Random chance based on response probability
+        let params = self.adaptive_params.read();
+        let mut rng = rand::thread_rng();
+        if rng.gen::<f32>() > params.response_probability * 0.5 {
+            return Vec::new();
+        }
+
+        // Create an expression signal with the recognized word
+        let mut expression_content = vec![0.0f32; 32];
+        // Copy some of the visual features
+        for i in 0..8 {
+            expression_content[i] = signature[i] * 0.5;
+        }
+
+        let expression = OldSignal {
+            content: expression_content,
+            intensity: confidence * 0.8,
+            label: format!("word:{}", top_word),
+            signal_type: OldSignalType::Expression,
+            timestamp: current_tick,
+        };
+
+        tracing::info!("👁️→💬 VISUAL RECOGNITION: ARIA sees '{}' (confidence: {:.2})",
+            top_word, confidence);
+
+        vec![expression]
     }
 
     // === Internal Methods ===

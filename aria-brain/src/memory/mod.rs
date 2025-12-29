@@ -189,6 +189,92 @@ pub struct LongTermMemory {
     /// The meta-learner - learns how to learn
     #[serde(default)]
     pub meta_learner: MetaLearner,
+
+    // === VISUAL MEMORY (Session 15) ===
+
+    /// Visual memories - images ARIA has seen
+    #[serde(default)]
+    pub visual_memories: Vec<VisualMemory>,
+
+    /// Visual-word associations - connects what ARIA sees to words she knows
+    #[serde(default)]
+    pub visual_word_links: HashMap<String, VisualWordLink>,
+}
+
+/// A visual memory - ARIA remembers seeing this
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct VisualMemory {
+    /// Unique ID
+    pub id: u64,
+    /// The visual signature (32D vector)
+    pub signature: [f32; 32],
+    /// Human-readable description generated at creation
+    pub description: String,
+    /// Labels associated with this image (learned from context)
+    pub labels: Vec<String>,
+    /// When this was first seen
+    pub first_seen: u64,
+    /// How many times seen
+    pub times_seen: u64,
+    /// Last time seen
+    pub last_seen: u64,
+    /// Emotional valence when first seen (-1 to 1)
+    pub emotional_context: f32,
+    /// Source/origin (e.g., "webcam", "file:moka.jpg")
+    pub source: String,
+}
+
+impl VisualMemory {
+    pub fn new(id: u64, signature: [f32; 32], description: String, source: String, tick: u64, emotional_context: f32) -> Self {
+        Self {
+            id,
+            signature,
+            description,
+            labels: Vec::new(),
+            first_seen: tick,
+            times_seen: 1,
+            last_seen: tick,
+            emotional_context,
+            source,
+        }
+    }
+
+    /// Calculate similarity to another visual signature (0 to 1)
+    pub fn similarity(&self, other: &[f32; 32]) -> f32 {
+        let dot: f32 = self.signature.iter().zip(other.iter()).map(|(a, b)| a * b).sum();
+        let mag_a: f32 = self.signature.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let mag_b: f32 = other.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if mag_a > 0.0 && mag_b > 0.0 {
+            (dot / (mag_a * mag_b)).max(0.0)
+        } else {
+            0.0
+        }
+    }
+
+    /// Is this likely the same thing? (high similarity threshold)
+    pub fn is_same(&self, other: &[f32; 32]) -> bool {
+        self.similarity(other) > 0.85
+    }
+
+    /// Is this similar enough to be related?
+    pub fn is_related(&self, other: &[f32; 32]) -> bool {
+        self.similarity(other) > 0.6
+    }
+}
+
+/// Visual-word link - connects visual features to words
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct VisualWordLink {
+    /// The word being linked
+    pub word: String,
+    /// Visual prototype (average of all images associated with this word)
+    pub visual_prototype: [f32; 32],
+    /// Number of associations (how confident is this link)
+    pub association_count: u64,
+    /// Average similarity of associations
+    pub avg_similarity: f32,
+    /// Last time this link was reinforced
+    pub last_reinforced: u64,
 }
 
 /// Result of an exploration attempt (combination of words)
@@ -569,6 +655,9 @@ impl LongTermMemory {
             exploration_history: HashMap::new(),
             // Meta-learning (Session 14)
             meta_learner: MetaLearner::new(),
+            // Visual memory (Session 15)
+            visual_memories: Vec::new(),
+            visual_word_links: HashMap::new(),
         }
     }
 
@@ -1913,6 +2002,152 @@ impl LongTermMemory {
         let mut result: Vec<(String, f32)> = related.into_iter().collect();
         result.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         result
+    }
+
+    // === VISUAL MEMORY METHODS (Session 15) ===
+
+    /// Store a new visual memory or update existing one
+    /// Returns: (memory_id, is_new, recognition_info)
+    pub fn see(&mut self, signature: [f32; 32], description: String, source: String, tick: u64, emotional_context: f32)
+        -> (u64, bool, Option<String>)
+    {
+        // Check if we've seen something similar before
+        let mut best_match: Option<(usize, f32)> = None;
+        for (i, mem) in self.visual_memories.iter().enumerate() {
+            let sim = mem.similarity(&signature);
+            if sim > 0.85 {  // Same thing
+                if best_match.map_or(true, |(_, s)| sim > s) {
+                    best_match = Some((i, sim));
+                }
+            }
+        }
+
+        if let Some((idx, similarity)) = best_match {
+            // We recognize this! Update the memory
+            let mem = &mut self.visual_memories[idx];
+            mem.times_seen += 1;
+            mem.last_seen = tick;
+
+            // Blend the signature slightly (memory evolves)
+            for i in 0..32 {
+                mem.signature[i] = mem.signature[i] * 0.9 + signature[i] * 0.1;
+            }
+
+            let recognition = if mem.labels.is_empty() {
+                format!("Je reconnais ça ! (vu {} fois)", mem.times_seen)
+            } else {
+                format!("Je reconnais: {} ! (vu {} fois)", mem.labels.join(", "), mem.times_seen)
+            };
+
+            tracing::info!("👁️ RECOGNITION: {} (similarity: {:.2})", recognition, similarity);
+            (mem.id, false, Some(recognition))
+        } else {
+            // New visual memory!
+            let id = self.visual_memories.len() as u64;
+            let mem = VisualMemory::new(id, signature, description.clone(), source, tick, emotional_context);
+            self.visual_memories.push(mem);
+
+            tracing::info!("👁️ NEW VISUAL MEMORY #{}: {}", id, description);
+            (id, true, None)
+        }
+    }
+
+    /// Associate a word with a visual memory (when someone says a word while showing an image)
+    pub fn link_vision_to_word(&mut self, signature: &[f32; 32], word: &str, tick: u64) {
+        let word_lower = word.to_lowercase();
+
+        // Update the visual-word link
+        if let Some(link) = self.visual_word_links.get_mut(&word_lower) {
+            // Update prototype (running average)
+            let n = link.association_count as f32;
+            for i in 0..32 {
+                link.visual_prototype[i] = (link.visual_prototype[i] * n + signature[i]) / (n + 1.0);
+            }
+            link.association_count += 1;
+            link.last_reinforced = tick;
+
+            // Calculate new average similarity
+            let mut sig_arr = [0.0f32; 32];
+            sig_arr.copy_from_slice(signature);
+            let sim = VisualMemory::new(0, sig_arr, String::new(), String::new(), 0, 0.0)
+                .similarity(&link.visual_prototype);
+            link.avg_similarity = (link.avg_similarity * n + sim) / (n + 1.0);
+
+            tracing::info!("🔗 VISUAL-WORD REINFORCED: '{}' ({}x, avg_sim: {:.2})",
+                word_lower, link.association_count, link.avg_similarity);
+        } else {
+            // New link!
+            let mut prototype = [0.0f32; 32];
+            prototype.copy_from_slice(signature);
+
+            self.visual_word_links.insert(word_lower.clone(), VisualWordLink {
+                word: word_lower.clone(),
+                visual_prototype: prototype,
+                association_count: 1,
+                avg_similarity: 1.0,
+                last_reinforced: tick,
+            });
+
+            tracing::info!("🔗 NEW VISUAL-WORD LINK: '{}'", word_lower);
+        }
+
+        // Also add the label to matching visual memories (strict threshold)
+        for mem in &mut self.visual_memories {
+            if mem.similarity(signature) > 0.85 && !mem.labels.contains(&word_lower) {
+                mem.labels.push(word_lower.clone());
+            }
+        }
+    }
+
+    /// Given a visual signature, what words come to mind?
+    /// Returns words sorted by relevance
+    pub fn visual_to_words(&self, signature: &[f32; 32]) -> Vec<(String, f32)> {
+        let mut results: Vec<(String, f32)> = self.visual_word_links.iter()
+            .map(|(word, link)| {
+                let mut sig_arr = [0.0f32; 32];
+                sig_arr.copy_from_slice(signature);
+                let sim = VisualMemory::new(0, sig_arr, String::new(), String::new(), 0, 0.0)
+                    .similarity(&link.visual_prototype);
+                // Weight by both similarity and confidence (association_count)
+                let confidence = (link.association_count as f32).ln().max(0.0) * 0.1 + 1.0;
+                (word.clone(), sim * confidence)
+            })
+            .filter(|(_, score)| *score > 0.3)  // Only relevant matches
+            .collect();
+
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(5);  // Top 5 words
+        results
+    }
+
+    /// Given a word, what should it look like visually?
+    /// Returns the visual prototype if we have one
+    pub fn word_to_visual(&self, word: &str) -> Option<[f32; 32]> {
+        self.visual_word_links.get(&word.to_lowercase())
+            .filter(|link| link.association_count >= 2)  // Need at least 2 examples
+            .map(|link| link.visual_prototype)
+    }
+
+    /// Get visual memory statistics
+    pub fn visual_stats(&self) -> (usize, usize, Vec<(String, u64)>) {
+        let total_memories = self.visual_memories.len();
+        let total_links = self.visual_word_links.len();
+
+        let mut top_words: Vec<(String, u64)> = self.visual_word_links.iter()
+            .map(|(word, link)| (word.clone(), link.association_count))
+            .collect();
+        top_words.sort_by(|a, b| b.1.cmp(&a.1));
+        top_words.truncate(10);
+
+        (total_memories, total_links, top_words)
+    }
+
+    /// Find visual memories by label
+    pub fn find_visual_by_label(&self, label: &str) -> Vec<&VisualMemory> {
+        let label_lower = label.to_lowercase();
+        self.visual_memories.iter()
+            .filter(|mem| mem.labels.iter().any(|l| l.contains(&label_lower)))
+            .collect()
     }
 }
 
