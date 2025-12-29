@@ -30,6 +30,9 @@ pub struct AriaConfig {
 
     /// Network/cluster settings
     pub network: NetworkConfig,
+
+    /// Recurrent processing (Gemini multi-pass)
+    pub recurrent: RecurrentConfig,
 }
 
 impl Default for AriaConfig {
@@ -42,6 +45,7 @@ impl Default for AriaConfig {
             activity: SleepConfig::default(),
             compute: ComputeConfig::default(),
             network: NetworkConfig::default(),
+            recurrent: RecurrentConfig::default(),
         }
     }
 }
@@ -166,6 +170,43 @@ impl Default for SignalConfig {
             immediate_activation: 5.0,
             state_cap: 5.0,
             signal_radius: 2.0,
+        }
+    }
+}
+
+/// Recurrent processing configuration (Gemini multi-pass)
+///
+/// Enables internal "thinking" passes where cells influence each other
+/// before emergence detection. This creates richer internal dynamics.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RecurrentConfig {
+    /// Number of internal passes per tick (1 = single-pass, 2+ = multi-pass)
+    /// Higher values = deeper processing but more compute
+    pub passes_per_tick: u32,
+
+    /// Decay factor for internal signals between passes (0.0-1.0)
+    /// Higher = signals persist longer across passes
+    pub internal_signal_decay: f32,
+
+    /// Minimum activation to generate internal signals
+    /// Cells below this threshold don't propagate to neighbors
+    pub internal_signal_threshold: f32,
+
+    /// Enable recurrent processing (can be disabled for performance)
+    pub enabled: bool,
+
+    /// Internal signal radius (usually smaller than external)
+    pub internal_radius: f32,
+}
+
+impl Default for RecurrentConfig {
+    fn default() -> Self {
+        Self {
+            passes_per_tick: 2,              // 2 passes: input + internal
+            internal_signal_decay: 0.7,       // 30% decay between passes
+            internal_signal_threshold: 0.1,   // Only active cells propagate
+            enabled: true,                    // Enabled by default
+            internal_radius: 1.0,             // Smaller than external (2.0)
         }
     }
 }

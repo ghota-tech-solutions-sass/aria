@@ -268,19 +268,39 @@ impl Substrate {
             memory.tick_working_memory(0.02); // 2% decay per tick
         }
 
-        // Get signals from buffer
-        let signals: Vec<SignalFragment> = {
+        // Get external signals from buffer
+        let mut signals: Vec<SignalFragment> = {
             let mut buffer = self.signal_buffer.write();
             std::mem::take(&mut *buffer)
         };
 
-        // Process cells using backend
-        let actions = self.backend.update_cells(
-            &mut self.cells,
-            &mut self.states,
-            &self.dna_pool,
-            &signals,
-        ).unwrap_or_default();
+        // === Multi-pass recurrent processing (Gemini optimization) ===
+        let passes = if self.config.recurrent.enabled {
+            self.config.recurrent.passes_per_tick.max(1)
+        } else {
+            1
+        };
+
+        let mut all_actions = Vec::new();
+
+        for pass in 0..passes {
+            // Process cells using backend
+            let actions = self.backend.update_cells(
+                &mut self.cells,
+                &mut self.states,
+                &self.dna_pool,
+                &signals,
+            ).unwrap_or_default();
+
+            all_actions.extend(actions);
+
+            // Generate internal signals for next pass (recurrent feedback)
+            if pass < passes - 1 && self.config.recurrent.enabled {
+                signals = self.generate_internal_signals();
+            }
+        }
+
+        let actions = all_actions;
 
         // Handle actions
         let mut births = Vec::new();
@@ -401,6 +421,55 @@ impl Substrate {
         self.maybe_self_modify(current_tick);
 
         emergent
+    }
+
+    /// Generate internal signals for recurrent processing (Gemini multi-pass)
+    ///
+    /// Active cells emit internal signals that influence their neighbors,
+    /// creating feedback loops and richer internal dynamics.
+    fn generate_internal_signals(&self) -> Vec<SignalFragment> {
+        let threshold = self.config.recurrent.internal_signal_threshold;
+        let decay = self.config.recurrent.internal_signal_decay;
+
+        let mut signals = Vec::new();
+
+        // Collect signals from active cells
+        for (cell, state) in self.cells.iter().zip(self.states.iter()) {
+            // Skip sleeping, dead, or low-activity cells
+            if cell.activity.sleeping || state.is_dead() {
+                continue;
+            }
+
+            // Calculate activation level
+            let activation: f32 = state.state.iter().map(|x| x.abs()).sum::<f32>() / state.state.len() as f32;
+
+            if activation > threshold {
+                // Generate internal signal from this cell's state
+                let content: [f32; SIGNAL_DIMS] = std::array::from_fn(|j| {
+                    state.state[j] * decay // Apply decay to internal signals
+                });
+
+                signals.push(SignalFragment::new(
+                    cell.id,
+                    content,
+                    activation * decay,
+                ));
+            }
+
+            // Limit internal signals to prevent explosion
+            if signals.len() >= 100 {
+                break;
+            }
+        }
+
+        if !signals.is_empty() {
+            tracing::trace!(
+                "🔄 Recurrent: {} internal signals generated",
+                signals.len()
+            );
+        }
+
+        signals
     }
 
     /// Get substrate statistics
