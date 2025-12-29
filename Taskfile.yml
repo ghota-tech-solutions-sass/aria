@@ -17,10 +17,11 @@ tasks:
     deps: [build-brain, build-body]
 
   build-brain:
-    desc: Build the brain (substrate)
+    desc: Build the brain (substrate) and trainer
     dir: aria-brain
     cmds:
-      - cargo build --release
+      - cargo build --release --bin aria-brain
+      - cargo build --release --bin aria-train
 
   build-body:
     desc: Build the body (interface)

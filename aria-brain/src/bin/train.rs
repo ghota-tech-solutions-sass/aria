@@ -53,7 +53,7 @@ impl Signal {
 
         Self {
             content,
-            intensity: 0.5,
+            intensity: 1.0,  // Higher intensity for training
             label: text.to_string(),
             signal_type: "Perception".to_string(),
         }
@@ -202,9 +202,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let signal = Signal::from_text(pattern.input);
             write.send(Message::Text(serde_json::to_string(&signal)?)).await?;
 
-            // Wait for ARIA's response
+            // Wait for ARIA's response (balanced timeout)
             let mut response_text = String::new();
-            let timeout = sleep(Duration::from_secs(3));
+            let timeout = sleep(Duration::from_millis(1500));
             tokio::pin!(timeout);
 
             loop {
@@ -232,12 +232,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let success = pattern.expected.iter()
                 .any(|exp| response_text.contains(exp));
 
-            // Send feedback
+            // Send feedback (use "hmm" for negative to avoid ARIA learning "non")
             let feedback_text = if success {
                 total_success += 1;
                 "Bravo !"
             } else {
-                "Non"
+                "hmm..."
             };
 
             let feedback_signal = Signal::from_text(feedback_text);
@@ -249,8 +249,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if response_text.is_empty() { "(none)" } else { &response_text }
             );
 
-            // Small delay between repetitions
-            sleep(Duration::from_millis(300)).await;
+            // Minimal delay between repetitions
+            sleep(Duration::from_millis(100)).await;
         }
 
         println!();
