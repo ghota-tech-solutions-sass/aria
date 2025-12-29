@@ -492,7 +492,62 @@ async fn main() {
             }))
         });
 
-    let routes = ws_route.or(health).or(stats).or(words).or(associations).or(episodes).or(clusters).or(meta).or(vision_endpoint).or(visual_stats_endpoint);
+    // Self-modification endpoint - GET /self
+    let memory_self = memory.clone();
+    let substrate_self = substrate.clone();
+    let self_endpoint = warp::path("self")
+        .map(move || {
+            let mem = memory_self.read();
+            let params = {
+                let sub = substrate_self.read();
+                let p = sub.stats();
+                serde_json::json!({
+                    "emission_threshold": p.adaptive_emission_threshold,
+                    "response_probability": p.adaptive_response_probability,
+                    "spontaneity": p.adaptive_spontaneity,
+                    "feedback_positive": p.adaptive_feedback_positive,
+                    "feedback_negative": p.adaptive_feedback_negative
+                })
+            };
+
+            let modifier = &mem.self_modifier;
+            let recent_mods: Vec<serde_json::Value> = modifier.modification_history
+                .iter()
+                .rev()
+                .take(10)
+                .map(|m| serde_json::json!({
+                    "param": m.param.name(),
+                    "from": m.current_value,
+                    "to": m.new_value,
+                    "reasoning": m.reasoning,
+                    "confidence": m.confidence,
+                    "tick": m.proposed_at
+                }))
+                .collect();
+
+            warp::reply::json(&serde_json::json!({
+                "self_modification": {
+                    "enabled": true,
+                    "total_modifications": modifier.total_modifications,
+                    "successful_modifications": modifier.successful_modifications,
+                    "success_rate": if modifier.total_modifications > 0 {
+                        modifier.successful_modifications as f32 / modifier.total_modifications as f32
+                    } else { 0.0 },
+                    "last_check_tick": modifier.last_modification_tick,
+                    "check_interval": modifier.modification_interval
+                },
+                "current_params": params,
+                "recent_modifications": recent_mods,
+                "meta_learning": {
+                    "competence_level": mem.meta_learner.progress.competence_level,
+                    "learning_quality": mem.meta_learner.progress.learning_quality,
+                    "trend": format!("{:?}", mem.meta_learner.progress.trend),
+                    "total_evaluations": mem.meta_learner.total_evaluations
+                }
+            }))
+        });
+
+    let routes = ws_route.or(health).or(stats).or(words).or(associations).or(episodes).or(clusters).or(meta).or(vision_endpoint).or(visual_stats_endpoint).or(self_endpoint);
 
     info!("WebSocket ready on ws://0.0.0.0:{}/aria", config.port);
     info!("Health check on http://0.0.0.0:{}/health", config.port);
@@ -504,6 +559,7 @@ async fn main() {
     info!("Meta-learning on http://0.0.0.0:{}/meta", config.port);
     info!("Vision on POST http://0.0.0.0:{}/vision", config.port);
     info!("Visual memory on http://0.0.0.0:{}/visual", config.port);
+    info!("Self-modification on http://0.0.0.0:{}/self", config.port);
     println!();
     println!("🧒 ARIA is waiting for her first interaction...");
     println!();
