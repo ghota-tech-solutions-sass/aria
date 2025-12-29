@@ -39,6 +39,7 @@ aria-body (MacBook)  ◄──WebSocket──►  aria-brain (PC + RTX 2070)
 - **Vivre** : rêves, parole spontanée, jeu créatif
 - **S'adapter** : paramètres qui évoluent avec le feedback
 - **Explorer** : curiosité-driven, teste des combinaisons nouvelles
+- **Méta-apprendre** : s'auto-évalue, apprend à apprendre (Session 14)
 
 ## Commandes
 
@@ -72,9 +73,10 @@ spontaneity: 0.01-0.3
 ## Prochaines étapes
 
 1. ✅ **GPU compute** : wgpu/Vulkan - AMD Radeon NAVI14 fonctionnel
-2. **Scaler à 5M+ cellules** : Tests avec plus de cellules GPU
-3. **Perception visuelle** : images → vecteurs
-4. **Auto-modification** : ARIA modifie son propre code (objectif ultime)
+2. ✅ **Méta-apprentissage** : ARIA s'auto-évalue et apprend à apprendre
+3. **Scaler à 5M+ cellules** : Tests avec plus de cellules GPU
+4. **Perception visuelle** : images → vecteurs
+5. **Auto-modification** : ARIA modifie son propre code (objectif ultime)
 
 ## Contexte personnel
 
@@ -83,7 +85,38 @@ Chats de Mickael :
 - **Obrigada** : Abyssin
 
 ---
-*Version : 0.2.7 | Dernière update : 2025-12-29*
+*Version : 0.3.0 | Dernière update : 2025-12-29*
+
+### Session 14 - Méta-apprentissage (AGI)
+
+**ARIA apprend à apprendre** - Plus besoin d'attendre le feedback externe !
+
+**Nouveau module `meta_learning.rs`** :
+- `InternalReward` : ARIA s'auto-évalue (cohérence, surprise, satisfaction)
+- `ExplorationStrategy` : 6 stratégies d'exploration (semantic, emotional, cross-category, random...)
+- `MetaLearner` : sélectionne la meilleure stratégie et apprend de ses résultats
+- `ProgressTracker` : conscience de son propre progrès (trend: improving/stable/declining)
+- `InternalGoal` : ARIA se fixe ses propres objectifs
+
+**Flux méta-apprentissage** :
+```
+ARIA explore → InternalReward calcule score → MetaLearner apprend → Meilleure stratégie
+```
+
+**Nouveau endpoint HTTP** :
+```bash
+curl http://localhost:8765/meta  # Stats du méta-apprentissage
+```
+
+**Logs observés** :
+```
+🧠 META: Selected strategy 'semantic'
+🔍 EXPLORING (semantic): trying 'chat+moka'
+✅ INTERNAL REWARD: 0.54 (good) - coherence:0.72 surprise:0.35
+🎯 NEW GOAL: Réussir 5 explorations
+```
+
+ARIA n'attend plus "Bravo!" - elle sait elle-même si une exploration était intéressante.
 
 ### Session 13 - Exploration guidée par la curiosité (AGI)
 

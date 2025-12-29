@@ -7,6 +7,7 @@ mod substrate;
 mod signal;
 mod memory;
 mod config;
+mod meta_learning;
 
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -275,7 +276,59 @@ async fn main() {
             }))
         });
 
-    let routes = ws_route.or(health).or(stats).or(words).or(associations).or(episodes).or(clusters);
+    // Meta-learning endpoint - show ARIA's self-learning progress (Session 14)
+    let memory_meta = memory.clone();
+    let meta = warp::path("meta")
+        .map(move || {
+            let mem = memory_meta.read();
+            let ml = &mem.meta_learner;
+
+            // Strategy performance
+            let strategies: Vec<serde_json::Value> = ml.strategies.iter()
+                .map(|(st, strategy)| {
+                    serde_json::json!({
+                        "type": st.name(),
+                        "usage_count": strategy.usage_count,
+                        "avg_reward": strategy.avg_reward,
+                        "best_reward": strategy.best_reward,
+                        "recent_avg": strategy.recent_avg()
+                    })
+                })
+                .collect();
+
+            // Goals
+            let goals: Vec<serde_json::Value> = ml.goals.iter()
+                .map(|goal| {
+                    serde_json::json!({
+                        "id": goal.id,
+                        "description": goal.description,
+                        "progress": goal.progress,
+                        "completed": goal.completed
+                    })
+                })
+                .collect();
+
+            // Progress tracker
+            let progress = &ml.progress;
+
+            warp::reply::json(&serde_json::json!({
+                "total_evaluations": ml.total_evaluations,
+                "current_strategy": ml.current_strategy.name(),
+                "exploration_rate": ml.config.exploration_rate,
+                "strategies": strategies,
+                "goals": goals,
+                "progress": {
+                    "learning_quality": progress.learning_quality,
+                    "competence_level": progress.competence_level,
+                    "trend": format!("{:?}", progress.trend),
+                    "recent_successes": progress.recent_successes,
+                    "recent_failures": progress.recent_failures,
+                    "status": progress.status_description()
+                }
+            }))
+        });
+
+    let routes = ws_route.or(health).or(stats).or(words).or(associations).or(episodes).or(clusters).or(meta);
 
     info!("WebSocket ready on ws://0.0.0.0:{}/aria", config.port);
     info!("Health check on http://0.0.0.0:{}/health", config.port);
@@ -284,6 +337,7 @@ async fn main() {
     info!("Associations on http://0.0.0.0:{}/associations", config.port);
     info!("Episodes on http://0.0.0.0:{}/episodes", config.port);
     info!("Clusters on http://0.0.0.0:{}/clusters", config.port);
+    info!("Meta-learning on http://0.0.0.0:{}/meta", config.port);
     println!();
     println!("🧒 ARIA is waiting for her first interaction...");
     println!();

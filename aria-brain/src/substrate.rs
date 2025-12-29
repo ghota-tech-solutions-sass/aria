@@ -53,6 +53,7 @@ use aria_compute::create_backend;
 
 // Our local memory module (will be migrated later)
 use crate::memory::{LongTermMemory, SocialContext, Episode, EpisodeEmotion, EpisodeCategory};
+use crate::memory::{MetaLearner, InternalReward, StrategyType};
 use crate::signal::Signal as OldSignal;
 
 /// Minimum ticks between emissions (anti-spam)
@@ -1227,6 +1228,11 @@ impl Substrate {
                 return Vec::new();  // ARIA chose to stay silent
             }
 
+            // META-LEARNING: Evaluate this response (Session 14)
+            // ARIA learns from ALL interactions, not just explorations
+            let intensity = coherence; // Use coherence as intensity proxy
+            self.evaluate_response(coherence, intensity, current_tick);
+
             // Get context
             let recent_said = self.recent_said_words.read().clone();
             let was_question = *self.last_was_question.read();
@@ -1624,21 +1630,34 @@ impl Substrate {
 
         // Check bored FIRST (exploration has priority over lonely thinking)
         let (label, intensity) = if is_bored {
-            // CURIOSITY-DRIVEN EXPLORATION
-            // When bored, try NEW combinations ARIA hasn't tried much
+            // META-LEARNING DRIVEN EXPLORATION (Session 14)
+            // ARIA selects her exploration strategy and evaluates herself
             let all_favorites: Vec<String> = memory.word_frequencies.iter()
                 .filter(|(_, freq)| freq.emotional_valence > 0.2 && freq.count > 1)
                 .map(|(word, _)| word.clone())
                 .collect();
 
             if all_favorites.len() >= 2 {
-                // Use exploration memory to find novel combinations
-                if let Some((w1, w2)) = memory.get_novel_combination(&all_favorites, current_tick) {
+                // Get word pair first (needs read lock)
+                let word_pair = memory.get_novel_combination(&all_favorites, current_tick);
+                drop(memory); // Release read lock
+
+                // Step 1: Select exploration strategy using MetaLearner (needs write lock)
+                let strategy = {
+                    let mut memory_write = self.memory.write();
+                    memory_write.meta_learner.select_strategy(current_tick)
+                };
+                tracing::info!("🧠 META: Selected strategy '{}'", strategy.name());
+
+                // Step 2: Get word pair based on strategy (if not already found)
+                // Note: For now we use novel combination; strategy-specific will be enhanced later
+                let final_word_pair = word_pair;
+
+                if let Some((w1, w2)) = final_word_pair {
                     let combination = format!("{}+{}", w1, w2);
-                    tracing::info!("🔍 EXPLORING: trying '{}'", combination);
+                    tracing::info!("🔍 EXPLORING ({}): trying '{}'", strategy.name(), combination);
 
                     // Log exploration and store for feedback
-                    drop(memory); // Release read lock before write
                     {
                         let mut memory_write = self.memory.write();
                         memory_write.log_exploration(&combination, current_tick, 0.35);
@@ -1648,7 +1667,7 @@ impl Substrate {
                         *last_expl = Some(combination.clone());
                     }
 
-                    (format!("explore:{}+{}|emotion:~", w1, w2), 0.35)
+                    (format!("explore:{}+{}|strategy:{}|emotion:~", w1, w2, strategy.name()), 0.35)
                 } else {
                     // Fallback to random if exploration fails
                     let w1 = &all_favorites[rng.gen_range(0..all_favorites.len())];
@@ -1882,6 +1901,233 @@ impl Substrate {
             dot / denom
         } else {
             0.0
+        }
+    }
+
+    // ========================================================================
+    // META-LEARNING HELPERS (Session 14)
+    // ========================================================================
+
+    /// Find a pair of semantically related words (from same cluster)
+    fn find_semantic_pair(&self, memory: &LongTermMemory, favorites: &[String]) -> Option<(String, String)> {
+        let mut rng = rand::thread_rng();
+
+        // Try to find two words from the same cluster
+        for _ in 0..10 {
+            let w1 = &favorites[rng.gen_range(0..favorites.len())];
+            let cluster_words = memory.get_cluster_words(w1);
+
+            // Find a cluster word that's also a favorite
+            for cw in cluster_words {
+                if favorites.contains(&cw) && &cw != w1 {
+                    return Some((w1.clone(), cw));
+                }
+            }
+        }
+
+        // Fallback to novel combination
+        memory.get_novel_combination(favorites, self.tick.load(Ordering::Relaxed))
+    }
+
+    /// Find a pair of emotionally charged words
+    fn find_emotional_pair(&self, memory: &LongTermMemory, favorites: &[String]) -> Option<(String, String)> {
+        let mut rng = rand::thread_rng();
+
+        // Get words with strong emotional valence
+        let emotional_words: Vec<&String> = favorites.iter()
+            .filter(|w| {
+                memory.word_frequencies.get(*w)
+                    .map(|f| f.emotional_valence.abs() > 0.3)
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        if emotional_words.len() >= 2 {
+            let w1 = emotional_words[rng.gen_range(0..emotional_words.len())];
+            let w2 = emotional_words[rng.gen_range(0..emotional_words.len())];
+            if w1 != w2 {
+                return Some((w1.clone(), w2.clone()));
+            }
+        }
+
+        // Fallback
+        memory.get_novel_combination(favorites, self.tick.load(Ordering::Relaxed))
+    }
+
+    /// Find a pair of words from different grammatical categories
+    fn find_cross_category_pair(&self, memory: &LongTermMemory, favorites: &[String]) -> Option<(String, String)> {
+        use crate::memory::WordCategory;
+        let mut rng = rand::thread_rng();
+
+        // Separate by category
+        let nouns: Vec<&String> = favorites.iter()
+            .filter(|w| memory.get_word_category(w) == WordCategory::Noun)
+            .collect();
+        let verbs: Vec<&String> = favorites.iter()
+            .filter(|w| memory.get_word_category(w) == WordCategory::Verb)
+            .collect();
+        let adjs: Vec<&String> = favorites.iter()
+            .filter(|w| memory.get_word_category(w) == WordCategory::Adjective)
+            .collect();
+
+        // Try noun + verb
+        if !nouns.is_empty() && !verbs.is_empty() {
+            let n = nouns[rng.gen_range(0..nouns.len())];
+            let v = verbs[rng.gen_range(0..verbs.len())];
+            return Some((n.clone(), v.clone()));
+        }
+
+        // Try noun + adjective
+        if !nouns.is_empty() && !adjs.is_empty() {
+            let n = nouns[rng.gen_range(0..nouns.len())];
+            let a = adjs[rng.gen_range(0..adjs.len())];
+            return Some((a.clone(), n.clone())); // adj before noun in French
+        }
+
+        // Fallback
+        memory.get_novel_combination(favorites, self.tick.load(Ordering::Relaxed))
+    }
+
+    /// Compute internal reward for an exploration (ARIA evaluates herself)
+    /// Called when we have coherence and intensity data from the emergence
+    fn compute_internal_reward(
+        &self,
+        coherence: f32,
+        intensity: f32,
+        novelty: f32,
+        emotional_before: f32,
+        emotional_after: f32,
+        current_tick: u64,
+    ) {
+        // Compute the internal reward
+        let expected_intensity = 0.3; // Default expectation
+        let reward = InternalReward::compute(
+            coherence,
+            novelty,
+            intensity,
+            emotional_before,
+            emotional_after,
+            expected_intensity,
+        );
+
+        // Update MetaLearner
+        let mut memory = self.memory.write();
+        memory.meta_learner.evaluate_exploration(
+            coherence,
+            novelty,
+            intensity,
+            emotional_before,
+            emotional_after,
+            expected_intensity,
+            current_tick,
+        );
+
+        // Log the internal evaluation
+        if reward.is_excellent() {
+            tracing::info!("🌟 INTERNAL REWARD: {:.2} (EXCELLENT!) - coherence:{:.2} surprise:{:.2}",
+                reward.total_score, reward.coherence, reward.surprise);
+        } else if reward.is_positive() {
+            tracing::info!("✅ INTERNAL REWARD: {:.2} (good) - coherence:{:.2} surprise:{:.2}",
+                reward.total_score, reward.coherence, reward.surprise);
+        } else {
+            tracing::debug!("📉 INTERNAL REWARD: {:.2} (low) - coherence:{:.2}",
+                reward.total_score, reward.coherence);
+        }
+
+        // Maybe create a new goal based on current state
+        let boredom = self.emotional_state.read().boredom;
+        let (total, successful, _failed) = memory.exploration_stats();
+        let success_rate = if total > 0 { successful as f32 / total as f32 } else { 0.5 };
+        memory.meta_learner.maybe_create_goal(current_tick, boredom, success_rate);
+    }
+
+    /// Evaluate the last exploration after emergence detection
+    /// This is ARIA's internal feedback mechanism
+    pub fn evaluate_last_exploration(&self, coherence: f32, intensity: f32, current_tick: u64) {
+        // Check if there was a recent exploration
+        let last_expl = self.last_exploration.read().clone();
+        if last_expl.is_none() {
+            return;
+        }
+
+        // Get emotional state change
+        let emotional = self.emotional_state.read();
+        let emotional_after = emotional.happiness;
+        drop(emotional);
+
+        // Compute novelty from exploration history
+        let novelty = {
+            let memory = self.memory.read();
+            let key = last_expl.as_ref().unwrap().to_lowercase();
+            memory.exploration_history.get(&key)
+                .map(|r| 1.0 / (1.0 + r.attempts as f32 * 0.2))
+                .unwrap_or(1.0)
+        };
+
+        // Use neutral before state (we didn't track it precisely)
+        let emotional_before = 0.0;
+
+        // Compute internal reward
+        self.compute_internal_reward(
+            coherence,
+            intensity,
+            novelty,
+            emotional_before,
+            emotional_after,
+            current_tick,
+        );
+    }
+
+    /// Evaluate ANY response (not just explorations)
+    /// This is the main entry point for meta-learning on all interactions
+    pub fn evaluate_response(&self, coherence: f32, intensity: f32, current_tick: u64) {
+        // Get emotional state
+        let emotional = self.emotional_state.read();
+        let emotional_after = emotional.happiness;
+        let curiosity = emotional.curiosity;
+        drop(emotional);
+
+        // Check if this was an exploration (has last_exploration set)
+        let last_expl = self.last_exploration.read().clone();
+        let (novelty, is_exploration) = if let Some(ref expl) = last_expl {
+            // This was an exploration - get novelty from history
+            let memory = self.memory.read();
+            let key = expl.to_lowercase();
+            let nov = memory.exploration_history.get(&key)
+                .map(|r| 1.0 / (1.0 + r.attempts as f32 * 0.2))
+                .unwrap_or(1.0);
+            (nov, true)
+        } else {
+            // Regular response - compute novelty from coherence variance
+            // High coherence = cells agree = less novel but more reliable
+            let nov = 0.3 + (1.0 - coherence) * 0.4; // Moderate novelty for conversations
+            (nov, false)
+        };
+
+        // Use curiosity as "before" state proxy
+        let emotional_before = curiosity * 0.5;
+
+        // Log what we're evaluating
+        if is_exploration {
+            tracing::debug!("📊 Evaluating exploration: coherence={:.2}", coherence);
+        } else {
+            tracing::debug!("📊 Evaluating response: coherence={:.2}", coherence);
+        }
+
+        // Compute internal reward
+        self.compute_internal_reward(
+            coherence,
+            intensity,
+            novelty,
+            emotional_before,
+            emotional_after,
+            current_tick,
+        );
+
+        // Clear last_exploration after evaluation (if it was one)
+        if is_exploration {
+            let mut last_expl_write = self.last_exploration.write();
+            *last_expl_write = None;
         }
     }
 }

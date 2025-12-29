@@ -10,6 +10,9 @@ use std::fs;
 use std::collections::{HashMap, HashSet};
 use rand::Rng;
 
+// Re-export meta_learning types for external use
+pub use crate::meta_learning::{MetaLearner, InternalReward, StrategyType, ProgressTracker};
+
 /// Word category - approximate grammatical role
 /// ARIA learns these by observing context patterns
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Copy)]
@@ -180,6 +183,12 @@ pub struct LongTermMemory {
     /// Combinations ARIA has tried and their outcomes
     #[serde(default)]
     pub exploration_history: HashMap<String, ExplorationResult>,
+
+    // === META-LEARNING (Session 14) ===
+
+    /// The meta-learner - learns how to learn
+    #[serde(default)]
+    pub meta_learner: MetaLearner,
 }
 
 /// Result of an exploration attempt (combination of words)
@@ -558,6 +567,8 @@ impl LongTermMemory {
             adaptive_feedback_negative: 0,
             // Exploration memory
             exploration_history: HashMap::new(),
+            // Meta-learning (Session 14)
+            meta_learner: MetaLearner::new(),
         }
     }
 

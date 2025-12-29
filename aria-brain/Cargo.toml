@@ -20,6 +20,7 @@ futures-util = { workspace = true }
 # Web/Network
 warp = { workspace = true }
 tokio-tungstenite = { workspace = true }
+reqwest = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
