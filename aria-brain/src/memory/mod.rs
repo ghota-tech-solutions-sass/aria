@@ -174,6 +174,59 @@ pub struct LongTermMemory {
     /// Negative feedback count
     #[serde(default)]
     pub adaptive_feedback_negative: u64,
+
+    // === EXPLORATION MEMORY (curiosity-driven learning) ===
+
+    /// Combinations ARIA has tried and their outcomes
+    #[serde(default)]
+    pub exploration_history: HashMap<String, ExplorationResult>,
+}
+
+/// Result of an exploration attempt (combination of words)
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ExplorationResult {
+    /// Number of times this combination was tried
+    pub attempts: u64,
+    /// Number of positive feedbacks received
+    pub positive_feedback: u64,
+    /// Number of negative feedbacks received
+    pub negative_feedback: u64,
+    /// Average intensity when this was expressed
+    pub avg_intensity: f32,
+    /// Last tick when this was tried
+    pub last_attempt: u64,
+}
+
+impl ExplorationResult {
+    pub fn new(tick: u64, intensity: f32) -> Self {
+        Self {
+            attempts: 1,
+            positive_feedback: 0,
+            negative_feedback: 0,
+            avg_intensity: intensity,
+            last_attempt: tick,
+        }
+    }
+
+    /// Calculate exploration score - novelty + success rate
+    pub fn exploration_score(&self) -> f32 {
+        let success_rate = if self.attempts > 0 {
+            self.positive_feedback as f32 / self.attempts as f32
+        } else {
+            0.5 // Unknown = neutral
+        };
+
+        // Prefer: high success rate, but also some novelty (not tried too many times)
+        let novelty = 1.0 / (1.0 + self.attempts as f32 * 0.1);
+
+        success_rate * 0.7 + novelty * 0.3
+    }
+
+    /// Is this combination worth trying again?
+    pub fn should_retry(&self) -> bool {
+        // Retry if: few attempts, or good success rate
+        self.attempts < 3 || (self.positive_feedback > self.negative_feedback)
+    }
 }
 
 // Default values for adaptive params
@@ -503,7 +556,88 @@ impl LongTermMemory {
             adaptive_spontaneity: default_spontaneity(),
             adaptive_feedback_positive: 0,
             adaptive_feedback_negative: 0,
+            // Exploration memory
+            exploration_history: HashMap::new(),
         }
+    }
+
+    // === EXPLORATION METHODS ===
+
+    /// Log an exploration attempt (ARIA tried a word combination)
+    pub fn log_exploration(&mut self, combination: &str, tick: u64, intensity: f32) {
+        let key = combination.to_lowercase();
+        if let Some(existing) = self.exploration_history.get_mut(&key) {
+            existing.attempts += 1;
+            existing.avg_intensity = (existing.avg_intensity * (existing.attempts - 1) as f32 + intensity) / existing.attempts as f32;
+            existing.last_attempt = tick;
+        } else {
+            self.exploration_history.insert(key.clone(), ExplorationResult::new(tick, intensity));
+            tracing::info!("🔍 NEW EXPLORATION: '{}'", combination);
+        }
+    }
+
+    /// Record feedback for recent exploration
+    pub fn feedback_exploration(&mut self, combination: &str, positive: bool) {
+        let key = combination.to_lowercase();
+        if let Some(result) = self.exploration_history.get_mut(&key) {
+            if positive {
+                result.positive_feedback += 1;
+                tracing::info!("✅ EXPLORATION SUCCESS: '{}' ({}/{})",
+                    combination, result.positive_feedback, result.attempts);
+            } else {
+                result.negative_feedback += 1;
+                tracing::info!("❌ EXPLORATION FAILURE: '{}' ({}/{})",
+                    combination, result.negative_feedback, result.attempts);
+            }
+        }
+    }
+
+    /// Get a novel combination to try (curiosity-driven exploration)
+    /// Prefers: 1) never tried, 2) rarely tried with good results, 3) successful patterns
+    pub fn get_novel_combination(&self, words: &[String], current_tick: u64) -> Option<(String, String)> {
+        if words.len() < 2 {
+            return None;
+        }
+
+        let mut rng = rand::thread_rng();
+        let mut best_pair: Option<(String, String, f32)> = None;
+
+        // Try random pairs and score them
+        for _ in 0..20 {
+            let w1 = &words[rng.gen_range(0..words.len())];
+            let w2 = &words[rng.gen_range(0..words.len())];
+            if w1 == w2 {
+                continue;
+            }
+
+            let key = format!("{}+{}", w1, w2);
+            let score = if let Some(result) = self.exploration_history.get(&key) {
+                // Already tried - score based on novelty + success
+                let recency = (current_tick - result.last_attempt) as f32 / 10000.0;
+                result.exploration_score() + recency.min(1.0) * 0.2
+            } else {
+                // Never tried - high novelty score!
+                1.5
+            };
+
+            if best_pair.is_none() || score > best_pair.as_ref().unwrap().2 {
+                best_pair = Some((w1.clone(), w2.clone(), score));
+            }
+        }
+
+        best_pair.map(|(w1, w2, _)| (w1, w2))
+    }
+
+    /// Get exploration statistics
+    pub fn exploration_stats(&self) -> (usize, usize, usize) {
+        let total = self.exploration_history.len();
+        let successful = self.exploration_history.values()
+            .filter(|r| r.positive_feedback > r.negative_feedback)
+            .count();
+        let failed = self.exploration_history.values()
+            .filter(|r| r.negative_feedback > r.positive_feedback)
+            .count();
+        (total, successful, failed)
     }
 
     /// Detect the social context of input text

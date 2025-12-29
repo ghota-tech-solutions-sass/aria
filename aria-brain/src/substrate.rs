@@ -448,6 +448,8 @@ pub struct SubstrateStats {
     pub adaptive_spontaneity: f32,
     pub adaptive_feedback_positive: u64,
     pub adaptive_feedback_negative: u64,
+    // Boredom level
+    pub boredom: f32,
 }
 
 /// The Substrate - GPU-ready living universe
@@ -500,6 +502,9 @@ pub struct Substrate {
     /// Recent expressions (for feedback)
     recent_expressions: RwLock<Vec<String>>,
 
+    /// Last exploration attempt (combination of words)
+    last_exploration: RwLock<Option<String>>,
+
     // === Emotional & Social ===
 
     /// Global emotional state
@@ -519,6 +524,9 @@ pub struct Substrate {
 
     /// Last emission tick (anti-spam cooldown)
     last_emission_tick: AtomicU64,
+
+    /// Last spontaneous emission tick (separate cooldown for exploration)
+    last_spontaneous_tick: AtomicU64,
 
     // === Adaptive Parameters (self-modification) ===
 
@@ -607,12 +615,14 @@ impl Substrate {
             memory,
             recent_words: RwLock::new(Vec::new()),
             recent_expressions: RwLock::new(Vec::new()),
+            last_exploration: RwLock::new(None),
             emotional_state: RwLock::new(EmotionalState::default()),
             recent_said_words: RwLock::new(Vec::new()),
             conversation: RwLock::new(ConversationContext::new()),
             last_was_question: RwLock::new(false),
             last_interaction_tick: AtomicU64::new(0),
             last_emission_tick: AtomicU64::new(0),
+            last_spontaneous_tick: AtomicU64::new(0),
             adaptive_params: RwLock::new(adaptive_params),
             signal_buffer: RwLock::new(Vec::new()),
         }
@@ -880,6 +890,12 @@ impl Substrate {
     pub fn tick(&mut self) -> Vec<OldSignal> {
         let current_tick = self.tick.fetch_add(1, Ordering::SeqCst);
 
+        // Decay emotional state (boredom grows without interaction)
+        {
+            let mut emotional = self.emotional_state.write();
+            emotional.decay(current_tick);
+        }
+
         // Get signals from buffer
         let signals: Vec<SignalFragment> = {
             let mut buffer = self.signal_buffer.write();
@@ -1049,6 +1065,8 @@ impl Substrate {
             adaptive_spontaneity: params.spontaneity,
             adaptive_feedback_positive: params.positive_count,
             adaptive_feedback_negative: params.negative_count,
+            // Boredom
+            boredom: emotional.boredom,
         }
     }
 
@@ -1128,6 +1146,15 @@ impl Substrate {
                 params.reinforce_negative();
             }
         } // params lock released here
+
+        // Step 5: Update exploration history (separate scope)
+        {
+            let last_expl = self.last_exploration.read().clone();
+            if let Some(combination) = last_expl {
+                let mut memory = self.memory.write();
+                memory.feedback_exploration(&combination, is_positive);
+            }
+        }
     }
 
     /// Sync current adaptive params to long-term memory
@@ -1546,9 +1573,9 @@ impl Substrate {
             return None;
         }
 
-        // Anti-spam: respect cooldown
-        let last_emit = self.last_emission_tick.load(Ordering::Relaxed);
-        if current_tick.saturating_sub(last_emit) < EMISSION_COOLDOWN_TICKS {
+        // Use separate cooldown for spontaneous speech (500 ticks = ~2 seconds)
+        let last_spont = self.last_spontaneous_tick.load(Ordering::Relaxed);
+        if current_tick.saturating_sub(last_spont) < 500 {
             return None;
         }
 
@@ -1595,30 +1622,54 @@ impl Substrate {
             })
             .map(|(word, _)| word.clone());
 
-        let (label, intensity) = if is_lonely {
-            if let Some(word) = favorite_word {
-                tracing::info!("SPONTANEOUS (lonely): thinking of '{}'", word);
-                (format!("spontaneous:{}|emotion:?", word), 0.3)
-            } else {
-                ("spontaneous:attention|emotion:?".to_string(), 0.2)
-            }
-        } else if is_bored {
+        // Check bored FIRST (exploration has priority over lonely thinking)
+        let (label, intensity) = if is_bored {
+            // CURIOSITY-DRIVEN EXPLORATION
+            // When bored, try NEW combinations ARIA hasn't tried much
             let all_favorites: Vec<String> = memory.word_frequencies.iter()
                 .filter(|(_, freq)| freq.emotional_valence > 0.2 && freq.count > 1)
                 .map(|(word, _)| word.clone())
                 .collect();
 
             if all_favorites.len() >= 2 {
-                let w1 = &all_favorites[rng.gen_range(0..all_favorites.len())];
-                let w2 = &all_favorites[rng.gen_range(0..all_favorites.len())];
-                if w1 != w2 {
-                    tracing::info!("SPONTANEOUS (bored): combining '{}' + '{}'", w1, w2);
-                    (format!("phrase:{}+{}|emotion:~", w1, w2), 0.35)
+                // Use exploration memory to find novel combinations
+                if let Some((w1, w2)) = memory.get_novel_combination(&all_favorites, current_tick) {
+                    let combination = format!("{}+{}", w1, w2);
+                    tracing::info!("🔍 EXPLORING: trying '{}'", combination);
+
+                    // Log exploration and store for feedback
+                    drop(memory); // Release read lock before write
+                    {
+                        let mut memory_write = self.memory.write();
+                        memory_write.log_exploration(&combination, current_tick, 0.35);
+                    }
+                    {
+                        let mut last_expl = self.last_exploration.write();
+                        *last_expl = Some(combination.clone());
+                    }
+
+                    (format!("explore:{}+{}|emotion:~", w1, w2), 0.35)
                 } else {
-                    ("spontaneous:bored|emotion:~".to_string(), 0.25)
+                    // Fallback to random if exploration fails
+                    let w1 = &all_favorites[rng.gen_range(0..all_favorites.len())];
+                    let w2 = &all_favorites[rng.gen_range(0..all_favorites.len())];
+                    if w1 != w2 {
+                        tracing::info!("SPONTANEOUS (bored): combining '{}' + '{}'", w1, w2);
+                        (format!("phrase:{}+{}|emotion:~", w1, w2), 0.35)
+                    } else {
+                        ("spontaneous:bored|emotion:~".to_string(), 0.25)
+                    }
                 }
             } else {
                 ("spontaneous:bored|emotion:~".to_string(), 0.25)
+            }
+        } else if is_lonely {
+            // Lonely but not bored - think about favorite words
+            if let Some(word) = favorite_word.clone() {
+                tracing::info!("SPONTANEOUS (lonely): thinking of '{}'", word);
+                (format!("spontaneous:{}|emotion:?", word), 0.3)
+            } else {
+                ("spontaneous:attention|emotion:?".to_string(), 0.2)
             }
         } else if is_happy {
             if let Some(word) = favorite_word {
@@ -1638,7 +1689,8 @@ impl Substrate {
         let mut signal = OldSignal::from_vector([0.0; SIGNAL_DIMS], label);
         signal.intensity = intensity;
 
-        self.last_emission_tick.store(current_tick, Ordering::Relaxed);
+        // Update spontaneous tick (separate from regular emission cooldown)
+        self.last_spontaneous_tick.store(current_tick, Ordering::Relaxed);
         Some(signal)
     }
 

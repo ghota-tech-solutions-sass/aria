@@ -509,8 +509,13 @@ impl ComputeBackend for GpuBackend {
         // Download results
         self.download_cells(states)?;
 
+        // Count sleeping cells for accurate stats
+        let sleeping_count = states.iter().filter(|s| s.is_sleeping()).count();
+        let awake_count = cells.len() - sleeping_count;
+
         // Update stats
-        self.stats.cells_processed = cells.len() as u64;
+        self.stats.cells_processed = awake_count as u64;
+        self.stats.cells_sleeping = sleeping_count as u64;
         self.stats.signals_propagated = signals.len() as u64;
 
         // Check for dead cells and generate actions
@@ -671,11 +676,27 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
 
-    // Build tension
-    cell.tension = min(cell.tension + 0.01, 2.0);
+    // Build tension slowly
+    cell.tension += 0.01;
 
     // Decay activity
     cell.activity_level *= 0.99;
+
+    // Action check - if tension exceeds threshold, reset it
+    // This allows cells to eventually become inactive and sleep
+    if cell.tension > 1.0 {
+        cell.tension = 0.0;
+        // No activity boost here - let cells naturally decay to sleep
+    }
+
+    // Decay tension when activity is low - more aggressive decay
+    if cell.activity_level < 0.1 {
+        cell.tension *= 0.9;  // Faster decay
+        cell.tension -= 0.005; // Also subtract a bit
+        if cell.tension < 0.0 {
+            cell.tension = 0.0;
+        }
+    }
 
     // Normalize state
     var norm: f32 = 0.0;
@@ -691,8 +712,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         }
     }
 
-    // Sleep if inactive
-    if cell.activity_level < 0.01 && cell.tension < 0.1 {
+    // Sleep if inactive (low activity AND low tension)
+    if cell.activity_level < 0.05 && cell.tension < 0.1 {
         cell.flags = cell.flags | 1u;
     }
 
@@ -745,13 +766,16 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     var cell = cells[cell_idx];
+    let is_sleeping = (cell.flags & 1u) != 0u;
+    let is_dead = (cell.flags & 32u) != 0u;
 
-    // Skip sleeping or dead cells
-    if (cell.flags & 33u) != 0u {
+    // Skip dead cells entirely
+    if is_dead {
         return;
     }
 
     let signal_count = arrayLength(&signals);
+    var received_signal = false;
 
     for (var s = 0u; s < signal_count; s++) {
         let signal = signals[s];
@@ -772,17 +796,30 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             let attenuation = 1.0 - (dist / config.signal_radius);
             let intensity = signal.intensity * attenuation * config.reaction_amplification;
 
-            for (var i = 0u; i < 8u; i++) {
-                cell.state[i] += signal.content[i] * intensity;
+            // Wake up sleeping cells if signal is strong enough
+            if is_sleeping && intensity > 0.1 {
+                cell.flags = cell.flags & ~1u; // Clear sleeping flag
+                cell.activity_level = 0.5; // Boost activity on wake
+                cell.tension = 0.2; // Some initial tension
+                received_signal = true;
             }
 
-            cell.energy = min(cell.energy + intensity * 0.05, config.energy_cap);
-            cell.flags = cell.flags & ~1u; // Wake up
-            cell.activity_level += intensity;
+            // Only process signal if awake (or just woken up)
+            if (cell.flags & 1u) == 0u {
+                for (var i = 0u; i < 8u; i++) {
+                    cell.state[i] += signal.content[i] * intensity;
+                }
+                cell.energy = min(cell.energy + intensity * 0.05, config.energy_cap);
+                cell.activity_level += intensity;
+                received_signal = true;
+            }
         }
     }
 
-    cells[cell_idx] = cell;
+    // Only write back if something changed
+    if received_signal || !is_sleeping {
+        cells[cell_idx] = cell;
+    }
 }
 "#;
 
