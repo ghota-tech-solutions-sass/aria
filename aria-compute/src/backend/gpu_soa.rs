@@ -2697,9 +2697,12 @@ struct Config {
 const NO_CONNECTION: u32 = 0xFFFFFFFFu;
 const MAX_CONNECTIONS: u32 = 16u;
 const COACTIVATION_THRESHOLD: f32 = 0.3;
+const LONG_RANGE_THRESHOLD: f32 = 0.5;  // Higher threshold for long-range connections
 const STRENGTHEN_RATE: f32 = 0.1;
+const LONG_RANGE_RATE: f32 = 0.05;      // Weaker initial strength for long-range
 const DECAY_RATE: f32 = 0.001;
 const MAX_STRENGTH: f32 = 1.0;
+const LONG_RANGE_SAMPLES: u32 = 4u;     // Number of distant regions to sample
 
 @group(0) @binding(0) var<storage, read> energies: array<CellEnergy>;
 @group(0) @binding(1) var<storage, read> positions: array<CellPosition>;
@@ -2724,6 +2727,24 @@ fn grid_index(coord: vec3<i32>) -> u32 {
         u32(clamp(coord.z, 0, i32(spatial_config.grid_size.z) - 1))
     );
     return clamped.x + clamped.y * spatial_config.grid_size.x + clamped.z * spatial_config.grid_size.x * spatial_config.grid_size.y;
+}
+
+// Simple hash function for pseudo-random region selection
+fn hash_u32(x: u32) -> u32 {
+    var h = x;
+    h = h ^ (h >> 16u);
+    h = h * 0x85ebca6bu;
+    h = h ^ (h >> 13u);
+    h = h * 0xc2b2ae35u;
+    h = h ^ (h >> 16u);
+    return h;
+}
+
+// Get a pseudo-random distant region based on cell index and sample number
+fn get_distant_region(cell_idx: u32, sample: u32, tick: u32) -> u32 {
+    let total_regions = spatial_config.grid_size.x * spatial_config.grid_size.y * spatial_config.grid_size.z;
+    let seed = cell_idx * 7919u + sample * 104729u + tick * 31u;
+    return hash_u32(seed) % total_regions;
 }
 
 fn find_connection(conn: ptr<storage, CellConnections, read_write>, target: u32) -> i32 {
@@ -2841,6 +2862,35 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                     if other_energy.activity_level >= COACTIVATION_THRESHOLD {
                         // Strengthen connection based on product of activities
                         let strength_delta = STRENGTHEN_RATE
+                            * cell_energy.activity_level
+                            * other_energy.activity_level;
+                        strengthen_connection(&connections[idx], other_idx, strength_delta);
+                    }
+                }
+            }
+        }
+    }
+
+    // LONG-RANGE CONNECTIONS: Sample distant regions for highly active cells
+    // This enables cross-domain associations (e.g., "cat" + "love")
+    if cell_energy.activity_level >= LONG_RANGE_THRESHOLD {
+        for (var s = 0u; s < LONG_RANGE_SAMPLES; s++) {
+            let distant_region = get_distant_region(idx, s, config.tick);
+            let region = grid[distant_region];
+
+            // Check one cell from this distant region
+            if region.count > 0u {
+                // Pick a cell based on hash (not just first one)
+                let cell_slot = hash_u32(idx + s * 17u) % region.count;
+                let other_idx = region.cell_indices[cell_slot];
+
+                if other_idx != idx && other_idx < config.cell_count {
+                    let other_energy = energies[other_idx];
+
+                    // Both cells must be highly active for long-range connection
+                    if other_energy.activity_level >= LONG_RANGE_THRESHOLD {
+                        // Weaker initial strength for long-range connections
+                        let strength_delta = LONG_RANGE_RATE
                             * cell_energy.activity_level
                             * other_energy.activity_level;
                         strengthen_connection(&connections[idx], other_idx, strength_delta);
