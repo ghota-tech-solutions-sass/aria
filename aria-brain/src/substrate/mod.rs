@@ -648,6 +648,41 @@ impl Substrate {
             }
         }
 
+        // Calculate activity entropy (Shannon entropy normalized to 0-1)
+        // Entropy = -sum(p * log2(p)) / log2(n)
+        // Where p is the probability of activity in each cell
+        let activity_sum: f32 = activity_grid.iter().sum();
+        let activity_entropy = if activity_sum > 0.001 {
+            let mut entropy = 0.0f32;
+            for &activity in &activity_grid {
+                if activity > 0.001 {
+                    let p = activity / activity_sum;
+                    entropy -= p * p.log2();
+                }
+            }
+            // Normalize by max entropy (log2 of grid size)
+            let max_entropy = (GRID_SIZE * GRID_SIZE) as f32;
+            (entropy / max_entropy.log2()).clamp(0.0, 1.0)
+        } else {
+            0.0 // No activity = no entropy
+        };
+
+        // Calculate system health (composite metric)
+        // Healthy system: moderate entropy, good awake ratio, stable energy
+        let awake_ratio = if alive > 0 { awake as f32 / alive as f32 } else { 0.0 };
+        let alive_ratio = if total > 0 { alive as f32 / total as f32 } else { 0.0 };
+
+        // Health is optimal when:
+        // - entropy is moderate (not too chaotic, not dead)
+        // - awake_ratio is moderate (not all sleeping, not all awake)
+        // - alive_ratio is high (not dying)
+        let entropy_health = 1.0 - (activity_entropy - 0.5).abs() * 2.0; // Peak at 0.5
+        let activity_health = 1.0 - (awake_ratio - 0.3).abs() * 2.0; // Peak at 30% awake
+        let survival_health = alive_ratio;
+
+        let system_health = (entropy_health * 0.3 + activity_health * 0.3 + survival_health * 0.4)
+            .clamp(0.0, 1.0);
+
         SubstrateView {
             grid_size: GRID_SIZE,
             activity_grid,
@@ -659,6 +694,8 @@ impl Substrate {
             dead_cells: dead,
             awake_cells: awake,
             energy_histogram: energy_histogram.to_vec(),
+            activity_entropy,
+            system_health,
         }
     }
 }
@@ -686,6 +723,10 @@ pub struct SubstrateView {
     pub awake_cells: usize,
     /// Energy distribution histogram (10 buckets)
     pub energy_histogram: Vec<usize>,
+    /// Activity entropy (0.0 = structured, 1.0 = chaotic)
+    pub activity_entropy: f32,
+    /// System health (0.0 = dying, 1.0 = thriving)
+    pub system_health: f32,
 }
 
 // ============================================================================
