@@ -23,6 +23,71 @@ use visualizer::AriaVisualizer;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Extract context information from signal labels for conversation display
+fn extract_context(label: &str) -> Option<String> {
+    // Parse label format: "type:detail" or just "type"
+    if label.is_empty() {
+        return None;
+    }
+
+    // Known context types
+    let context = match label {
+        // Memory-related
+        l if l.starts_with("memory:") => {
+            let detail = l.strip_prefix("memory:").unwrap();
+            format!("memory: {}", detail)
+        }
+        l if l.starts_with("episodic:") => {
+            let detail = l.strip_prefix("episodic:").unwrap();
+            format!("memory: {}", detail)
+        }
+
+        // Visual recognition
+        l if l.starts_with("vision:") => {
+            let detail = l.strip_prefix("vision:").unwrap();
+            format!("sees: {}", detail)
+        }
+        l if l.starts_with("visual:") => {
+            let detail = l.strip_prefix("visual:").unwrap();
+            format!("sees: {}", detail)
+        }
+
+        // Emotional states
+        l if l.starts_with("emotion:") => {
+            let detail = l.strip_prefix("emotion:").unwrap();
+            format!("feels: {}", detail)
+        }
+        l if l.starts_with("mood:") => {
+            let detail = l.strip_prefix("mood:").unwrap();
+            format!("mood: {}", detail)
+        }
+
+        // Learning/exploration
+        l if l.starts_with("explore:") => {
+            let detail = l.strip_prefix("explore:").unwrap();
+            format!("exploring: {}", detail)
+        }
+        l if l.starts_with("learn:") => {
+            let detail = l.strip_prefix("learn:").unwrap();
+            format!("learned: {}", detail)
+        }
+
+        // Spontaneous speech
+        "spontaneous" => "spontaneous".to_string(),
+        "dream" => "dreaming".to_string(),
+        "bored" => "bored".to_string(),
+        "curious" => "curious".to_string(),
+
+        // Default: use label as-is if it's short
+        l if l.len() <= 20 => l.to_string(),
+
+        // Truncate long labels
+        l => format!("{}...", &l[..17]),
+    };
+
+    Some(context)
+}
+
 #[derive(Clone)]
 #[allow(dead_code)]
 enum UiMode {
@@ -284,6 +349,9 @@ async fn run_visual_mode() -> Result<(), Box<dyn std::error::Error>> {
     // Channel for substrate view
     let (substrate_tx, mut substrate_rx) = mpsc::channel::<visualizer::SubstrateView>(10);
 
+    // Channel for learning stats
+    let (learning_tx, mut learning_rx) = mpsc::channel::<visualizer::LearningStats>(10);
+
     // Receive task for WebSocket messages
     tokio::spawn(async move {
         while let Some(msg) = read.next().await {
@@ -354,6 +422,9 @@ async fn run_visual_mode() -> Result<(), Box<dyn std::error::Error>> {
                             .and_then(|v| v.as_array())
                             .map(|arr| arr.iter().filter_map(|v| v.as_u64().map(|n| n as usize)).collect())
                             .unwrap_or_default(),
+                        // New fields for health/entropy
+                        activity_entropy: json.get("activity_entropy").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32,
+                        system_health: json.get("system_health").and_then(|v| v.as_f64()).unwrap_or(0.7) as f32,
                     };
                     let _ = substrate_tx.send(view).await;
                 }
@@ -362,11 +433,71 @@ async fn run_visual_mode() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // Fetch learning stats periodically
+    let words_url = format!("{}/words", http_url);
+    let assoc_url = format!("{}/associations", http_url);
+    let episodes_url = format!("{}/episodes", http_url);
+    let meta_url = format!("{}/meta", http_url);
+
+    tokio::spawn(async move {
+        let client = reqwest::Client::new();
+        loop {
+            let mut stats = visualizer::LearningStats::default();
+
+            // Get word count
+            if let Ok(resp) = client.get(&words_url).send().await {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    if let Some(arr) = json.as_array() {
+                        stats.word_count = arr.len();
+                        // Get recent words (first 5)
+                        stats.recent_words = arr.iter()
+                            .take(5)
+                            .filter_map(|w| w.get("word").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                            .collect();
+                    }
+                }
+            }
+
+            // Get association count
+            if let Ok(resp) = client.get(&assoc_url).send().await {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    if let Some(arr) = json.as_array() {
+                        stats.association_count = arr.len();
+                    }
+                }
+            }
+
+            // Get episode count
+            if let Ok(resp) = client.get(&episodes_url).send().await {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    if let Some(arr) = json.as_array() {
+                        stats.episode_count = arr.len();
+                    }
+                }
+            }
+
+            // Get current strategy from meta-learning
+            if let Ok(resp) = client.get(&meta_url).send().await {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    stats.strategy = json.get("current_strategy")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("exploring")
+                        .to_string();
+                }
+            }
+
+            let _ = learning_tx.send(stats).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        }
+    });
+
     loop {
         // Handle incoming messages
         while let Ok(signal) = msg_rx.try_recv() {
             let expression = signal.to_expression();
-            visualizer.add_expression(expression);
+            // Extract context from signal label for conversation display
+            let context = extract_context(&signal.label);
+            visualizer.add_expression(expression, context);
         }
 
         // Handle stats updates
@@ -377,6 +508,11 @@ async fn run_visual_mode() -> Result<(), Box<dyn std::error::Error>> {
         // Handle substrate updates (heatmap)
         while let Ok(view) = substrate_rx.try_recv() {
             visualizer.update_substrate(view);
+        }
+
+        // Handle learning stats updates
+        while let Ok(learn) = learning_rx.try_recv() {
+            visualizer.update_learning(learn);
         }
 
         // Draw UI
