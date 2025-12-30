@@ -23,26 +23,46 @@ pub struct SignalFragment {
     pub source_id: u64,
     /// Signal content (8D vector)
     pub content: [f32; SIGNAL_DIMS],
+    /// Target position in semantic space (8D) - where to inject the signal
+    pub position: [f32; SIGNAL_DIMS],
     /// Signal intensity
     pub intensity: f32,
     /// Padding for alignment
-    _pad: f32,
+    _pad: [f32; 3],
 }
 
 impl SignalFragment {
-    /// Create a new signal fragment
-    pub fn new(source_id: u64, content: [f32; SIGNAL_DIMS], intensity: f32) -> Self {
+    /// Create a new signal fragment with position
+    pub fn new(source_id: u64, content: [f32; SIGNAL_DIMS], position: [f32; SIGNAL_DIMS], intensity: f32) -> Self {
         Self {
             source_id,
             content,
+            position,
             intensity,
-            _pad: 0.0,
+            _pad: [0.0; 3],
         }
     }
 
     /// Create an external signal (from outside ARIA)
+    /// Position defaults to content (legacy behavior, but should be set explicitly)
     pub fn external(content: [f32; SIGNAL_DIMS], intensity: f32) -> Self {
-        Self::new(0, content, intensity)
+        Self::new(0, content, content, intensity)
+    }
+
+    /// Create an external signal with explicit position
+    pub fn external_at(content: [f32; SIGNAL_DIMS], position: [f32; SIGNAL_DIMS], intensity: f32) -> Self {
+        Self::new(0, content, position, intensity)
+    }
+
+    /// Create a zeroed signal fragment
+    pub fn zeroed() -> Self {
+        Self {
+            source_id: 0,
+            content: [0.0; SIGNAL_DIMS],
+            position: [0.0; SIGNAL_DIMS],
+            intensity: 0.0,
+            _pad: [0.0; 3],
+        }
     }
 }
 
@@ -134,10 +154,13 @@ impl Signal {
     /// Convert to fixed-size vector for cell processing
     pub fn to_fragment(&self) -> SignalFragment {
         let mut content = [0.0f32; SIGNAL_DIMS];
+        let mut position = [0.0f32; SIGNAL_DIMS];
         for (i, v) in self.content.iter().take(SIGNAL_DIMS).enumerate() {
             content[i] = *v;
+            // Scale content to cell space [-10, 10]
+            position[i] = *v * 20.0 - 10.0;
         }
-        SignalFragment::new(0, content, self.intensity)
+        SignalFragment::new(0, content, position, self.intensity)
     }
 
     /// Get semantic position for spatial injection
@@ -222,7 +245,8 @@ mod tests {
     #[test]
     fn test_signal_fragment_size() {
         // Should be 48 bytes (8 + 32 + 4 + 4)
-        assert_eq!(std::mem::size_of::<SignalFragment>(), 48);
+        // source_id(8) + content(32) + position(32) + intensity(4) + padding(12) = 88 bytes
+        assert_eq!(std::mem::size_of::<SignalFragment>(), 88);
     }
 
     #[test]

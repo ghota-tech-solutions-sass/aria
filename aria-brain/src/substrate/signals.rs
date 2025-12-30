@@ -122,10 +122,25 @@ impl Substrate {
         let cell_scale = (self.cells.len() as f32 / 10_000.0).max(1.0);
         let base_intensity = signal.intensity * 5.0 * familiarity_boost * cell_scale;
 
-        let fragment = SignalFragment::external(signal_vector, base_intensity);
+        // Get target position and convert to cell space [-10, 10]
+        // Signal content values are typically in [0, 1], cells are in [-10, 10]
+        let mut target_position_8d = [0.0f32; 8];
+        let mut target_position_16d = [0.0f32; 16];
+        for i in 0..16 {
+            // Scale from [0, 1] to [-10, 10]
+            let v = signal_vector.get(i).copied().unwrap_or(0.0);
+            let scaled = v * 20.0 - 10.0;
+            target_position_16d[i] = scaled;
+            if i < 8 {
+                target_position_8d[i] = scaled;
+            }
+        }
 
-        // Get target position
-        let target_position = signal.semantic_position();
+        // Create fragment with scaled position for GPU spatial hashing
+        let fragment = SignalFragment::external_at(signal_vector, target_position_8d, base_intensity);
+
+        // Keep 16D for CPU-side processing
+        let target_position = target_position_16d;
 
         tracing::info!("V2 Signal received: '{}' intensity={:.2} (boost: {:.2})",
             signal.label, fragment.intensity, familiarity_boost);
@@ -261,7 +276,12 @@ impl Substrate {
 
     /// Propagate a signal through the substrate
     pub(super) fn propagate_signal(&mut self, content: [f32; SIGNAL_DIMS], source_pos: [f32; POSITION_DIMS], intensity: f32) {
-        let fragment = SignalFragment::external(content, intensity);
+        // Convert 16D source position to 8D for fragment
+        let mut pos_8d = [0.0f32; SIGNAL_DIMS];
+        for i in 0..SIGNAL_DIMS {
+            pos_8d[i] = source_pos[i];
+        }
+        let fragment = SignalFragment::external_at(content, pos_8d, intensity);
 
         for state in &mut self.states {
             if state.is_dead() { continue; }

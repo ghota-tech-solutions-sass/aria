@@ -496,9 +496,15 @@ impl Substrate {
                     state.state[j] * decay // Apply decay to internal signals
                 });
 
+                // Use cell's position (first 8D) as signal position
+                let position: [f32; SIGNAL_DIMS] = std::array::from_fn(|j| {
+                    state.position[j]
+                });
+
                 signals.push(SignalFragment::new(
                     cell.id,
                     content,
+                    position,
                     activation * decay,
                 ));
             }

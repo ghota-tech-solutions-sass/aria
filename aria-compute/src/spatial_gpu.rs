@@ -212,8 +212,9 @@ struct SignalFragment {
     source_id_low: u32,
     source_id_high: u32,
     content: array<f32, 8>,
+    position: array<f32, 8>,  // Target position in semantic space
     intensity: f32,
-    _pad: f32,
+    _pad: array<f32, 3>,
 }
 
 struct GridRegion {
@@ -370,10 +371,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                     }
 
                     // Distance check in semantic space (first 8 dimensions)
+                    // Use signal.position (target location) NOT signal.content (data)
                     let cell_pos = positions[cell_idx];
                     var dist_sq: f32 = 0.0;
                     for (var d = 0u; d < 8u; d++) {
-                        let diff = cell_pos.position[d] - signal.content[d];
+                        let diff = cell_pos.position[d] - signal.position[d];
                         dist_sq += diff * diff;
                     }
                     let dist = sqrt(dist_sq);
