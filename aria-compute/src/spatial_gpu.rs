@@ -261,6 +261,8 @@ const FLAG_SLEEPING: u32 = 1u;
 const FLAG_DEAD: u32 = 32u;
 const NO_CONNECTION: u32 = 0xFFFFFFFFu;
 const CONNECTION_SIGNAL_FACTOR: f32 = 0.5;  // Signals via connections are 50% weaker
+const HUB_INFLUENCE_FACTOR: f32 = 0.1;      // Bonus per connection (max ~1.6x at 16 connections)
+const MAX_CONNECTIONS: u32 = 16u;
 
 @group(0) @binding(0) var<storage, read_write> energies: array<CellEnergy>;
 @group(0) @binding(1) var<storage, read> positions: array<CellPosition>;
@@ -426,6 +428,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                     // "Neural pathways" - signals travel faster along learned connections
                     if (cell_flags & FLAG_SLEEPING) == 0u {
                         let conn = connections[cell_idx];
+
+                        // HIERARCHICAL ATTENTION: Hub cells amplify signals
+                        // More connections = more influence (emergent leadership)
+                        let hub_factor = 1.0 + f32(conn.count) * HUB_INFLUENCE_FACTOR;
+
                         for (var c = 0u; c < conn.count; c++) {
                             let target_idx = conn.targets[c];
                             if target_idx == NO_CONNECTION || target_idx >= config.cell_count {
@@ -447,8 +454,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                                 continue;
                             }
 
-                            // Signal strength through connection
-                            let conn_intensity = intensity * conn_strength * CONNECTION_SIGNAL_FACTOR;
+                            // Signal strength through connection (amplified by hub status)
+                            let conn_intensity = intensity * conn_strength * CONNECTION_SIGNAL_FACTOR * hub_factor;
 
                             // Wake sleeping connected cells
                             if target_sleeping && conn_intensity > 0.05 {
