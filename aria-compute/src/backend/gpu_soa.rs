@@ -115,6 +115,7 @@ pub struct GpuSoABackend {
 
     // Pipelines
     cell_update_pipeline: Option<wgpu::ComputePipeline>,
+    cell_update_sparse_pipeline: Option<wgpu::ComputePipeline>,
     signal_pipeline: Option<wgpu::ComputePipeline>,
     signal_with_hash_pipeline: Option<wgpu::ComputePipeline>,
     compact_pipeline: Option<wgpu::ComputePipeline>,
@@ -124,9 +125,14 @@ pub struct GpuSoABackend {
 
     // Bind group layouts
     main_bind_group_layout: Option<wgpu::BindGroupLayout>,
+    sparse_cell_bind_group_layout: Option<wgpu::BindGroupLayout>,
     signal_with_hash_bind_group_layout: Option<wgpu::BindGroupLayout>,
     sparse_bind_group_layout: Option<wgpu::BindGroupLayout>,
     grid_bind_group_layout: Option<wgpu::BindGroupLayout>,
+
+    // Sparse dispatch state
+    use_indirect_dispatch: bool,
+    last_active_count: u32,
 
     cell_count: usize,
     max_cell_count: usize,
@@ -179,6 +185,12 @@ impl GpuSoABackend {
             tracing::info!("🎮 Spatial hashing enabled for {}+ cells", config.population.target_population);
         }
 
+        // Enable indirect dispatch for larger populations
+        let use_indirect_dispatch = config.population.target_population > 50_000;
+        if use_indirect_dispatch {
+            tracing::info!("🎮 Indirect dispatch enabled for sparse cell updates");
+        }
+
         Ok(Self {
             device: Arc::new(device),
             queue: Arc::new(queue),
@@ -201,6 +213,7 @@ impl GpuSoABackend {
             flags_staging: None,
             counter_staging: None,
             cell_update_pipeline: None,
+            cell_update_sparse_pipeline: None,
             signal_pipeline: None,
             signal_with_hash_pipeline: None,
             compact_pipeline: None,
@@ -208,9 +221,12 @@ impl GpuSoABackend {
             clear_grid_pipeline: None,
             build_grid_pipeline: None,
             main_bind_group_layout: None,
+            sparse_cell_bind_group_layout: None,
             signal_with_hash_bind_group_layout: None,
             sparse_bind_group_layout: None,
             grid_bind_group_layout: None,
+            use_indirect_dispatch,
+            last_active_count: 0,
             cell_count: 0,
             max_cell_count: 0,
             initialized: false,
@@ -489,6 +505,114 @@ impl GpuSoABackend {
             },
         ));
 
+        // Sparse cell update bind group layout (main + active_indices + counter)
+        self.sparse_cell_bind_group_layout = Some(self.device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("Sparse Cell Bind Group Layout"),
+                entries: &[
+                    // 0: Energy (read-write)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 1: Position (read-only)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 2: State (read-write)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 3: Flags (read-write)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 4: DNA (read-only)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 5: Signals (read-only)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 6: Config (uniform)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 7: Active indices (read-only)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 8: Counter (read-only)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 8,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            },
+        ));
+
         // Signal with spatial hash bind group layout (8 bindings)
         if self.use_spatial_hash {
             self.signal_with_hash_bind_group_layout = Some(self.device.create_bind_group_layout(
@@ -731,6 +855,39 @@ impl GpuSoABackend {
                     label: Some("SoA Cell Update Pipeline"),
                     layout: Some(&main_pipeline_layout),
                     module: &cell_shader,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                }),
+        );
+
+        // Sparse cell update shader (uses active_indices for indirect dispatch)
+        let sparse_cell_layout = self
+            .sparse_cell_bind_group_layout
+            .as_ref()
+            .ok_or_else(|| AriaError::gpu("Sparse cell bind group layout not created"))?;
+
+        let sparse_cell_pipeline_layout = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Sparse Cell Pipeline Layout"),
+                bind_group_layouts: &[sparse_cell_layout],
+                immediate_size: 0,
+            });
+
+        let sparse_cell_shader = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Sparse Cell Update Shader"),
+                source: wgpu::ShaderSource::Wgsl(CELL_UPDATE_SPARSE_SHADER.into()),
+            });
+
+        self.cell_update_sparse_pipeline = Some(
+            self.device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("Sparse Cell Update Pipeline"),
+                    layout: Some(&sparse_cell_pipeline_layout),
+                    module: &sparse_cell_shader,
                     entry_point: Some("main"),
                     compilation_options: Default::default(),
                     cache: None,
@@ -1019,6 +1176,57 @@ impl GpuSoABackend {
                 wgpu::BindGroupEntry {
                     binding: 7,
                     resource: self.spatial_config_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+            ],
+        }))
+    }
+
+    /// Create bind group for sparse cell update (includes active_indices and counter)
+    fn create_sparse_cell_bind_group(&self) -> AriaResult<wgpu::BindGroup> {
+        let layout = self
+            .sparse_cell_bind_group_layout
+            .as_ref()
+            .ok_or_else(|| AriaError::gpu("Sparse cell bind group layout not initialized"))?;
+
+        Ok(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Sparse Cell Bind Group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.energy_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.position_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.state_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.flags_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.dna_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: self.signals_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: self.config_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: self.active_indices_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: self.active_count_buffer.as_ref().unwrap().as_entire_binding(),
                 },
             ],
         }))
@@ -1313,11 +1521,37 @@ impl ComputeBackend for GpuSoABackend {
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
 
+        // If using indirect dispatch, also run prepare_dispatch to compute workgroup count
+        if self.use_indirect_dispatch {
+            let prepare_pipeline = self
+                .prepare_dispatch_pipeline
+                .as_ref()
+                .ok_or_else(|| AriaError::gpu("Prepare dispatch pipeline not initialized"))?;
+
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Prepare Dispatch"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(prepare_pipeline);
+                pass.set_bind_group(0, &sparse_bind_group, &[]);
+                pass.dispatch_workgroups(1, 1, 1);
+            }
+        }
+
         self.queue.submit(Some(encoder.finish()));
 
-        // Read active count for stats
-        let active_count = self.read_active_count()? as usize;
-        let sleeping_count = self.cell_count.saturating_sub(active_count);
+        // Only read active count periodically to avoid GPU→CPU sync every tick
+        let should_read_stats = self.tick % 100 == 0 || first_init;
+        let (active_count, sleeping_count) = if should_read_stats {
+            let count = self.read_active_count()? as usize;
+            self.last_active_count = count as u32;
+            (count, self.cell_count.saturating_sub(count))
+        } else {
+            // Use cached value for stats
+            let count = self.last_active_count as usize;
+            (count, self.cell_count.saturating_sub(count))
+        };
 
         // Build spatial hash grid (if enabled)
         // This prepares the grid for O(1) neighbor lookup in signal propagation
@@ -1377,27 +1611,52 @@ impl ComputeBackend for GpuSoABackend {
         }
 
         // Run cell update
-        let main_bind_group = self.create_main_bind_group()?;
-        let cell_pipeline = self
-            .cell_update_pipeline
-            .as_ref()
-            .ok_or_else(|| AriaError::gpu("Cell update pipeline not initialized"))?;
-
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Cell Update Pass"),
             });
 
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Cell Update"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(cell_pipeline);
-            pass.set_bind_group(0, &main_bind_group, &[]);
-            let workgroups = (self.cell_count as u32 + 255) / 256;
-            pass.dispatch_workgroups(workgroups, 1, 1);
+        if self.use_indirect_dispatch {
+            // Use indirect dispatch - GPU decides workgroup count based on active cells
+            let sparse_cell_bind_group = self.create_sparse_cell_bind_group()?;
+            let sparse_cell_pipeline = self
+                .cell_update_sparse_pipeline
+                .as_ref()
+                .ok_or_else(|| AriaError::gpu("Sparse cell update pipeline not initialized"))?;
+            let indirect_buffer = self
+                .indirect_buffer
+                .as_ref()
+                .ok_or_else(|| AriaError::gpu("Indirect buffer not initialized"))?;
+
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Sparse Cell Update"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(sparse_cell_pipeline);
+                pass.set_bind_group(0, &sparse_cell_bind_group, &[]);
+                // GPU decides workgroup count - no CPU roundtrip!
+                pass.dispatch_workgroups_indirect(indirect_buffer, 0);
+            }
+        } else {
+            // Legacy: dispatch all cells
+            let main_bind_group = self.create_main_bind_group()?;
+            let cell_pipeline = self
+                .cell_update_pipeline
+                .as_ref()
+                .ok_or_else(|| AriaError::gpu("Cell update pipeline not initialized"))?;
+
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Cell Update"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(cell_pipeline);
+                pass.set_bind_group(0, &main_bind_group, &[]);
+                let workgroups = (self.cell_count as u32 + 255) / 256;
+                pass.dispatch_workgroups(workgroups, 1, 1);
+            }
         }
 
         self.queue.submit(Some(encoder.finish()));
@@ -2017,6 +2276,129 @@ fn main() {
     indirect.x = (active_count + config.workgroup_size - 1u) / config.workgroup_size;
     indirect.y = 1u;
     indirect.z = 1u;
+}
+"#;
+
+/// Sparse cell update shader - only processes active cells using indirect dispatch
+const CELL_UPDATE_SPARSE_SHADER: &str = r#"
+// Sparse cell update - processes only active cells via active_indices buffer
+
+struct CellEnergy {
+    energy: f32,
+    tension: f32,
+    activity_level: f32,
+    _pad: f32,
+}
+
+struct Config {
+    energy_cap: f32,
+    reaction_amplification: f32,
+    state_cap: f32,
+    signal_radius: f32,
+    cost_rest: f32,
+    cost_signal: f32,
+    cost_move: f32,
+    cost_divide: f32,
+    signal_energy_base: f32,
+    signal_resonance_factor: f32,
+    energy_gain: f32,
+    tick: u32,
+    cell_count: u32,
+    workgroup_size: u32,
+    _pad: vec2<u32>,
+}
+
+// Flags bit layout
+const FLAG_SLEEPING: u32 = 1u;
+const FLAG_DEAD: u32 = 32u;
+const SLEEP_COUNTER_MASK: u32 = 192u;
+const SLEEP_COUNTER_SHIFT: u32 = 6u;
+const SLEEP_ENTER_THRESHOLD: f32 = 0.2;
+const SLEEP_COUNTER_MAX: u32 = 3u;
+
+struct AtomicCounter {
+    count: u32,
+    _pad: array<u32, 3>,
+}
+
+@group(0) @binding(0) var<storage, read_write> energies: array<CellEnergy>;
+@group(0) @binding(1) var<storage, read> positions: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read_write> states: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read_write> flags: array<u32>;
+@group(0) @binding(4) var<storage, read> dna_pool: array<vec4<f32>>;
+@group(0) @binding(5) var<storage, read> signals: array<vec4<f32>>;
+@group(0) @binding(6) var<uniform> config: Config;
+@group(0) @binding(7) var<storage, read> active_indices: array<u32>;
+@group(0) @binding(8) var<storage, read> counter: AtomicCounter;
+
+fn get_sleep_counter(f: u32) -> u32 {
+    return (f & SLEEP_COUNTER_MASK) >> SLEEP_COUNTER_SHIFT;
+}
+
+fn set_sleep_counter(f: ptr<function, u32>, counter: u32) {
+    *f = (*f & ~SLEEP_COUNTER_MASK) | ((counter & 3u) << SLEEP_COUNTER_SHIFT);
+}
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    // Thread index maps to active_indices, not directly to cell index
+    let active_idx = id.x;
+    if active_idx >= counter.count {
+        return;
+    }
+
+    // Get actual cell index from active_indices buffer
+    let idx = active_indices[active_idx];
+    if idx >= config.cell_count {
+        return;
+    }
+
+    var cell_energy = energies[idx];
+    var cell_flags = flags[idx];
+
+    let is_dead = (cell_flags & FLAG_DEAD) != 0u;
+    if is_dead {
+        return;
+    }
+
+    // Active cell processing (we know it's not sleeping since it's in active_indices)
+    cell_energy.energy -= config.cost_rest;
+    cell_energy.energy += config.energy_gain;
+
+    if cell_energy.energy <= 0.0 {
+        cell_flags = cell_flags | FLAG_DEAD;
+        energies[idx] = cell_energy;
+        flags[idx] = cell_flags;
+        return;
+    }
+
+    // Tension builds
+    cell_energy.tension += 0.01;
+    if cell_energy.tension > 1.0 {
+        cell_energy.tension = 0.0;
+    }
+
+    // Activity decays
+    cell_energy.activity_level *= 0.9;
+
+    // Check for sleep entry (hysteresis)
+    if cell_energy.activity_level < SLEEP_ENTER_THRESHOLD {
+        let counter = get_sleep_counter(cell_flags);
+        if counter >= SLEEP_COUNTER_MAX {
+            cell_flags = cell_flags | FLAG_SLEEPING;
+            set_sleep_counter(&cell_flags, 0u);
+        } else {
+            set_sleep_counter(&cell_flags, counter + 1u);
+        }
+    } else {
+        set_sleep_counter(&cell_flags, 0u);
+    }
+
+    // Cap energy
+    cell_energy.energy = clamp(cell_energy.energy, 0.0, config.energy_cap);
+
+    energies[idx] = cell_energy;
+    flags[idx] = cell_flags;
 }
 "#;
 
