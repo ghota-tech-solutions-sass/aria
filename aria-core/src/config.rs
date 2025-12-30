@@ -131,7 +131,7 @@ impl Default for MetabolismConfig {
         Self {
             // Base metabolism - NO FREE LUNCH
             energy_consumption: 0.0,    // Replaced by action costs
-            energy_gain: 0.0,           // NO PASSIVE GAIN - user feeds ARIA by talking!
+            energy_gain: 0.0,           // NO PASSIVE GAIN - ARIA must earn energy through resonance!
             energy_cap: 1.5,
             reproduction_threshold: 0.8, // Higher threshold - must be strong to divide
             child_energy: 0.5,           // Was 0.3 - give children a fighting chance
@@ -140,7 +140,9 @@ impl Default for MetabolismConfig {
             cost_signal: 0.01,   // Speaking costs energy
             cost_divide: 0.5,    // Creating life is exhausting
             cost_move: 0.005,    // Moving costs energy
-            cost_rest: 0.001,    // Just breathing costs energy
+            // At ~1700 TPS: 0.00005 * 1700 = 0.085 per second
+            // Active cells die in ~12 seconds without resonance energy
+            cost_rest: 0.00005,   // Adjusted for high GPU TPS
 
             // Signal energy - quality over quantity
             signal_energy_base: 0.01,       // Was 0.005 - more energy from resonance

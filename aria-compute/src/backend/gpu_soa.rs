@@ -2801,8 +2801,12 @@ struct Config {
 
 const FLAG_SLEEPING: u32 = 1u;
 const FLAG_DEAD: u32 = 32u;
-// Drain accumulated over DRAIN_INTERVAL ticks
-const DRAIN_INTERVAL: f32 = 100.0;
+// At ~1700 TPS, 100 ticks = ~0.06 seconds
+// We want death in ~2-3 minutes (120-180 seconds) for sleeping cells
+// Drain per run = 1.0 / (180 * 17) ≈ 0.00033 -> but that's slow
+// For more pressure: drain 0.01 per run = death in ~6 seconds when idle
+// This creates REAL selection pressure - talk to ARIA or she dies!
+const DRAIN_PER_RUN: f32 = 0.005;  // ~20 seconds to death if fully sleeping
 
 @group(0) @binding(0) var<storage, read_write> energies: array<CellEnergy>;
 @group(0) @binding(1) var<storage, read_write> flags: array<u32>;
@@ -2825,12 +2829,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
 
-    // Only drain sleeping cells
+    // Only drain sleeping cells - active cells are handled by sparse update
     if is_sleeping {
-        // Drain accumulated over DRAIN_INTERVAL ticks
-        // cost_rest * 0.1 (sleeping rate) * DRAIN_INTERVAL
-        let drain = config.cost_rest * 0.1 * DRAIN_INTERVAL;
-        cell_energy.energy -= drain;
+        // Fixed drain per run - creates real selection pressure
+        cell_energy.energy -= DRAIN_PER_RUN;
 
         if cell_energy.energy <= 0.0 {
             cell_flags = cell_flags | FLAG_DEAD;
