@@ -25,6 +25,12 @@ Historique des sessions de développement.
   - 64 cellules max par région
   - Shaders : CLEAR, BUILD, SIGNAL_WITH_HASH
   - Réduction théorique : 5B → 552K calculs (9000x)
+- **Indirect Dispatch** : GPU décide le nombre de threads
+  - `prepare_dispatch` shader calcule workgroups sur GPU
+  - `dispatch_workgroups_indirect()` sans roundtrip CPU
+  - Shader sparse utilise `active_indices` buffer
+  - Stats lues seulement tous les 100 ticks (cached)
+  - Auto-activé pour populations >50k
 - **Configuration** : Nouveau variant `ComputeBackendType::GpuSoA`
 
 ### Session 19: GPU Sparse Dispatch Fix (Performance)
