@@ -6,6 +6,8 @@ use super::*;
 
 impl Substrate {
     /// Decide whether to record an episode and record it
+    /// NOTE: Not used in Physical Intelligence (Session 20) but kept for future memory features
+    #[allow(dead_code)]
     pub(super) fn maybe_record_episode(
         &self,
         input: &str,
@@ -64,10 +66,13 @@ impl Substrate {
         };
 
         // Extract keywords (significant words)
+        // NOTE: STOP_WORDS removed in Session 20 (Physical Intelligence)
+        // Just filter by length - no semantic word filtering
         let keywords: Vec<String> = input
             .split(|c: char| !c.is_alphabetic())
-            .filter(|w| w.len() >= 3 && !STOP_WORDS.contains(&w.to_lowercase().as_str()))
+            .filter(|w| w.len() >= 4) // Slightly longer filter since no stop words
             .map(|w| w.to_lowercase())
+            .take(5) // Limit to 5 keywords
             .collect();
 
         // Get current emotional state
@@ -416,6 +421,8 @@ impl Substrate {
     }
 
     /// Calculate vector similarity (cosine similarity)
+    /// NOTE: Utility function kept for potential future use
+    #[allow(dead_code)]
     pub(super) fn vector_similarity(a: &[f32; SIGNAL_DIMS], b: &[f32; SIGNAL_DIMS]) -> f32 {
         let mut dot = 0.0f32;
         let mut norm_a = 0.0f32;

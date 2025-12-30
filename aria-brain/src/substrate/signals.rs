@@ -1,155 +1,82 @@
 //! Signal Processing for ARIA's Substrate
 //!
-//! Handles external signal injection and internal signal propagation.
+//! ## Physical Intelligence (Session 20)
+//!
+//! ARIA no longer learns words or vocabulary.
+//! Text is converted to pure TENSION vectors.
+//! Cells resonate with tension patterns - survival through physics.
 
 use super::*;
 
 impl Substrate {
     /// Inject an external signal (from aria-body)
     ///
-    /// This is called when someone talks to ARIA.
-    /// Returns immediate emergence signals if any.
+    /// **Physical Intelligence**: No word learning, no semantic encoding.
+    /// The signal is pure tension that propagates through the substrate.
+    /// Cells that resonate gain energy; cells that don't, starve.
     pub fn inject_signal(&mut self, signal: OldSignal) -> Vec<OldSignal> {
         let current_tick = self.tick.load(Ordering::Relaxed);
 
         // Record interaction time
         self.last_interaction_tick.store(current_tick, Ordering::Relaxed);
 
-        // Extract words
-        let words: Vec<&str> = signal.label
-            .split(|c: char| !c.is_alphabetic())
-            .filter(|w| !w.is_empty())
-            .collect();
+        // Update stats
+        {
+            let mut memory = self.memory.write();
+            memory.stats.total_ticks = current_tick;
+            memory.stats.total_interactions += 1;
+        }
 
-        // Get signal vector
-        let signal_vector = signal.to_vector();
+        // Get tension vector from signal (already computed in Signal::from_text)
+        // The first 8 dimensions are the tension values
+        let tension_vector = signal.to_vector();
 
-        // Determine emotional valence
-        let emotional_valence = if signal.content.get(28).copied().unwrap_or(0.0) > 0.0 {
-            1.0
-        } else if signal.content.get(29).copied().unwrap_or(0.0) < 0.0 {
-            -1.0
-        } else {
-            0.0
-        };
+        // Extract emotional valence from tension (index 1 = valence)
+        let emotional_valence = signal.content.get(1).copied().unwrap_or(0.0);
 
-        // Detect social context
-        let (social_context, _confidence) = LongTermMemory::detect_social_context(&signal.label);
-
-        // Update conversation context
-        let (is_conversation_start, current_context) = {
-            let significant_words: Vec<String> = words.iter()
-                .filter(|w| w.len() >= 3 && !STOP_WORDS.contains(&w.to_lowercase().as_str()))
-                .map(|w| w.to_lowercase())
-                .collect();
-
-            let mut conversation = self.conversation.write();
-            conversation.add_input(&signal.label, significant_words, emotional_valence, current_tick, social_context);
-            (conversation.is_conversation_start(), conversation.get_social_context())
-        };
-
-        // Process feedback
+        // Process feedback (still useful for reinforcement learning)
         self.process_feedback(&signal.label, current_tick);
 
-        // Detect questions
-        let is_question = signal.label.ends_with('?')
-            || signal.content.get(31).copied().unwrap_or(0.0) > 0.5;
-        *self.last_was_question.write() = is_question;
-
-        // Update emotional state
+        // Update emotional state from tension
         {
             let mut emotional = self.emotional_state.write();
             emotional.process_signal(&signal.content, signal.intensity, current_tick);
         }
 
-        // Learn words
-        let mut familiarity_boost = 1.0f32;
-        {
-            let mut memory = self.memory.write();
-            memory.stats.total_ticks = current_tick;
-
-            for (i, word) in words.iter().enumerate() {
-                let preceding = if i > 0 { Some(words[i - 1]) } else { None };
-                let following = if i + 1 < words.len() { Some(words[i + 1]) } else { None };
-
-                let word_familiarity = memory.hear_word_with_context(
-                    word, signal_vector, emotional_valence, preceding, following
-                );
-
-                if word_familiarity > 0.5 {
-                    familiarity_boost = familiarity_boost.max(1.0 + word_familiarity);
-                }
-            }
-
-            // Learn associations
-            let significant_words: Vec<&str> = words.iter()
-                .filter(|w| w.len() >= 3 && !STOP_WORDS.contains(&w.to_lowercase().as_str()))
-                .copied()
-                .collect();
-
-            for i in 0..significant_words.len() {
-                for j in (i + 1)..significant_words.len() {
-                    memory.learn_association(significant_words[i], significant_words[j], emotional_valence);
-                }
-                // Learn usage patterns
-                memory.learn_usage_pattern(significant_words[i], current_context, is_conversation_start, false);
-            }
-        }
-
-        // Store recent words
-        {
-            let mut recent = self.recent_words.write();
-            for word in &words {
-                let lower_word = word.to_lowercase();
-                if word.len() >= 3 && !STOP_WORDS.contains(&lower_word.as_str()) {
-                    recent.push(RecentWord {
-                        word: lower_word,
-                        vector: signal_vector,
-                        heard_at: current_tick,
-                    });
-                }
-            }
-            recent.retain(|w| current_tick - w.heard_at < 500);
-            let len = recent.len();
-            if len > 20 {
-                recent.drain(0..len - 20);
-            }
-        }
-
-        // Create signal fragment for cells
-        // La Vraie Faim: Don't scale down intensity for small populations!
-        // Minimum scale of 1.0 ensures cells can be fed even with few cells
+        // === PURE TENSION INJECTION ===
+        // No word learning, no familiarity boost - just raw energy injection
         let cell_scale = (self.cells.len() as f32 / 10_000.0).max(1.0);
-        let base_intensity = signal.intensity * 5.0 * familiarity_boost * cell_scale;
+        let base_intensity = signal.intensity * 5.0 * cell_scale;
 
-        // Get target position and convert to cell space [-10, 10]
-        // Signal content values are typically in [0, 1], cells are in [-10, 10]
+        // Use tension-based position (already calculated in Signal::from_text)
+        // Tension values map directly to cell space
         let mut target_position_8d = [0.0f32; 8];
         let mut target_position_16d = [0.0f32; 16];
-        for i in 0..16 {
-            // Scale from [0, 1] to [-10, 10]
-            let v = signal_vector.get(i).copied().unwrap_or(0.0);
-            let scaled = v * 20.0 - 10.0;
+
+        for i in 0..8 {
+            // Tension is in [-1, 1] for valence, [0, 1] for others
+            // Scale to cell space [-10, 10]
+            let t = tension_vector.get(i).copied().unwrap_or(0.0);
+            let scaled = if i == 1 {
+                t * 10.0  // valence: -1..1 → -10..10
+            } else {
+                t * 20.0 - 10.0  // others: 0..1 → -10..10
+            };
+            target_position_8d[i] = scaled;
             target_position_16d[i] = scaled;
-            if i < 8 {
-                target_position_8d[i] = scaled;
-            }
         }
 
-        // Create fragment with scaled position for GPU spatial hashing
-        let fragment = SignalFragment::external_at(signal_vector, target_position_8d, base_intensity);
-
-        // Keep 16D for CPU-side processing
+        // Create fragment with tension-based position
+        let fragment = SignalFragment::external_at(tension_vector, target_position_8d, base_intensity);
         let target_position = target_position_16d;
 
-        tracing::info!("V2 Signal received: '{}' intensity={:.2} (boost: {:.2})",
-            signal.label, fragment.intensity, familiarity_boost);
+        // Log tension injection (not word reception)
+        tracing::info!("⚡ TENSION: '{}' intensity={:.2} valence={:.2}",
+            signal.label, fragment.intensity, emotional_valence);
 
-        // Distribute to cells - OPTIMIZED: skip dead/sleeping cells
-        // Only wake sleeping cells, don't process them
+        // Distribute tension to cells - wake those in resonance range
         let mut processed_count = 0u32;
         for (i, state) in self.states.iter_mut().enumerate() {
-            // Skip dead cells entirely
             if state.is_dead() {
                 continue;
             }
@@ -158,36 +85,34 @@ impl Substrate {
             let attenuation = (1.0 / (1.0 + distance * 0.1)).max(0.2);
             let attenuated_intensity = fragment.intensity * attenuation;
 
-            // Wake sleeping cells if stimulus is strong enough
+            // Wake sleeping cells if tension is strong enough
             if state.is_sleeping() {
                 if attenuated_intensity > self.config.activity.wake_threshold {
                     self.cells[i].activity.wake();
                     state.set_sleeping(false);
                 } else {
-                    // Skip sleeping cells that don't wake
                     continue;
                 }
             }
 
-            // Only process awake cells (includes just-woken)
-            // Direct activation
-            for (j, s) in fragment.content.iter().enumerate() {
+            // Inject tension into cell state
+            // This modifies the cell's internal vibration
+            for (j, t) in fragment.content.iter().enumerate() {
                 if j < SIGNAL_DIMS {
-                    state.state[j] += s * attenuated_intensity * 5.0;
+                    state.state[j] += t * attenuated_intensity * 5.0;
                 }
             }
 
-            // LA VRAIE FAIM: No direct energy boost!
-            // Cells must earn energy through resonance (handled by backend)
+            // LA VRAIE FAIM: No direct energy!
+            // Energy comes ONLY from resonance in the GPU backend
 
             processed_count += 1;
-            // Limit processing to avoid lag on large populations
             if processed_count > 10_000 {
                 break;
             }
         }
 
-        // Add to signal buffer for backend processing
+        // Add to signal buffer for GPU processing
         {
             let mut buffer = self.signal_buffer.write();
             buffer.push(fragment);
@@ -196,22 +121,10 @@ impl Substrate {
             }
         }
 
-        // === EPISODIC MEMORY ===
-        // Record significant moments as episodes
-        self.maybe_record_episode(
-            &signal.label,
-            current_context,
-            emotional_valence,
-            signal.intensity,
-            is_question,
-            current_tick,
-        );
-
-        // === VISUAL-LINGUISTIC RESPONSE ===
-        // If this is a visual signal, check if ARIA recognizes it and can name it
+        // Visual processing still works (images → tension)
         let visual_emergences = self.process_visual_signal(&signal, current_tick);
 
-        // Check for immediate emergence
+        // Check for emergence
         let mut emergences = self.detect_emergence(current_tick);
         emergences.extend(visual_emergences);
         emergences

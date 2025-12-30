@@ -1,32 +1,16 @@
 //! Types and constants for the Substrate module
+//!
+//! ## Physical Intelligence (Session 20)
+//! Word-based types removed. ARIA resonates with tension, not words.
 
-use aria_core::SIGNAL_DIMS;
 use serde::{Deserialize, Serialize};
 
 /// Minimum ticks between emissions (anti-spam)
 /// At ~4ms/tick (actual observed rate), 75 ticks ≈ 300ms between responses
 pub const EMISSION_COOLDOWN_TICKS: u64 = 25;  // ~100ms between emissions (faster response)
 
-/// Words that are too common - ARIA focuses on meaningful words
-pub const STOP_WORDS: &[&str] = &[
-    // French
-    "le", "la", "les", "un", "une", "des", "du", "de", "au", "aux",
-    "je", "tu", "il", "elle", "on", "nous", "vous", "ils", "elles",
-    "me", "te", "se", "lui", "leur", "en", "y",
-    "est", "suis", "es", "sont", "sommes", "êtes",
-    "ai", "as", "a", "ont", "avons", "avez",
-    "fait", "faire", "vais", "vas", "va", "vont",
-    "et", "ou", "mais", "donc", "car", "ni", "que", "qui", "quoi",
-    "dans", "sur", "sous", "avec", "sans", "pour", "par", "chez",
-    "ce", "cette", "ces", "mon", "ma", "mes", "ton", "ta", "tes", "son", "sa", "ses",
-    // English
-    "the", "a", "an", "is", "are", "am", "was", "were",
-    "i", "you", "he", "she", "it", "we", "they",
-    "my", "your", "his", "her", "its", "our", "their",
-    "and", "or", "but", "so", "if", "then", "to", "of", "in", "on", "at",
-    "be", "have", "has", "had", "do", "does", "did",
-    "si", "ne", "pas", "plus", "très", "bien",
-];
+// NOTE: STOP_WORDS removed in Session 20 (Physical Intelligence)
+// ARIA no longer processes language semantically - only tension vectors
 
 /// Adaptive parameters that ARIA modifies herself
 /// These evolve through feedback - no hardcoded rules, just emergence
@@ -168,13 +152,8 @@ impl AdaptiveParams {
     }
 }
 
-/// A recently heard word for imitation
-#[derive(Clone, Debug)]
-pub struct RecentWord {
-    pub word: String,
-    pub vector: [f32; SIGNAL_DIMS],
-    pub heard_at: u64,
-}
+// NOTE: RecentWord removed in Session 20 (Physical Intelligence)
+// ARIA no longer imitates words - she resonates with tension patterns
 
 /// Spatial inhibitor for adaptive regional thresholds (Gemini optimization)
 ///

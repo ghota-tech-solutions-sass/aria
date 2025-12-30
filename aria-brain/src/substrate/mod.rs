@@ -12,13 +12,13 @@
 //!
 //! ## Module Structure (refactored)
 //!
-//! - `types` - AdaptiveParams, SubstrateStats, RecentWord
+//! - `types` - AdaptiveParams, SubstrateStats, SpatialInhibitor
 //! - `emotion` - EmotionalState management
-//! - `conversation` - ConversationContext tracking
-//! - `signals` - Signal injection and propagation
-//! - `feedback` - Feedback processing
-//! - `emergence` - Emergence detection and word response generation
-//! - `spontaneous` - Spontaneous speech and dreams
+//! - `conversation` - ConversationContext (legacy, kept for reference)
+//! - `signals` - Signal injection and tension propagation
+//! - `feedback` - Feedback processing (emotional state updates)
+//! - `emergence` - Emergence detection and tension response generation
+//! - `spontaneous` - Spontaneous tension pulses and dreams
 //! - `self_modify` - Self-modification and meta-learning
 //! - `lifecycle` - Population management and utility functions
 //!
@@ -40,9 +40,9 @@ mod self_modify;
 mod lifecycle;
 
 // Re-exports for convenience
-pub use types::{AdaptiveParams, SubstrateStats, RecentWord, SpatialInhibitor, STOP_WORDS, EMISSION_COOLDOWN_TICKS};
+// NOTE: RecentWord, STOP_WORDS, ConversationContext removed in Session 20 (Physical Intelligence)
+pub use types::{AdaptiveParams, SubstrateStats, SpatialInhibitor, EMISSION_COOLDOWN_TICKS};
 pub use emotion::EmotionalState;
-pub use conversation::ConversationContext;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -116,28 +116,17 @@ pub struct Substrate {
     /// Long-term memory
     memory: Arc<RwLock<LongTermMemory>>,
 
-    /// Short-term: recently heard words
-    recent_words: RwLock<Vec<RecentWord>>,
+    // NOTE: recent_words, recent_expressions, recent_said_words, conversation,
+    // last_was_question removed in Session 20 (Physical Intelligence)
+    // ARIA no longer tracks words - only tension patterns
 
-    /// Recent expressions (for feedback)
-    recent_expressions: RwLock<Vec<String>>,
-
-    /// Last exploration attempt (combination of words)
+    /// Last exploration attempt (combination of tensions)
     last_exploration: RwLock<Option<String>>,
 
     // === Emotional & Social ===
 
     /// Global emotional state
     emotional_state: RwLock<EmotionalState>,
-
-    /// Recent words said (anti-repetition, tracks last 5)
-    recent_said_words: RwLock<Vec<String>>,
-
-    /// Conversation context
-    conversation: RwLock<ConversationContext>,
-
-    /// Was last input a question?
-    last_was_question: RwLock<bool>,
 
     /// Last interaction tick (for spontaneity)
     last_interaction_tick: AtomicU64,
@@ -242,13 +231,8 @@ impl Substrate {
             tick: AtomicU64::new(0),
             next_id: AtomicU64::new(initial_cells as u64),
             memory,
-            recent_words: RwLock::new(Vec::new()),
-            recent_expressions: RwLock::new(Vec::new()),
             last_exploration: RwLock::new(None),
             emotional_state: RwLock::new(EmotionalState::default()),
-            recent_said_words: RwLock::new(Vec::new()),
-            conversation: RwLock::new(ConversationContext::new()),
-            last_was_question: RwLock::new(false),
             last_interaction_tick: AtomicU64::new(0),
             last_emission_tick: AtomicU64::new(0),
             last_spontaneous_tick: AtomicU64::new(0),
@@ -760,16 +744,6 @@ mod tests {
         assert!(state.boredom > 0.0);
     }
 
-    #[test]
-    fn test_conversation_context() {
-        let mut ctx = ConversationContext::new();
-
-        ctx.add_input("hello world", vec!["hello".into(), "world".into()], 0.5, 100, SocialContext::Greeting);
-
-        assert!(ctx.is_conversation_start());
-        assert_eq!(ctx.get_social_context(), SocialContext::Greeting);
-
-        let words = ctx.get_context_words();
-        assert!(!words.is_empty());
-    }
+    // NOTE: test_conversation_context removed in Session 20 (Physical Intelligence)
+    // ConversationContext is no longer used in Substrate
 }

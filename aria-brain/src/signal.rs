@@ -128,6 +128,8 @@ impl Signal {
     }
 
     /// Get the semantic position of this signal
+    /// NOTE: Kept for potential future use in spatial injection
+    #[allow(dead_code)]
     pub fn semantic_position(&self) -> [f32; 16] {
         let mut pos = [0.0f32; 16];
         for (i, v) in self.content.iter().take(16).enumerate() {

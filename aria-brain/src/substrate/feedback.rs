@@ -1,21 +1,27 @@
 //! Feedback Processing for ARIA's Substrate
 //!
-//! Handles positive/negative feedback and adaptive parameter synchronization.
+//! ## Physical Intelligence (Session 20)
+//!
+//! Feedback no longer updates "word valences" - there are no words.
+//! Feedback directly modifies ARIA's emotional state and adaptive parameters.
+//! The cells learn through resonance, not through semantic reinforcement.
 
 use super::*;
 
 impl Substrate {
     /// Process feedback from user (Bravo!, Non, etc.)
+    ///
+    /// **Physical Intelligence**: Feedback affects emotional state and behavior,
+    /// not word valences. The substrate learns through resonance patterns.
     pub(super) fn process_feedback(&self, label: &str, _current_tick: u64) {
-        // Feedback should be short, dedicated messages - not part of conversation
-        // If the message is too long (> 15 chars), it's probably not feedback
+        // Feedback should be short, dedicated messages
         if label.len() > 15 {
             return;
         }
 
         let lower_label = label.to_lowercase().trim().to_string();
 
-        // Exact match or starts with feedback words (allow "Bravo!" but not "C'est bien fait")
+        // Feedback detection
         let positive_feedback = [
             "bravo", "bien!", "super", "génial", "parfait", "excellent",
             "good", "great", "yes", "perfect", "awesome", "👏", "👍", "oui"
@@ -26,7 +32,6 @@ impl Substrate {
             "no", "wrong", "bad", "👎"
         ];
 
-        // Check if the message IS the feedback (not contains it)
         let is_positive = positive_feedback.iter().any(|w|
             lower_label == *w || lower_label.starts_with(&format!("{} ", w)) || lower_label.starts_with(&format!("{}!", w))
         );
@@ -38,55 +43,32 @@ impl Substrate {
             return;
         }
 
-        // Step 1: Get recent expressions (release lock immediately)
-        let recent_expr: Vec<String> = self.recent_expressions.read().clone();
+        // NOTE: Word valence updates removed in Session 20 (Physical Intelligence)
+        // Cells learn through resonance, not through semantic reinforcement
 
-        // Step 2: Update word valences in memory (separate scope)
-        {
-            let mut memory = self.memory.write();
-            for word in &recent_expr {
-                if let Some(freq) = memory.word_frequencies.get_mut(word) {
-                    let old = freq.emotional_valence;
-                    if is_positive {
-                        freq.emotional_valence = (freq.emotional_valence + 0.3).clamp(-2.0, 2.0);
-                        freq.count += 2;
-                        tracing::info!("FEEDBACK POSITIVE! '{}' ({:.2} → {:.2})", word, old, freq.emotional_valence);
-                    } else {
-                        freq.emotional_valence = (freq.emotional_valence - 0.3).clamp(-2.0, 2.0);
-                        tracing::info!("FEEDBACK NEGATIVE! '{}' ({:.2} → {:.2})", word, old, freq.emotional_valence);
-                    }
-                }
-            }
-        } // memory lock released here
-
-        // Step 3: Update emotional state (separate scope)
+        // Update emotional state
         {
             let mut emotional = self.emotional_state.write();
             if is_positive {
                 emotional.happiness = (emotional.happiness + 0.3).clamp(-1.0, 1.0);
                 emotional.comfort = (emotional.comfort + 0.2).clamp(-1.0, 1.0);
+                tracing::info!("⚡ FEEDBACK POSITIVE: happiness={:.2}, comfort={:.2}",
+                    emotional.happiness, emotional.comfort);
             } else {
                 emotional.happiness = (emotional.happiness - 0.2).clamp(-1.0, 1.0);
                 emotional.comfort = (emotional.comfort - 0.1).clamp(-1.0, 1.0);
+                tracing::info!("⚡ FEEDBACK NEGATIVE: happiness={:.2}, comfort={:.2}",
+                    emotional.happiness, emotional.comfort);
             }
-        } // emotional lock released here
+        }
 
-        // Step 4: Update adaptive params (separate scope)
+        // Update adaptive params (behavior modification)
         {
             let mut params = self.adaptive_params.write();
             if is_positive {
                 params.reinforce_positive();
             } else {
                 params.reinforce_negative();
-            }
-        } // params lock released here
-
-        // Step 5: Update exploration history (separate scope)
-        {
-            let last_expl = self.last_exploration.read().clone();
-            if let Some(combination) = last_expl {
-                let mut memory = self.memory.write();
-                memory.feedback_exploration(&combination, is_positive);
             }
         }
     }

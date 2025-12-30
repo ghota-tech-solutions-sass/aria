@@ -4,15 +4,22 @@
 //! interacts with ARIA. They travel through the substrate like
 //! waves through water.
 //!
+//! ## Physical Intelligence (Session 20)
+//!
+//! ARIA no longer "understands" language. She FEELS the tension.
+//! Text is converted to raw physical tension vectors, not semantic encodings.
+//! Cells resonate with tension patterns, not words.
+//!
 //! ## Types
 //!
-//! - **Perception**: External input (from humans)
+//! - **Perception**: External input (from humans) - now pure tension
 //! - **Expression**: Emergent output (from ARIA)
 //! - **Internal**: Between cells
 
 use bytemuck::{Pod, Zeroable};
 use serde::{Deserialize, Serialize};
 
+use crate::tension::{text_to_tension, tension_intensity, tension_to_position};
 use crate::SIGNAL_DIMS;
 
 /// A signal fragment for cell-to-cell communication (GPU-friendly)
@@ -101,41 +108,33 @@ pub enum SignalType {
 
 impl Signal {
     /// Create a perception signal from text
+    ///
+    /// **Physical Intelligence**: Text is converted to pure TENSION, not semantic encoding.
+    /// ARIA doesn't "understand" words - she feels the vibration of the message.
     pub fn from_text(text: &str) -> Self {
-        let mut content = vec![0.0f32; 32];
+        // Convert text to 8D tension vector
+        let tension = text_to_tension(text);
 
-        // Character-based encoding (first 20 chars)
-        for (i, ch) in text.chars().take(20).enumerate() {
-            content[i] = (ch as u32 as f32) / 256.0;
+        // Extend to 32D for backward compatibility, but only 8D matters
+        let mut content = vec![0.0f32; 32];
+        for (i, t) in tension.iter().enumerate() {
+            content[i] = *t;
         }
 
-        // Statistical features
-        let len = text.len() as f32;
-        content[20] = (len / 100.0).min(1.0);
-        content[21] = text.chars().filter(|c| c.is_uppercase()).count() as f32 / len.max(1.0);
-        content[22] = text.chars().filter(|c| c.is_whitespace()).count() as f32 / len.max(1.0);
-        content[23] = text.chars().filter(|c| c.is_numeric()).count() as f32 / len.max(1.0);
-
-        // Punctuation
-        content[24] = if text.ends_with('?') { 1.0 } else { 0.0 };
-        content[25] = if text.ends_with('!') { 1.0 } else { 0.0 };
-        content[26] = if text.ends_with('.') { 1.0 } else { 0.0 };
-        content[27] = if text.contains(',') { 0.5 } else { 0.0 };
-
-        // Emotional markers
-        let lower = text.to_lowercase();
-        content[28] = Self::detect_positive_emotion(&lower);
-        content[29] = Self::detect_negative_emotion(&lower);
-        content[30] = Self::detect_request(&lower);
-        content[31] = Self::detect_question(&lower);
+        // Calculate position in cell space [-10, 10]
+        let position_8d = tension_to_position(&tension);
+        let mut position_16d = [0.0f32; 16];
+        for (i, p) in position_8d.iter().enumerate() {
+            position_16d[i] = *p;
+        }
 
         Self {
             content,
-            intensity: (len / 50.0).min(1.0).max(0.1),
+            intensity: tension_intensity(&tension),
             label: text.chars().take(50).collect(),
             signal_type: SignalType::Perception,
             timestamp: 0,
-            position: None,
+            position: Some(position_16d),
         }
     }
 
@@ -177,52 +176,27 @@ impl Signal {
     }
 
     /// Check if this is a question
+    ///
+    /// Physical Intelligence: Questions have high urgency (dimension 2)
+    /// from question marks and short message length.
     pub fn is_question(&self) -> bool {
-        self.content.get(24).copied().unwrap_or(0.0) > 0.5
-            || self.content.get(31).copied().unwrap_or(0.0) > 0.5
+        // In Physical Intelligence, urgency (dim 2) encodes question-like tension
+        // question_marks * 0.2 + short_msg bonus means questions often have urgency > 0.4
+        self.content.get(2).copied().unwrap_or(0.0) > 0.4
     }
 
-    /// Check if emotionally charged
+    /// Check if emotionally charged (based on tension valence)
     pub fn is_emotional(&self) -> bool {
-        let positive = self.content.get(28).copied().unwrap_or(0.0);
-        let negative = self.content.get(29).copied().unwrap_or(0.0);
-        (positive + negative.abs()) > 0.5
+        // In Physical Intelligence, check tension dimensions
+        // Dimension 0 = arousal, Dimension 1 = valence
+        let arousal = self.content.get(0).copied().unwrap_or(0.0);
+        let valence = self.content.get(1).copied().unwrap_or(0.0).abs();
+        arousal > 0.5 || valence > 0.3
     }
 
-    fn detect_positive_emotion(text: &str) -> f32 {
-        const POSITIVE: &[&str] = &[
-            "love", "happy", "good", "great", "beautiful", "nice", "sweet", "cute",
-            "aime", "adore", "content", "heureux", "heureuse", "bien", "super", "génial",
-            "joli", "jolie", "beau", "belle", "mignon", "mignonne", "bisou", "calin",
-            "merci", "bravo", "cool", "chouette", "sympa", "♥", "❤", ":)", "<3",
-        ];
-        if POSITIVE.iter().any(|w| text.contains(w)) { 1.0 } else { 0.0 }
-    }
-
-    fn detect_negative_emotion(text: &str) -> f32 {
-        const NEGATIVE: &[&str] = &[
-            "hate", "sad", "bad", "angry", "fear", "scared", "hurt", "pain",
-            "triste", "mal", "peur", "colère", "fâché", "fâchée", "méchant", "nul",
-            "déteste", "horrible", "moche", "pleure", "pleurer", ":(", ":'(",
-        ];
-        if NEGATIVE.iter().any(|w| text.contains(w)) { -1.0 } else { 0.0 }
-    }
-
-    fn detect_request(text: &str) -> f32 {
-        const REQUEST: &[&str] = &[
-            "help", "please", "want", "need",
-            "aide", "s'il te plaît", "stp", "veux", "voudrais", "besoin", "peux",
-        ];
-        if REQUEST.iter().any(|w| text.contains(w)) { 0.5 } else { 0.0 }
-    }
-
-    fn detect_question(text: &str) -> f32 {
-        const QUESTION: &[&str] = &[
-            "why", "how", "what", "when", "where", "who",
-            "pourquoi", "comment", "quoi", "quand", "où", "qui", "est-ce",
-        ];
-        if QUESTION.iter().any(|w| text.contains(w)) { 0.8 } else { 0.0 }
-    }
+    // NOTE: detect_positive_emotion, detect_negative_emotion, detect_request, detect_question
+    // removed in Session 20 (Physical Intelligence)
+    // Emotional detection now happens through tension vectors, not word matching
 }
 
 impl Default for Signal {

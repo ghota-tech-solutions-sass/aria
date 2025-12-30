@@ -25,6 +25,7 @@
 pub mod cell;
 pub mod dna;
 pub mod signal;
+pub mod tension;
 pub mod activity;
 pub mod config;
 pub mod error;
@@ -35,6 +36,7 @@ pub mod soa;
 pub use cell::{Cell, CellState, CellAction, Emotion};
 pub use dna::{DNA, MutationContext};
 pub use signal::{Signal, SignalType, SignalFragment};
+pub use tension::{text_to_tension, tension_intensity, tension_to_position, TensionVector};
 pub use activity::{ActivityState, ActivityTracker};
 pub use config::AriaConfig;
 pub use error::AriaError;
