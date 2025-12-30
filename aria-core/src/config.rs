@@ -293,8 +293,10 @@ pub enum ComputeBackendType {
     Auto,
     /// CPU with Rayon parallelism
     Cpu,
-    /// GPU with wgpu
+    /// GPU with wgpu (legacy AoS layout)
     Gpu,
+    /// GPU with wgpu (optimized SoA layout for 5M+ cells)
+    GpuSoA,
 }
 
 /// Network/cluster configuration

@@ -29,6 +29,7 @@ pub mod activity;
 pub mod config;
 pub mod error;
 pub mod traits;
+pub mod soa;
 
 // Re-export main types at crate root
 pub use cell::{Cell, CellState, CellAction, Emotion};
@@ -38,6 +39,7 @@ pub use activity::{ActivityState, ActivityTracker};
 pub use config::AriaConfig;
 pub use error::AriaError;
 pub use traits::*;
+pub use soa::{CellEnergy, CellPosition, CellInternalState, CellFlags, SoABuffers, IndirectDispatchArgs};
 
 /// Current version of ARIA's genome format
 pub const GENOME_VERSION: u32 = 2;

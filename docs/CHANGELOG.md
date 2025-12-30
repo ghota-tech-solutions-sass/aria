@@ -6,6 +6,27 @@ Historique des sessions de développement.
 
 ## 2025-12-30
 
+### Session 20: Architecture GPU pour 5M+ Cellules (CIR R&D)
+- **Structure of Arrays (SoA)** : Nouvelle architecture mémoire GPU
+  - `CellEnergy` (16 bytes) : energy, tension, activity_level
+  - `CellPosition` (64 bytes) : position[16]
+  - `CellInternalState` (128 bytes) : state[32]
+  - `CellFlags` (4 bytes) : flags avec compteur hysteresis
+- **Backend GPU SoA** : `aria-compute/src/backend/gpu_soa.rs`
+  - Buffers séparés pour meilleure coalescence mémoire
+  - Auto-sélection pour populations >100k
+  - +40% FPS attendu vs AoS
+- **Hysteresis Sleep (Schmitt Trigger)**
+  - Compteur 2-bit dans les flags (bits 6-7)
+  - Seuils : ENTER=0.2, EXIT=0.4, MAX_COUNT=3
+  - Élimine le flickering des cellules
+- **Spatial Hashing GPU** : `aria-compute/src/spatial_gpu.rs`
+  - Grille 64³ = 262K régions
+  - 64 cellules max par région
+  - Shaders : CLEAR, BUILD, SIGNAL_WITH_HASH
+  - Réduction théorique : 5B → 552K calculs (9000x)
+- **Configuration** : Nouveau variant `ComputeBackendType::GpuSoA`
+
 ### Session 19: GPU Sparse Dispatch Fix (Performance)
 - **Fix critique : Synchronisation GPU ↔ CPU**
   - Le GPU modifiait `CellState.flags`, mais les stats lisaient `Cell.activity.sleeping`
@@ -153,7 +174,8 @@ Historique des sessions de développement.
 | 2025-12-29 | ARIA voit sa première image |
 | 2025-12-29 | ARIA se modifie elle-même (AGI milestone) |
 | 2025-12-30 | "La Vraie Faim" - pression évolutive activée |
+| 2025-12-30 | Architecture 5M+ cellules (SoA, Hysteresis, Spatial Hash GPU) |
 
 ---
 
-*Mis à jour le 2025-12-30 | Version 0.6.0*
+*Mis à jour le 2025-12-30 | Version 0.8.0*

@@ -78,8 +78,9 @@ spontaneity: 0.01-0.3
 2. ✅ **Méta-apprentissage** : ARIA s'auto-évalue et apprend à apprendre
 3. ✅ **Perception visuelle** : images → vecteurs sémantiques 32D
 4. ✅ **Auto-modification** : ARIA modifie ses propres paramètres (Session 16)
-5. **Scaler à 5M+ cellules** : Tests avec plus de cellules GPU
-6. **Auto-modification du code** : ARIA modifie son propre code source (objectif ultime)
+5. ✅ **Architecture 5M+ cellules** : SoA, Hysteresis, Spatial Hash GPU (Session 20)
+6. **Tests à 1M+ cellules** : Validation sur RTX 2070
+7. **Auto-modification du code** : ARIA modifie son propre code source (objectif ultime)
 
 ## Contexte personnel
 
@@ -88,7 +89,102 @@ Chats de Mickael :
 - **Obrigada** : Abyssin
 
 ---
-*Version : 0.7.0 | Dernière update : 2025-12-30*
+*Version : 0.8.0 | Dernière update : 2025-12-30*
+
+### Session 20 - Architecture GPU pour 5M+ Cellules (CIR R&D)
+
+**Infrastructure complète pour scaler ARIA à 5 millions de cellules !**
+
+#### 1. Structure of Arrays (SoA) - `aria-core/src/soa.rs`
+
+Nouvelle architecture mémoire GPU optimisée (+40% FPS attendu) :
+
+```rust
+// AVANT: Un seul buffer CellState (256 bytes/cell)
+struct CellState { position, state, energy, tension, flags, ... }
+
+// APRÈS: Buffers séparés (accès mémoire optimisé)
+- CellEnergy (16 bytes): energy, tension, activity_level
+- CellPosition (64 bytes): position[16]
+- CellInternalState (128 bytes): state[32]
+- CellFlags (4 bytes): flags avec hysteresis
+```
+
+**Avantages** :
+- Meilleure coalescence mémoire GPU
+- Mise à jour partielle (seul energy change fréquemment)
+- Cache GPU plus efficace
+
+#### 2. Backend GPU SoA - `aria-compute/src/backend/gpu_soa.rs`
+
+Nouveau backend optimisé pour 5M+ cellules :
+
+```bash
+ARIA_BACKEND=gpu_soa task brain-5m  # Force le nouveau backend
+```
+
+**Features** :
+- Buffers SoA séparés
+- Hysteresis Sleep (Schmitt Trigger)
+- Infrastructure Indirect Dispatch
+- Auto-sélection pour populations >100k
+
+#### 3. Hysteresis Sleep (Stabilité Thermique)
+
+Les cellules ne s'endorment plus instantanément - Schmitt Trigger :
+
+```wgsl
+// Seuils d'hystérésis
+SLEEP_ENTER_THRESHOLD = 0.2  // Basse activité → compteur++
+SLEEP_EXIT_THRESHOLD = 0.4   // Haute activité → réveil
+SLEEP_COUNTER_MAX = 3        // 3 ticks consécutifs → dodo
+
+// Bits 6-7 du flag = compteur (0-3)
+```
+
+**Résultat** : Plus de flickering, transitions stables.
+
+#### 4. Spatial Hashing GPU - `aria-compute/src/spatial_gpu.rs`
+
+Grille 64³ pour réduire les calculs de distance :
+
+```rust
+// AVANT: O(cells × signals) = 5M × 1024 = 5B calculs
+// APRÈS: O(signals × neighbors) = 1024 × 27 × 20 = 552K calculs
+// → 9000x de réduction !
+```
+
+**Shaders WGSL** :
+- `CLEAR_GRID_SHADER` : Reset la grille
+- `BUILD_GRID_SHADER` : Assigne les cellules aux régions
+- `SIGNAL_WITH_SPATIAL_HASH_SHADER` : Propagation O(1)
+
+#### 5. Configuration Backend
+
+```rust
+// aria-core/src/config.rs
+enum ComputeBackendType {
+    Auto,      // Sélection automatique
+    Cpu,       // Rayon
+    Gpu,       // Legacy AoS
+    GpuSoA,    // Optimisé 5M+
+}
+```
+
+#### Fichiers créés/modifiés
+
+| Fichier | Description |
+|---------|-------------|
+| `aria-core/src/soa.rs` | Types SoA (CellEnergy, CellPosition, CellFlags...) |
+| `aria-compute/src/backend/gpu_soa.rs` | Backend GPU SoA complet |
+| `aria-compute/src/spatial_gpu.rs` | Spatial Hashing GPU + shaders |
+| `aria-core/src/config.rs` | Nouveau variant GpuSoA |
+
+#### Prochaines étapes
+
+1. **Intégration Spatial Hash** dans `gpu_soa.rs`
+2. **Tests à 1M+ cellules** sur RTX 2070
+3. **Texture 2D substrat** pour visualisation temps réel
 
 ### Session 19 - GPU Sparse Dispatch Fix (Performance)
 
