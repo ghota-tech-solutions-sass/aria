@@ -21,7 +21,7 @@ pub mod spatial_gpu;
 
 pub use backend::{CpuBackend, GpuBackend, GpuSoABackend};
 pub use spatial::SpatialHash;
-pub use spatial_gpu::{SpatialHashConfig, GridRegion, GRID_SIZE, MAX_CELLS_PER_REGION};
+pub use spatial_gpu::{SpatialHashConfig, GRID_SIZE, MAX_CELLS_PER_REGION};
 
 use aria_core::config::{AriaConfig, ComputeBackendType};
 use aria_core::error::AriaResult;
