@@ -183,6 +183,134 @@ impl Default for CellFlags {
     }
 }
 
+// ============================================================================
+// HEBBIAN CONNECTIONS
+// ============================================================================
+
+/// Maximum connections per cell (fixed for GPU efficiency)
+pub const MAX_CONNECTIONS: usize = 16;
+
+/// Hebbian connection thresholds
+pub const HEBBIAN_COACTIVATION_THRESHOLD: f32 = 0.3; // Both cells must be above this
+pub const HEBBIAN_STRENGTHEN_RATE: f32 = 0.1;        // How fast connections grow
+pub const HEBBIAN_DECAY_RATE: f32 = 0.001;           // How fast unused connections fade
+pub const HEBBIAN_MAX_STRENGTH: f32 = 1.0;           // Maximum connection strength
+
+/// Cell connections for Hebbian learning
+/// Each cell can have up to MAX_CONNECTIONS connections to other cells
+/// "Cells that fire together, wire together"
+///
+/// Buffer: CellConnections[] - one per cell
+/// Size: 144 bytes per cell (for 5M cells: ~720 MB)
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+#[repr(C)]
+pub struct CellConnections {
+    /// Indices of connected cells (0xFFFFFFFF = no connection)
+    pub targets: [u32; MAX_CONNECTIONS],
+    /// Connection strengths (0.0 = no connection, 1.0 = max)
+    pub strengths: [f32; MAX_CONNECTIONS],
+    /// Number of active connections
+    pub count: u32,
+    /// Padding for alignment
+    pub _pad: [u32; 3],
+}
+
+impl CellConnections {
+    pub const NO_CONNECTION: u32 = 0xFFFFFFFF;
+
+    pub fn new() -> Self {
+        Self {
+            targets: [Self::NO_CONNECTION; MAX_CONNECTIONS],
+            strengths: [0.0; MAX_CONNECTIONS],
+            count: 0,
+            _pad: [0; 3],
+        }
+    }
+
+    /// Find existing connection to target, returns slot index
+    pub fn find_connection(&self, target: u32) -> Option<usize> {
+        for i in 0..self.count as usize {
+            if self.targets[i] == target {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Strengthen or create connection to target (Hebbian)
+    pub fn strengthen(&mut self, target: u32, amount: f32) -> bool {
+        // Try to find existing connection
+        if let Some(slot) = self.find_connection(target) {
+            self.strengths[slot] = (self.strengths[slot] + amount).min(HEBBIAN_MAX_STRENGTH);
+            return true;
+        }
+
+        // Create new connection if room available
+        if (self.count as usize) < MAX_CONNECTIONS {
+            let slot = self.count as usize;
+            self.targets[slot] = target;
+            self.strengths[slot] = amount.min(HEBBIAN_MAX_STRENGTH);
+            self.count += 1;
+            return true;
+        }
+
+        // Replace weakest connection if new one would be stronger
+        let mut weakest_slot = 0;
+        let mut weakest_strength = self.strengths[0];
+        for i in 1..MAX_CONNECTIONS {
+            if self.strengths[i] < weakest_strength {
+                weakest_slot = i;
+                weakest_strength = self.strengths[i];
+            }
+        }
+
+        if amount > weakest_strength {
+            self.targets[weakest_slot] = target;
+            self.strengths[weakest_slot] = amount;
+            return true;
+        }
+
+        false
+    }
+
+    /// Decay all connections by rate (called each tick)
+    pub fn decay(&mut self, rate: f32) {
+        for i in 0..self.count as usize {
+            self.strengths[i] = (self.strengths[i] - rate).max(0.0);
+        }
+
+        // Compact: remove dead connections
+        let mut write = 0;
+        for read in 0..self.count as usize {
+            if self.strengths[read] > 0.001 {
+                if write != read {
+                    self.targets[write] = self.targets[read];
+                    self.strengths[write] = self.strengths[read];
+                }
+                write += 1;
+            }
+        }
+
+        // Clear remaining slots
+        for i in write..self.count as usize {
+            self.targets[i] = Self::NO_CONNECTION;
+            self.strengths[i] = 0.0;
+        }
+        self.count = write as u32;
+    }
+
+    /// Get total connection strength (useful for activity spreading)
+    pub fn total_strength(&self) -> f32 {
+        self.strengths[..self.count as usize].iter().sum()
+    }
+}
+
+impl Default for CellConnections {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Indirect dispatch arguments for GPU
 /// Used to let GPU decide workgroup count without CPU roundtrip
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -336,5 +464,42 @@ mod tests {
 
         flags.reset_sleep_counter();
         assert_eq!(flags.sleep_counter(), 0);
+    }
+
+    #[test]
+    fn test_cell_connections_size() {
+        // 16 targets (u32) + 16 strengths (f32) + count (u32) + pad (3 u32)
+        // = 64 + 64 + 4 + 12 = 144 bytes
+        assert_eq!(std::mem::size_of::<CellConnections>(), 144);
+    }
+
+    #[test]
+    fn test_cell_connections_hebbian() {
+        let mut conn = CellConnections::new();
+        assert_eq!(conn.count, 0);
+
+        // Create connection
+        assert!(conn.strengthen(42, 0.5));
+        assert_eq!(conn.count, 1);
+        assert_eq!(conn.targets[0], 42);
+        assert_eq!(conn.strengths[0], 0.5);
+
+        // Strengthen existing connection
+        conn.strengthen(42, 0.3);
+        assert_eq!(conn.count, 1);
+        assert_eq!(conn.strengths[0], 0.8);
+
+        // Add another connection
+        conn.strengthen(100, 0.2);
+        assert_eq!(conn.count, 2);
+
+        // Find connection
+        assert_eq!(conn.find_connection(42), Some(0));
+        assert_eq!(conn.find_connection(100), Some(1));
+        assert_eq!(conn.find_connection(999), None);
+
+        // Decay
+        conn.decay(0.1);
+        assert!(conn.strengths[0] < 0.8); // Should have decayed
     }
 }

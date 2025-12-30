@@ -23,7 +23,9 @@ use aria_core::config::AriaConfig;
 use aria_core::dna::DNA;
 use aria_core::error::{AriaError, AriaResult};
 use aria_core::signal::{Signal, SignalFragment};
-use aria_core::soa::{CellEnergy, CellFlags, CellInternalState, CellPosition, IndirectDispatchArgs};
+use aria_core::soa::{
+    CellConnections, CellEnergy, CellFlags, CellInternalState, CellPosition, IndirectDispatchArgs,
+};
 use aria_core::traits::{BackendStats, ComputeBackend};
 use bytemuck::{Pod, Zeroable};
 
@@ -108,6 +110,9 @@ pub struct GpuSoABackend {
     grid_buffer: Option<wgpu::Buffer>,
     spatial_config_buffer: Option<wgpu::Buffer>,
 
+    // Hebbian learning buffer
+    connection_buffer: Option<wgpu::Buffer>,
+
     // Staging buffers for readback
     energy_staging: Option<wgpu::Buffer>,
     flags_staging: Option<wgpu::Buffer>,
@@ -122,6 +127,7 @@ pub struct GpuSoABackend {
     prepare_dispatch_pipeline: Option<wgpu::ComputePipeline>,
     clear_grid_pipeline: Option<wgpu::ComputePipeline>,
     build_grid_pipeline: Option<wgpu::ComputePipeline>,
+    hebbian_pipeline: Option<wgpu::ComputePipeline>,
 
     // Bind group layouts
     main_bind_group_layout: Option<wgpu::BindGroupLayout>,
@@ -129,6 +135,7 @@ pub struct GpuSoABackend {
     signal_with_hash_bind_group_layout: Option<wgpu::BindGroupLayout>,
     sparse_bind_group_layout: Option<wgpu::BindGroupLayout>,
     grid_bind_group_layout: Option<wgpu::BindGroupLayout>,
+    hebbian_bind_group_layout: Option<wgpu::BindGroupLayout>,
 
     // Sparse dispatch state
     use_indirect_dispatch: bool,
@@ -220,11 +227,14 @@ impl GpuSoABackend {
             prepare_dispatch_pipeline: None,
             clear_grid_pipeline: None,
             build_grid_pipeline: None,
+            hebbian_pipeline: None,
             main_bind_group_layout: None,
             sparse_cell_bind_group_layout: None,
             signal_with_hash_bind_group_layout: None,
             sparse_bind_group_layout: None,
             grid_bind_group_layout: None,
+            hebbian_bind_group_layout: None,
+            connection_buffer: None,
             use_indirect_dispatch,
             last_active_count: 0,
             cell_count: 0,
@@ -407,6 +417,32 @@ impl GpuSoABackend {
                 bytemuck::bytes_of(&spatial_config),
             );
         }
+
+        // Hebbian connection buffer
+        // 144 bytes per cell (16 targets + 16 strengths + count + padding)
+        let connection_bytes = std::mem::size_of::<CellConnections>() * cell_count_with_headroom;
+        tracing::info!(
+            "🧠 Hebbian: Allocating {} MB for {} cell connections",
+            connection_bytes / 1024 / 1024,
+            cell_count
+        );
+
+        self.connection_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Hebbian Connections"),
+            size: connection_bytes as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        }));
+
+        // Initialize connections to zero
+        let empty_connections = vec![CellConnections::default(); cell_count_with_headroom];
+        self.queue.write_buffer(
+            self.connection_buffer.as_ref().unwrap(),
+            0,
+            bytemuck::cast_slice(&empty_connections),
+        );
 
         self.create_bind_group_layouts()?;
         self.create_pipelines()?;
@@ -820,6 +856,81 @@ impl GpuSoABackend {
             ));
         }
 
+        // Hebbian bind group layout (uses spatial hash for neighbor lookup)
+        self.hebbian_bind_group_layout = Some(self.device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("Hebbian Bind Group Layout"),
+                entries: &[
+                    // 0: Energies (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 1: Positions (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 2: Connections (read-write)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 3: Grid (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 4: Config (uniform)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 5: Spatial config (uniform)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            },
+        ));
+
         Ok(())
     }
 
@@ -1051,6 +1162,41 @@ impl GpuSoABackend {
             );
 
             tracing::debug!("🎮 Spatial hash pipelines created");
+
+            // Hebbian learning pipeline (requires spatial hash)
+            let hebbian_layout = self
+                .hebbian_bind_group_layout
+                .as_ref()
+                .ok_or_else(|| AriaError::gpu("Hebbian bind group layout not created"))?;
+
+            let hebbian_pipeline_layout = self
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("Hebbian Pipeline Layout"),
+                    bind_group_layouts: &[hebbian_layout],
+                    immediate_size: 0,
+                });
+
+            let hebbian_shader = self
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("Hebbian Shader"),
+                    source: wgpu::ShaderSource::Wgsl(HEBBIAN_SHADER.into()),
+                });
+
+            self.hebbian_pipeline = Some(
+                self.device
+                    .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some("Hebbian Pipeline"),
+                        layout: Some(&hebbian_pipeline_layout),
+                        module: &hebbian_shader,
+                        entry_point: Some("main"),
+                        compilation_options: Default::default(),
+                        cache: None,
+                    }),
+            );
+
+            tracing::info!("🧠 Hebbian learning pipeline created");
         }
 
         tracing::debug!("🎮 GPU SoA pipelines created");
@@ -1257,6 +1403,52 @@ impl GpuSoABackend {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
+                    resource: spatial_config_buffer.as_entire_binding(),
+                },
+            ],
+        }))
+    }
+
+    /// Create bind group for Hebbian learning
+    fn create_hebbian_bind_group(&self) -> Option<wgpu::BindGroup> {
+        if !self.use_spatial_hash {
+            return None; // Hebbian requires spatial hash for neighbor lookup
+        }
+
+        let layout = self.hebbian_bind_group_layout.as_ref()?;
+        let energy_buffer = self.energy_buffer.as_ref()?;
+        let position_buffer = self.position_buffer.as_ref()?;
+        let connection_buffer = self.connection_buffer.as_ref()?;
+        let grid_buffer = self.grid_buffer.as_ref()?;
+        let config_buffer = self.config_buffer.as_ref()?;
+        let spatial_config_buffer = self.spatial_config_buffer.as_ref()?;
+
+        Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Hebbian Bind Group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: energy_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: position_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: connection_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: grid_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: config_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
                     resource: spatial_config_buffer.as_entire_binding(),
                 },
             ],
@@ -1660,6 +1852,33 @@ impl ComputeBackend for GpuSoABackend {
         }
 
         self.queue.submit(Some(encoder.finish()));
+
+        // Run Hebbian learning (requires spatial hash for neighbor lookup)
+        // "Cells that fire together, wire together"
+        if self.use_spatial_hash {
+            if let Some(hebbian_bind_group) = self.create_hebbian_bind_group() {
+                if let Some(hebbian_pipeline) = self.hebbian_pipeline.as_ref() {
+                    let mut encoder = self
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Hebbian Pass"),
+                        });
+
+                    {
+                        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some("Hebbian Learning"),
+                            timestamp_writes: None,
+                        });
+                        pass.set_pipeline(hebbian_pipeline);
+                        pass.set_bind_group(0, &hebbian_bind_group, &[]);
+                        let workgroups = (self.cell_count as u32 + 255) / 256;
+                        pass.dispatch_workgroups(workgroups, 1, 1);
+                    }
+
+                    self.queue.submit(Some(encoder.finish()));
+                }
+            }
+        }
 
         // Update stats
         self.stats.cells_processed = active_count as u64;
@@ -2399,6 +2618,224 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     energies[idx] = cell_energy;
     flags[idx] = cell_flags;
+}
+"#;
+
+/// Hebbian learning shader - "Cells that fire together, wire together"
+/// Uses spatial hash to find nearby co-active cells efficiently
+const HEBBIAN_SHADER: &str = r#"
+// Hebbian learning - creates connections between co-active cells
+
+struct CellEnergy {
+    energy: f32,
+    tension: f32,
+    activity_level: f32,
+    _pad: f32,
+}
+
+struct CellPosition {
+    position: array<f32, 16>,
+}
+
+// Connection structure: 16 targets + 16 strengths + count + pad
+struct CellConnections {
+    targets: array<u32, 16>,
+    strengths: array<f32, 16>,
+    count: u32,
+    _pad: array<u32, 3>,
+}
+
+struct GridRegion {
+    count: u32,
+    cell_indices: array<u32, 64>,
+    _pad: array<u32, 3>,
+}
+
+struct SpatialConfig {
+    grid_size: vec3<u32>,
+    max_cells_per_region: u32,
+    min_pos: vec3<f32>,
+    region_size: f32,
+    cell_count: u32,
+    _pad: array<u32, 3>,
+}
+
+struct Config {
+    energy_cap: f32,
+    reaction_amplification: f32,
+    state_cap: f32,
+    signal_radius: f32,
+    cost_rest: f32,
+    cost_signal: f32,
+    cost_move: f32,
+    cost_divide: f32,
+    signal_energy_base: f32,
+    signal_resonance_factor: f32,
+    energy_gain: f32,
+    tick: u32,
+    cell_count: u32,
+    workgroup_size: u32,
+    _pad: vec2<u32>,
+}
+
+const NO_CONNECTION: u32 = 0xFFFFFFFFu;
+const MAX_CONNECTIONS: u32 = 16u;
+const COACTIVATION_THRESHOLD: f32 = 0.3;
+const STRENGTHEN_RATE: f32 = 0.1;
+const DECAY_RATE: f32 = 0.001;
+const MAX_STRENGTH: f32 = 1.0;
+
+@group(0) @binding(0) var<storage, read> energies: array<CellEnergy>;
+@group(0) @binding(1) var<storage, read> positions: array<CellPosition>;
+@group(0) @binding(2) var<storage, read_write> connections: array<CellConnections>;
+@group(0) @binding(3) var<storage, read> grid: array<GridRegion>;
+@group(0) @binding(4) var<uniform> config: Config;
+@group(0) @binding(5) var<uniform> spatial_config: SpatialConfig;
+
+fn position_to_grid(pos: vec3<f32>) -> vec3<i32> {
+    let normalized = (pos - spatial_config.min_pos) / spatial_config.region_size;
+    return vec3<i32>(
+        i32(normalized.x),
+        i32(normalized.y),
+        i32(normalized.z)
+    );
+}
+
+fn grid_index(coord: vec3<i32>) -> u32 {
+    let clamped = vec3<u32>(
+        u32(clamp(coord.x, 0, i32(spatial_config.grid_size.x) - 1)),
+        u32(clamp(coord.y, 0, i32(spatial_config.grid_size.y) - 1)),
+        u32(clamp(coord.z, 0, i32(spatial_config.grid_size.z) - 1))
+    );
+    return clamped.x + clamped.y * spatial_config.grid_size.x + clamped.z * spatial_config.grid_size.x * spatial_config.grid_size.y;
+}
+
+fn find_connection(conn: ptr<storage, CellConnections, read_write>, target: u32) -> i32 {
+    for (var i = 0u; i < (*conn).count; i++) {
+        if (*conn).targets[i] == target {
+            return i32(i);
+        }
+    }
+    return -1;
+}
+
+fn strengthen_connection(conn: ptr<storage, CellConnections, read_write>, target: u32, amount: f32) {
+    // Try to find existing connection
+    let slot = find_connection(conn, target);
+    if slot >= 0 {
+        (*conn).strengths[slot] = min((*conn).strengths[slot] + amount, MAX_STRENGTH);
+        return;
+    }
+
+    // Create new connection if room available
+    if (*conn).count < MAX_CONNECTIONS {
+        let new_slot = (*conn).count;
+        (*conn).targets[new_slot] = target;
+        (*conn).strengths[new_slot] = min(amount, MAX_STRENGTH);
+        (*conn).count += 1u;
+        return;
+    }
+
+    // Replace weakest connection if new one would be stronger
+    var weakest_slot = 0u;
+    var weakest_strength = (*conn).strengths[0];
+    for (var i = 1u; i < MAX_CONNECTIONS; i++) {
+        if (*conn).strengths[i] < weakest_strength {
+            weakest_slot = i;
+            weakest_strength = (*conn).strengths[i];
+        }
+    }
+
+    if amount > weakest_strength {
+        (*conn).targets[weakest_slot] = target;
+        (*conn).strengths[weakest_slot] = amount;
+    }
+}
+
+fn decay_connections(conn: ptr<storage, CellConnections, read_write>) {
+    var write = 0u;
+    for (var read = 0u; read < (*conn).count; read++) {
+        let new_strength = (*conn).strengths[read] - DECAY_RATE;
+        if new_strength > 0.001 {
+            if write != read {
+                (*conn).targets[write] = (*conn).targets[read];
+            }
+            (*conn).strengths[write] = new_strength;
+            write += 1u;
+        }
+    }
+
+    // Clear remaining slots
+    for (var i = write; i < (*conn).count; i++) {
+        (*conn).targets[i] = NO_CONNECTION;
+        (*conn).strengths[i] = 0.0;
+    }
+    (*conn).count = write;
+}
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let idx = id.x;
+    if idx >= config.cell_count {
+        return;
+    }
+
+    let cell_energy = energies[idx];
+
+    // Only active cells form connections
+    if cell_energy.activity_level < COACTIVATION_THRESHOLD {
+        // Just decay existing connections
+        decay_connections(&connections[idx]);
+        return;
+    }
+
+    // Get cell position
+    let cell_pos = positions[idx];
+    let pos = vec3<f32>(cell_pos.position[0], cell_pos.position[1], cell_pos.position[2]);
+    let cell_grid = position_to_grid(pos);
+
+    // Search nearby grid cells for co-active neighbors
+    for (var dx = -1; dx <= 1; dx++) {
+        for (var dy = -1; dy <= 1; dy++) {
+            for (var dz = -1; dz <= 1; dz++) {
+                let neighbor_coord = cell_grid + vec3<i32>(dx, dy, dz);
+
+                // Bounds check
+                if neighbor_coord.x < 0 || neighbor_coord.x >= i32(spatial_config.grid_size.x) ||
+                   neighbor_coord.y < 0 || neighbor_coord.y >= i32(spatial_config.grid_size.y) ||
+                   neighbor_coord.z < 0 || neighbor_coord.z >= i32(spatial_config.grid_size.z) {
+                    continue;
+                }
+
+                let region_idx = grid_index(neighbor_coord);
+                let region = grid[region_idx];
+
+                // Check cells in this region
+                for (var i = 0u; i < min(region.count, spatial_config.max_cells_per_region); i++) {
+                    let other_idx = region.cell_indices[i];
+
+                    // Skip self
+                    if other_idx == idx || other_idx >= config.cell_count {
+                        continue;
+                    }
+
+                    let other_energy = energies[other_idx];
+
+                    // Both cells must be active
+                    if other_energy.activity_level >= COACTIVATION_THRESHOLD {
+                        // Strengthen connection based on product of activities
+                        let strength_delta = STRENGTHEN_RATE
+                            * cell_energy.activity_level
+                            * other_energy.activity_level;
+                        strengthen_connection(&connections[idx], other_idx, strength_delta);
+                    }
+                }
+            }
+        }
+    }
+
+    // Decay connections
+    decay_connections(&connections[idx]);
 }
 "#;
 

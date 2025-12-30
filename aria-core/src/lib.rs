@@ -39,7 +39,12 @@ pub use activity::{ActivityState, ActivityTracker};
 pub use config::AriaConfig;
 pub use error::AriaError;
 pub use traits::*;
-pub use soa::{CellEnergy, CellPosition, CellInternalState, CellFlags, SoABuffers, IndirectDispatchArgs};
+pub use soa::{
+    CellEnergy, CellPosition, CellInternalState, CellFlags, SoABuffers, IndirectDispatchArgs,
+    // Hebbian learning
+    CellConnections, MAX_CONNECTIONS,
+    HEBBIAN_COACTIVATION_THRESHOLD, HEBBIAN_STRENGTHEN_RATE, HEBBIAN_DECAY_RATE, HEBBIAN_MAX_STRENGTH,
+};
 
 /// Current version of ARIA's genome format
 pub const GENOME_VERSION: u32 = 2;
