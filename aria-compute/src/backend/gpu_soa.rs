@@ -116,6 +116,7 @@ pub struct GpuSoABackend {
     // Pipelines
     cell_update_pipeline: Option<wgpu::ComputePipeline>,
     signal_pipeline: Option<wgpu::ComputePipeline>,
+    signal_with_hash_pipeline: Option<wgpu::ComputePipeline>,
     compact_pipeline: Option<wgpu::ComputePipeline>,
     prepare_dispatch_pipeline: Option<wgpu::ComputePipeline>,
     clear_grid_pipeline: Option<wgpu::ComputePipeline>,
@@ -123,6 +124,7 @@ pub struct GpuSoABackend {
 
     // Bind group layouts
     main_bind_group_layout: Option<wgpu::BindGroupLayout>,
+    signal_with_hash_bind_group_layout: Option<wgpu::BindGroupLayout>,
     sparse_bind_group_layout: Option<wgpu::BindGroupLayout>,
     grid_bind_group_layout: Option<wgpu::BindGroupLayout>,
 
@@ -200,11 +202,13 @@ impl GpuSoABackend {
             counter_staging: None,
             cell_update_pipeline: None,
             signal_pipeline: None,
+            signal_with_hash_pipeline: None,
             compact_pipeline: None,
             prepare_dispatch_pipeline: None,
             clear_grid_pipeline: None,
             build_grid_pipeline: None,
             main_bind_group_layout: None,
+            signal_with_hash_bind_group_layout: None,
             sparse_bind_group_layout: None,
             grid_bind_group_layout: None,
             cell_count: 0,
@@ -485,6 +489,105 @@ impl GpuSoABackend {
             },
         ));
 
+        // Signal with spatial hash bind group layout (8 bindings)
+        if self.use_spatial_hash {
+            self.signal_with_hash_bind_group_layout = Some(self.device.create_bind_group_layout(
+                &wgpu::BindGroupLayoutDescriptor {
+                    label: Some("Signal With Hash Bind Group Layout"),
+                    entries: &[
+                        // 0: energies (read-write)
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        // 1: positions (read-only)
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        // 2: states (read-write)
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 2,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        // 3: flags (read-write)
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 3,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        // 4: signals (read-only)
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 4,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        // 5: grid (read-only)
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 5,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        // 6: config (uniform)
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 6,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        // 7: spatial_config (uniform)
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 7,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                    ],
+                },
+            ));
+        }
+
         // Sparse bind group layout
         self.sparse_bind_group_layout = Some(self.device.create_bind_group_layout(
             &wgpu::BindGroupLayoutDescriptor {
@@ -757,6 +860,39 @@ impl GpuSoABackend {
                     }),
             );
 
+            // Signal with spatial hash pipeline
+            let signal_hash_layout = self
+                .signal_with_hash_bind_group_layout
+                .as_ref()
+                .ok_or_else(|| AriaError::gpu("Signal with hash bind group layout not created"))?;
+
+            let signal_hash_pipeline_layout = self
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("Signal With Hash Pipeline Layout"),
+                    bind_group_layouts: &[signal_hash_layout],
+                    immediate_size: 0,
+                });
+
+            let signal_hash_shader = self
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("Signal With Hash Shader"),
+                    source: wgpu::ShaderSource::Wgsl(spatial_gpu::SIGNAL_WITH_SPATIAL_HASH_SHADER.into()),
+                });
+
+            self.signal_with_hash_pipeline = Some(
+                self.device
+                    .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some("Signal With Hash Pipeline"),
+                        layout: Some(&signal_hash_pipeline_layout),
+                        module: &signal_hash_shader,
+                        entry_point: Some("main"),
+                        compilation_options: Default::default(),
+                        cache: None,
+                    }),
+            );
+
             tracing::debug!("🎮 Spatial hash pipelines created");
         }
 
@@ -839,6 +975,53 @@ impl GpuSoABackend {
             self.queue
                 .write_buffer(buffer, 0, bytemuck::bytes_of(&gpu_config));
         }
+    }
+
+    /// Create bind group for signal propagation with spatial hash
+    fn create_signal_with_hash_bind_group(&self) -> AriaResult<wgpu::BindGroup> {
+        let layout = self
+            .signal_with_hash_bind_group_layout
+            .as_ref()
+            .ok_or_else(|| AriaError::gpu("Signal with hash bind group layout not initialized"))?;
+
+        Ok(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Signal With Hash Bind Group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.energy_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.position_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.state_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.flags_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.signals_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: self.grid_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: self.config_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: self.spatial_config_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+            ],
+        }))
     }
 
     /// Create bind group for spatial hash operations
@@ -1144,27 +1327,50 @@ impl ComputeBackend for GpuSoABackend {
 
         // Run signal propagation
         if !signals.is_empty() {
-            let main_bind_group = self.create_main_bind_group()?;
-            let signal_pipeline = self
-                .signal_pipeline
-                .as_ref()
-                .ok_or_else(|| AriaError::gpu("Signal pipeline not initialized"))?;
-
             let mut encoder = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Signal Pass"),
                 });
 
-            {
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("Signal"),
-                    timestamp_writes: None,
-                });
-                pass.set_pipeline(signal_pipeline);
-                pass.set_bind_group(0, &main_bind_group, &[]);
-                let workgroups = (self.cell_count as u32 + 255) / 256;
-                pass.dispatch_workgroups(workgroups, 1, 1);
+            if self.use_spatial_hash {
+                // Use spatial hash for O(1) neighbor lookup
+                // Dispatched per-signal (each signal finds nearby cells via grid)
+                let signal_hash_bind_group = self.create_signal_with_hash_bind_group()?;
+                let signal_hash_pipeline = self
+                    .signal_with_hash_pipeline
+                    .as_ref()
+                    .ok_or_else(|| AriaError::gpu("Signal with hash pipeline not initialized"))?;
+
+                {
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("Signal With Hash"),
+                        timestamp_writes: None,
+                    });
+                    pass.set_pipeline(signal_hash_pipeline);
+                    pass.set_bind_group(0, &signal_hash_bind_group, &[]);
+                    // Dispatch per signal (workgroup_size=1 in shader)
+                    let signal_count = signals.len().min(1024) as u32;
+                    pass.dispatch_workgroups(signal_count, 1, 1);
+                }
+            } else {
+                // Legacy O(N²) signal propagation
+                let main_bind_group = self.create_main_bind_group()?;
+                let signal_pipeline = self
+                    .signal_pipeline
+                    .as_ref()
+                    .ok_or_else(|| AriaError::gpu("Signal pipeline not initialized"))?;
+
+                {
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("Signal"),
+                        timestamp_writes: None,
+                    });
+                    pass.set_pipeline(signal_pipeline);
+                    pass.set_bind_group(0, &main_bind_group, &[]);
+                    let workgroups = (self.cell_count as u32 + 255) / 256;
+                    pass.dispatch_workgroups(workgroups, 1, 1);
+                }
             }
 
             self.queue.submit(Some(encoder.finish()));
