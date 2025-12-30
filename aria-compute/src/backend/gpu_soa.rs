@@ -743,6 +743,17 @@ impl GpuSoABackend {
                             },
                             count: None,
                         },
+                        // 8: connections (read-only) - Hebbian signal propagation
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 8,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
                     ],
                 },
             ));
@@ -1322,6 +1333,11 @@ impl GpuSoABackend {
                 wgpu::BindGroupEntry {
                     binding: 7,
                     resource: self.spatial_config_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+                // 8: connections for Hebbian signal propagation
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: self.connection_buffer.as_ref().unwrap().as_entire_binding(),
                 },
             ],
         }))

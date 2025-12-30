@@ -191,10 +191,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 "#;
 
-/// WGSL shader for signal propagation using spatial hash
+/// WGSL shader for signal propagation using spatial hash + Hebbian connections
 /// This replaces the O(cells * signals) loop with O(signals * neighbors)
+/// AND propagates through learned connections for "neural pathway" behavior
 pub const SIGNAL_WITH_SPATIAL_HASH_SHADER: &str = r#"
-// Signal propagation with spatial hash lookup
+// Signal propagation with spatial hash lookup + Hebbian connections
 
 struct CellEnergy {
     energy: f32,
@@ -248,8 +249,18 @@ struct Config {
     _pad: vec2<u32>,
 }
 
+// Hebbian connections structure
+struct CellConnections {
+    targets: array<u32, 16>,
+    strengths: array<f32, 16>,
+    count: u32,
+    _pad: array<u32, 3>,
+}
+
 const FLAG_SLEEPING: u32 = 1u;
 const FLAG_DEAD: u32 = 32u;
+const NO_CONNECTION: u32 = 0xFFFFFFFFu;
+const CONNECTION_SIGNAL_FACTOR: f32 = 0.5;  // Signals via connections are 50% weaker
 
 @group(0) @binding(0) var<storage, read_write> energies: array<CellEnergy>;
 @group(0) @binding(1) var<storage, read> positions: array<CellPosition>;
@@ -259,6 +270,7 @@ const FLAG_DEAD: u32 = 32u;
 @group(0) @binding(5) var<storage, read> grid: array<GridRegion>;
 @group(0) @binding(6) var<uniform> config: Config;
 @group(0) @binding(7) var<uniform> spatial_config: SpatialConfig;
+@group(0) @binding(8) var<storage, read> connections: array<CellConnections>;
 
 fn position_to_grid(pos: vec3<f32>) -> vec3<i32> {
     let normalized = (pos - spatial_config.min_pos) / spatial_config.region_size;
@@ -409,6 +421,74 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
                     energies[cell_idx] = cell_energy;
                     flags[cell_idx] = cell_flags;
+
+                    // HEBBIAN PROPAGATION: Forward signal through connections
+                    // "Neural pathways" - signals travel faster along learned connections
+                    if (cell_flags & FLAG_SLEEPING) == 0u {
+                        let conn = connections[cell_idx];
+                        for (var c = 0u; c < conn.count; c++) {
+                            let target_idx = conn.targets[c];
+                            if target_idx == NO_CONNECTION || target_idx >= config.cell_count {
+                                continue;
+                            }
+
+                            let conn_strength = conn.strengths[c];
+                            if conn_strength < 0.1 {
+                                continue;  // Weak connections don't propagate
+                            }
+
+                            var target_energy = energies[target_idx];
+                            var target_flags = flags[target_idx];
+
+                            let target_sleeping = (target_flags & FLAG_SLEEPING) != 0u;
+                            let target_dead = (target_flags & FLAG_DEAD) != 0u;
+
+                            if target_dead {
+                                continue;
+                            }
+
+                            // Signal strength through connection
+                            let conn_intensity = intensity * conn_strength * CONNECTION_SIGNAL_FACTOR;
+
+                            // Wake sleeping connected cells
+                            if target_sleeping && conn_intensity > 0.05 {
+                                target_flags = target_flags & ~FLAG_SLEEPING;
+                                target_energy.activity_level = 0.3;
+                            }
+
+                            // Apply signal to connected cell
+                            if (target_flags & FLAG_SLEEPING) == 0u {
+                                var t_state0 = states[target_idx * 8u];
+                                var t_state1 = states[target_idx * 8u + 1u];
+
+                                for (var j = 0u; j < 4u; j++) {
+                                    t_state0[j] += signal.content[j] * conn_intensity;
+                                }
+                                for (var j = 0u; j < 4u; j++) {
+                                    t_state1[j] += signal.content[j + 4u] * conn_intensity;
+                                }
+
+                                states[target_idx * 8u] = t_state0;
+                                states[target_idx * 8u + 1u] = t_state1;
+
+                                // Energy from connection-propagated signal
+                                let t_resonance = calculate_resonance(signal.content, t_state0, t_state1);
+                                if t_resonance > 0.3 {
+                                    let understanding = (t_resonance - 0.3) / 0.7;
+                                    let e_gain = config.signal_energy_base
+                                        * conn_intensity
+                                        * understanding
+                                        * (1.0 + t_resonance * config.signal_resonance_factor);
+                                    target_energy.energy = min(target_energy.energy + e_gain, config.energy_cap);
+                                }
+
+                                target_energy.activity_level += conn_intensity;
+                            }
+
+                            energies[target_idx] = target_energy;
+                            flags[target_idx] = target_flags;
+                        }
+                    }
                 }
             }
         }
