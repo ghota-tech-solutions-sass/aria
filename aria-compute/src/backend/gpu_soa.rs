@@ -128,6 +128,7 @@ pub struct GpuSoABackend {
     clear_grid_pipeline: Option<wgpu::ComputePipeline>,
     build_grid_pipeline: Option<wgpu::ComputePipeline>,
     hebbian_pipeline: Option<wgpu::ComputePipeline>,
+    sleeping_drain_pipeline: Option<wgpu::ComputePipeline>,
 
     // Bind group layouts
     main_bind_group_layout: Option<wgpu::BindGroupLayout>,
@@ -136,6 +137,7 @@ pub struct GpuSoABackend {
     sparse_bind_group_layout: Option<wgpu::BindGroupLayout>,
     grid_bind_group_layout: Option<wgpu::BindGroupLayout>,
     hebbian_bind_group_layout: Option<wgpu::BindGroupLayout>,
+    sleeping_drain_bind_group_layout: Option<wgpu::BindGroupLayout>,
 
     // Sparse dispatch state
     use_indirect_dispatch: bool,
@@ -228,12 +230,14 @@ impl GpuSoABackend {
             clear_grid_pipeline: None,
             build_grid_pipeline: None,
             hebbian_pipeline: None,
+            sleeping_drain_pipeline: None,
             main_bind_group_layout: None,
             sparse_cell_bind_group_layout: None,
             signal_with_hash_bind_group_layout: None,
             sparse_bind_group_layout: None,
             grid_bind_group_layout: None,
             hebbian_bind_group_layout: None,
+            sleeping_drain_bind_group_layout: None,
             connection_buffer: None,
             use_indirect_dispatch,
             last_active_count: 0,
@@ -942,6 +946,48 @@ impl GpuSoABackend {
             },
         ));
 
+        // Sleeping drain bind group layout (simple: energies, flags, config)
+        self.sleeping_drain_bind_group_layout = Some(self.device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("Sleeping Drain Bind Group Layout"),
+                entries: &[
+                    // 0: Energies (read-write)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 1: Flags (read-write)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 2: Config (uniform)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            },
+        ));
+
         Ok(())
     }
 
@@ -1210,6 +1256,38 @@ impl GpuSoABackend {
             tracing::info!("🧠 Hebbian learning pipeline created");
         }
 
+        // Sleeping drain pipeline (runs periodically to drain sleeping cells)
+        if let Some(sleeping_layout) = self.sleeping_drain_bind_group_layout.as_ref() {
+            let sleeping_pipeline_layout = self
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("Sleeping Drain Pipeline Layout"),
+                    bind_group_layouts: &[sleeping_layout],
+                    immediate_size: 0,
+                });
+
+            let sleeping_shader = self
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("Sleeping Drain Shader"),
+                    source: wgpu::ShaderSource::Wgsl(SLEEPING_DRAIN_SHADER.into()),
+                });
+
+            self.sleeping_drain_pipeline = Some(
+                self.device
+                    .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some("Sleeping Drain Pipeline"),
+                        layout: Some(&sleeping_pipeline_layout),
+                        module: &sleeping_shader,
+                        entry_point: Some("main"),
+                        compilation_options: Default::default(),
+                        cache: None,
+                    }),
+            );
+
+            tracing::info!("💤 Sleeping drain pipeline created");
+        }
+
         tracing::debug!("🎮 GPU SoA pipelines created");
         Ok(())
     }
@@ -1466,6 +1544,33 @@ impl GpuSoABackend {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: spatial_config_buffer.as_entire_binding(),
+                },
+            ],
+        }))
+    }
+
+    /// Create bind group for sleeping drain pass
+    fn create_sleeping_drain_bind_group(&self) -> Option<wgpu::BindGroup> {
+        let layout = self.sleeping_drain_bind_group_layout.as_ref()?;
+        let energy_buffer = self.energy_buffer.as_ref()?;
+        let flags_buffer = self.flags_buffer.as_ref()?;
+        let config_buffer = self.config_buffer.as_ref()?;
+
+        Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Sleeping Drain Bind Group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: energy_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: flags_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: config_buffer.as_entire_binding(),
                 },
             ],
         }))
@@ -1887,6 +1992,33 @@ impl ComputeBackend for GpuSoABackend {
                         });
                         pass.set_pipeline(hebbian_pipeline);
                         pass.set_bind_group(0, &hebbian_bind_group, &[]);
+                        let workgroups = (self.cell_count as u32 + 255) / 256;
+                        pass.dispatch_workgroups(workgroups, 1, 1);
+                    }
+
+                    self.queue.submit(Some(encoder.finish()));
+                }
+            }
+        }
+
+        // SLEEPING DRAIN: Run every 100 ticks to drain energy from sleeping cells
+        // Sparse dispatch skips sleeping cells, so we need this periodic pass
+        if self.tick % 100 == 0 && self.use_indirect_dispatch {
+            if let Some(drain_bind_group) = self.create_sleeping_drain_bind_group() {
+                if let Some(drain_pipeline) = self.sleeping_drain_pipeline.as_ref() {
+                    let mut encoder = self
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Sleeping Drain Pass"),
+                        });
+
+                    {
+                        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some("Sleeping Drain"),
+                            timestamp_writes: None,
+                        });
+                        pass.set_pipeline(drain_pipeline);
+                        pass.set_bind_group(0, &drain_bind_group, &[]);
                         let workgroups = (self.cell_count as u32 + 255) / 256;
                         pass.dispatch_workgroups(workgroups, 1, 1);
                     }
@@ -2634,6 +2766,79 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     energies[idx] = cell_energy;
     flags[idx] = cell_flags;
+}
+"#;
+
+/// Sleeping cells energy drain shader - runs periodically to drain sleeping cells
+/// This is needed because sparse dispatch skips sleeping cells entirely
+const SLEEPING_DRAIN_SHADER: &str = r#"
+// Drain energy from sleeping cells - runs on ALL cells but only affects sleepers
+
+struct CellEnergy {
+    energy: f32,
+    tension: f32,
+    activity_level: f32,
+    _pad: f32,
+}
+
+struct Config {
+    energy_cap: f32,
+    reaction_amplification: f32,
+    state_cap: f32,
+    signal_radius: f32,
+    cost_rest: f32,
+    cost_signal: f32,
+    cost_move: f32,
+    cost_divide: f32,
+    signal_energy_base: f32,
+    signal_resonance_factor: f32,
+    energy_gain: f32,
+    tick: u32,
+    cell_count: u32,
+    workgroup_size: u32,
+    _pad: vec2<u32>,
+}
+
+const FLAG_SLEEPING: u32 = 1u;
+const FLAG_DEAD: u32 = 32u;
+// Drain accumulated over DRAIN_INTERVAL ticks
+const DRAIN_INTERVAL: f32 = 100.0;
+
+@group(0) @binding(0) var<storage, read_write> energies: array<CellEnergy>;
+@group(0) @binding(1) var<storage, read_write> flags: array<u32>;
+@group(0) @binding(2) var<uniform> config: Config;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let idx = id.x;
+    if idx >= config.cell_count {
+        return;
+    }
+
+    var cell_energy = energies[idx];
+    var cell_flags = flags[idx];
+
+    let is_sleeping = (cell_flags & FLAG_SLEEPING) != 0u;
+    let is_dead = (cell_flags & FLAG_DEAD) != 0u;
+
+    if is_dead {
+        return;
+    }
+
+    // Only drain sleeping cells
+    if is_sleeping {
+        // Drain accumulated over DRAIN_INTERVAL ticks
+        // cost_rest * 0.1 (sleeping rate) * DRAIN_INTERVAL
+        let drain = config.cost_rest * 0.1 * DRAIN_INTERVAL;
+        cell_energy.energy -= drain;
+
+        if cell_energy.energy <= 0.0 {
+            cell_flags = cell_flags | FLAG_DEAD;
+        }
+
+        energies[idx] = cell_energy;
+        flags[idx] = cell_flags;
+    }
 }
 "#;
 
