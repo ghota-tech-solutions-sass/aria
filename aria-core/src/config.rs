@@ -140,9 +140,10 @@ impl Default for MetabolismConfig {
             cost_signal: 0.01,   // Speaking costs energy
             cost_divide: 0.5,    // Creating life is exhausting
             cost_move: 0.005,    // Moving costs energy
-            // At ~1700 TPS: 0.00005 * 1700 = 0.085 per second
-            // Active cells die in ~12 seconds without resonance energy
-            cost_rest: 0.00005,   // Adjusted for high GPU TPS
+            // Active cells: 1.0 / 0.0001 = 10,000 ticks to death without food
+            // This is ~6 seconds at 1700 TPS, or ~100 seconds at 100 TPS
+            // Creates pressure but allows time for interaction
+            cost_rest: 0.0001,
 
             // Signal energy - quality over quantity
             signal_energy_base: 0.01,       // Was 0.005 - more energy from resonance
