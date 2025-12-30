@@ -74,8 +74,8 @@ impl Default for PopulationConfig {
         Self {
             target_population: 10_000,
             population_buffer: 2_000,
-            min_population: 100,  // Allow near-extinction for evolution pressure
-            selection_interval: 10,
+            min_population: 10,   // Allow near-extinction for evolution pressure
+            selection_interval: 100,  // Was 10 - less frequent to avoid spawn/death loop
             mutation_rate: 0.1,
         }
     }
@@ -131,10 +131,10 @@ impl Default for MetabolismConfig {
         Self {
             // Base metabolism - NO FREE LUNCH
             energy_consumption: 0.0,    // Replaced by action costs
-            energy_gain: 0.0,           // NO PASSIVE GAIN - must earn it!
+            energy_gain: 0.0,           // NO PASSIVE GAIN - user feeds ARIA by talking!
             energy_cap: 1.5,
             reproduction_threshold: 0.8, // Higher threshold - must be strong to divide
-            child_energy: 0.3,           // Children start weaker
+            child_energy: 0.5,           // Was 0.3 - give children a fighting chance
 
             // Action costs - "La Vraie Faim"
             cost_signal: 0.01,   // Speaking costs energy
@@ -143,7 +143,7 @@ impl Default for MetabolismConfig {
             cost_rest: 0.001,    // Just breathing costs energy
 
             // Signal energy - quality over quantity
-            signal_energy_base: 0.005,      // 10x less than before
+            signal_energy_base: 0.01,       // Was 0.005 - more energy from resonance
             signal_resonance_factor: 2.0,   // Resonant signals give 2x
         }
     }
@@ -206,7 +206,10 @@ impl Default for SignalConfig {
             reaction_amplification: 10.0,
             immediate_activation: 5.0,
             state_cap: 5.0,
-            signal_radius: 2.0,
+            // Signal radius in semantic space [-10..10]
+            // 5.0 = local propagation (only nearby cells receive signal)
+            // Combined with resonance, this creates spatial specialization
+            signal_radius: 5.0,
         }
     }
 }
@@ -239,10 +242,10 @@ pub struct RecurrentConfig {
 impl Default for RecurrentConfig {
     fn default() -> Self {
         Self {
-            passes_per_tick: 2,              // 2 passes: input + internal
+            passes_per_tick: 1,               // Was 2 - disable multi-pass for now
             internal_signal_decay: 0.7,       // 30% decay between passes
-            internal_signal_threshold: 0.1,   // Only active cells propagate
-            enabled: true,                    // Enabled by default
+            internal_signal_threshold: 0.3,   // Was 0.1 - higher threshold = fewer internal signals
+            enabled: false,                   // DISABLED - was causing 0% sparse savings
             internal_radius: 1.0,             // Smaller than external (2.0)
         }
     }
@@ -355,6 +358,8 @@ impl AriaConfig {
     pub fn gpu_optimized(target_cells: u64) -> Self {
         let mut config = Self::default();
         config.population.target_population = target_cells;
+        config.population.min_population = 10;   // Allow near-extinction (La Vraie Faim)
+        config.population.selection_interval = 100;  // Less frequent selection
         config.compute.backend = ComputeBackendType::Gpu;
         config.compute.sparse_updates = true;
         config.compute.spatial_hashing = true;
@@ -374,7 +379,8 @@ impl AriaConfig {
         let mut config = Self::default();
         config.population.target_population = target_cells;
         config.population.population_buffer = (target_cells / 5) as u64; // 20% buffer
-        config.population.min_population = (target_cells / 10) as u64;   // 10% minimum
+        config.population.min_population = 10;   // Allow near-extinction (La Vraie Faim)
+        config.population.selection_interval = 100;  // Less frequent selection
         config.compute.backend = ComputeBackendType::Cpu;
         config.compute.sparse_updates = true;   // Sleep inactive cells
         config.compute.spatial_hashing = true;  // O(1) neighbor lookup

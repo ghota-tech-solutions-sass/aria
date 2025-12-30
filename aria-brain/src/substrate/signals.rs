@@ -117,7 +117,9 @@ impl Substrate {
         }
 
         // Create signal fragment for cells
-        let cell_scale = self.cells.len() as f32 / 10_000.0;
+        // La Vraie Faim: Don't scale down intensity for small populations!
+        // Minimum scale of 1.0 ensures cells can be fed even with few cells
+        let cell_scale = (self.cells.len() as f32 / 10_000.0).max(1.0);
         let base_intensity = signal.intensity * 5.0 * familiarity_boost * cell_scale;
 
         let fragment = SignalFragment::external(signal_vector, base_intensity);
@@ -128,12 +130,31 @@ impl Substrate {
         tracing::info!("V2 Signal received: '{}' intensity={:.2} (boost: {:.2})",
             signal.label, fragment.intensity, familiarity_boost);
 
-        // Distribute to cells
+        // Distribute to cells - OPTIMIZED: skip dead/sleeping cells
+        // Only wake sleeping cells, don't process them
+        let mut processed_count = 0u32;
         for (i, state) in self.states.iter_mut().enumerate() {
+            // Skip dead cells entirely
+            if state.is_dead() {
+                continue;
+            }
+
             let distance = Self::semantic_distance(&state.position, &target_position);
             let attenuation = (1.0 / (1.0 + distance * 0.1)).max(0.2);
             let attenuated_intensity = fragment.intensity * attenuation;
 
+            // Wake sleeping cells if stimulus is strong enough
+            if state.is_sleeping() {
+                if attenuated_intensity > self.config.activity.wake_threshold {
+                    self.cells[i].activity.wake();
+                    state.set_sleeping(false);
+                } else {
+                    // Skip sleeping cells that don't wake
+                    continue;
+                }
+            }
+
+            // Only process awake cells (includes just-woken)
             // Direct activation
             for (j, s) in fragment.content.iter().enumerate() {
                 if j < SIGNAL_DIMS {
@@ -141,13 +162,13 @@ impl Substrate {
                 }
             }
 
-            // Energy boost
-            state.energy = (state.energy + 0.05 * fragment.intensity).min(self.config.metabolism.energy_cap);
+            // LA VRAIE FAIM: No direct energy boost!
+            // Cells must earn energy through resonance (handled by backend)
 
-            // Wake sleeping cells if stimulus is strong enough
-            if attenuated_intensity > self.config.activity.wake_threshold {
-                self.cells[i].activity.wake();
-                state.set_sleeping(false);
+            processed_count += 1;
+            // Limit processing to avoid lag on large populations
+            if processed_count > 10_000 {
+                break;
             }
         }
 

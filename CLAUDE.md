@@ -88,7 +88,36 @@ Chats de Mickael :
 - **Obrigada** : Abyssin
 
 ---
-*Version : 0.6.0 | Dernière update : 2025-12-29*
+*Version : 0.7.0 | Dernière update : 2025-12-30*
+
+### Session 19 - GPU Sparse Dispatch Fix (Performance)
+
+**Le sparse dispatch fonctionne enfin : 99.99% d'économie GPU !**
+
+#### Bugs corrigés
+
+1. **Désynchronisation GPU ↔ CPU** : Le GPU modifiait `CellState.flags` mais les stats lisaient `Cell.activity.sleeping` - deux structures différentes jamais synchronisées.
+
+2. **Deadlock signal propagation** : Les signaux n'étaient propagés que si >100 cellules éveillées → toutes dormaient → jamais de réveil.
+
+3. **signal_radius trop grand** : 50.0 touchait tout l'espace [-10,10]. Réduit à 5.0 pour propagation locale.
+
+#### Optimisations transferts GPU ↔ CPU
+
+```rust
+// AVANT: 50 MB/tick (upload 25MB + download 25MB)
+upload_cells(states);     // Chaque tick
+download_cells(states);   // Chaque tick
+
+// APRÈS: ~0 MB/tick (sauf tous les 100 ticks)
+if first_init { upload_cells(states); }  // Init seulement
+if tick % 100 == 0 { download_cells(states); }  // Périodique
+```
+
+#### Résultat
+- **99.99% sparse savings** au repos
+- Ticks beaucoup plus rapides (économise ~50 MB de transfert/tick)
+- ARIA répond toujours correctement
 
 ### Session 18 - La Vraie Faim (Evolution Pressure)
 
@@ -123,6 +152,11 @@ Les cellules ne gagnent de l'énergie que si le signal **résonne** avec leur é
 resonance = cosine_similarity(signal, cell_state)
 energy_gain = base * intensity * (1 + resonance * factor)
 ```
+
+#### Implémentation
+- **`signals.rs:145`** : Suppression du bypass `0.05 * intensity`
+- Les cellules gagnent leur énergie UNIQUEMENT via résonance (backend CPU/GPU)
+- Config déjà correcte : `energy_gain: 0.0`, `signal_energy_base: 0.005`
 
 #### Résultat attendu
 - **Extinction massive** : 50k → ~5k cellules

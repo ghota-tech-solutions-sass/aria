@@ -86,6 +86,7 @@ impl CpuBackend {
 
             if cell.activity.should_wake(max_stimulus, sleep_config) {
                 cell.activity.wake();
+                state.set_sleeping(false); // Sync CellState.flags with Cell.activity
             } else {
                 // Stay asleep - but check for death even while sleeping
                 if state.energy <= 0.0 {
@@ -124,13 +125,19 @@ impl CpuBackend {
                 }
             }
 
-            // === ENERGY FROM RESONANCE ===
-            // Only coherent signals give meaningful energy
-            // resonance ranges from 0.0 (noise) to 1.0 (perfect match)
-            let energy_gain = config.metabolism.signal_energy_base
-                * signal.intensity
-                * (1.0 + resonance * config.metabolism.signal_resonance_factor);
-            state.energy += energy_gain;
+            // === LA VRAIE FAIM: ENERGY FROM RESONANCE ===
+            // Only cells that UNDERSTAND the signal get fed!
+            // resonance < 0.3 = you don't understand = no food
+            if resonance > 0.3 {
+                // Scale energy by how well you understand
+                let understanding = (resonance - 0.3) / 0.7; // 0 to 1
+                let energy_gain = config.metabolism.signal_energy_base
+                    * signal.intensity
+                    * understanding
+                    * (1.0 + resonance * config.metabolism.signal_resonance_factor);
+                state.energy += energy_gain;
+            }
+            // resonance <= 0.3: NO ENERGY - you didn't understand
         }
 
         // Normalize state
@@ -139,10 +146,24 @@ impl CpuBackend {
         // Build tension
         state.tension += 0.01 + signals.len() as f32 * 0.05;
 
-        // Calculate energy delta for activity tracking
+        // === BUG FIX: Deduct cost_rest BEFORE delta calculation ===
+        // So the sleep system "sees" the energy loss from breathing
+        state.energy -= config.metabolism.cost_rest;
+
+        // Calculate energy delta for activity tracking (now includes cost_rest)
         let energy_delta = state.energy - energy_before;
         let state_magnitude: f32 = state.state.iter().map(|x| x.abs()).sum();
         cell.activity.update(energy_delta, state_magnitude, sleep_config);
+
+        // === BUG FIX: Decay tension when activity is low (like GPU shader) ===
+        // This allows cells to reach the sleep threshold
+        if cell.activity.last_energy_delta.abs() < sleep_config.energy_delta_threshold {
+            state.tension *= 0.8;  // Match GPU: faster decay
+            state.tension -= 0.01;
+            if state.tension < 0.0 {
+                state.tension = 0.0;
+            }
+        }
 
         // Check for sleep
         if cell.activity.should_sleep(sleep_config) {
@@ -186,8 +207,8 @@ impl CpuBackend {
             return Some(action);
         }
 
-        // Resting still costs energy (breathing)
-        state.energy -= config.metabolism.cost_rest;
+        // cost_rest already deducted above (before delta calculation)
+        // Just cap energy
         state.energy = state.energy.clamp(0.0, config.metabolism.energy_cap);
 
         // Final death check

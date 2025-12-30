@@ -281,6 +281,9 @@ async fn run_visual_mode() -> Result<(), Box<dyn std::error::Error>> {
     // Channel for stats
     let (stats_tx, mut stats_rx) = mpsc::channel::<visualizer::BrainStats>(10);
 
+    // Channel for substrate view
+    let (substrate_tx, mut substrate_rx) = mpsc::channel::<visualizer::SubstrateView>(10);
+
     // Receive task for WebSocket messages
     tokio::spawn(async move {
         while let Some(msg) = read.next().await {
@@ -296,6 +299,8 @@ async fn run_visual_mode() -> Result<(), Box<dyn std::error::Error>> {
 
     // Fetch stats periodically via HTTP
     let stats_url = format!("{}/stats", http_url);
+    let substrate_url = format!("{}/substrate", http_url);
+
     tokio::spawn(async move {
         let client = reqwest::Client::new();
         loop {
@@ -320,6 +325,43 @@ async fn run_visual_mode() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // Fetch substrate view periodically via HTTP (for heatmap)
+    tokio::spawn(async move {
+        let client = reqwest::Client::new();
+        loop {
+            if let Ok(resp) = client.get(&substrate_url).send().await {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    let view = visualizer::SubstrateView {
+                        grid_size: json.get("grid_size").and_then(|v| v.as_u64()).unwrap_or(16) as usize,
+                        activity_grid: json.get("activity_grid")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
+                            .unwrap_or_default(),
+                        energy_grid: json.get("energy_grid")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
+                            .unwrap_or_default(),
+                        cell_count_grid: json.get("cell_count_grid")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| arr.iter().filter_map(|v| v.as_u64().map(|n| n as usize)).collect())
+                            .unwrap_or_default(),
+                        total_cells: json.get("total_cells").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+                        alive_cells: json.get("alive_cells").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+                        sleeping_cells: json.get("sleeping_cells").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+                        dead_cells: json.get("dead_cells").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+                        awake_cells: json.get("awake_cells").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+                        energy_histogram: json.get("energy_histogram")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| arr.iter().filter_map(|v| v.as_u64().map(|n| n as usize)).collect())
+                            .unwrap_or_default(),
+                    };
+                    let _ = substrate_tx.send(view).await;
+                }
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await; // Faster update for heatmap
+        }
+    });
+
     loop {
         // Handle incoming messages
         while let Ok(signal) = msg_rx.try_recv() {
@@ -330,6 +372,11 @@ async fn run_visual_mode() -> Result<(), Box<dyn std::error::Error>> {
         // Handle stats updates
         while let Ok(stats) = stats_rx.try_recv() {
             visualizer.update(stats);
+        }
+
+        // Handle substrate updates (heatmap)
+        while let Ok(view) = substrate_rx.try_recv() {
+            visualizer.update_substrate(view);
         }
 
         // Draw UI

@@ -6,13 +6,15 @@
 
 ## Cells (Cellules)
 
-10,000+ petites entités vivantes. Chacune a :
+50,000+ petites entités vivantes (configurable via `ARIA_CELLS`). Chacune a :
 - **Énergie** : si elle tombe à 0, la cellule meurt
 - **État** : un vecteur de 32 nombres (son "humeur")
-- **Position** : où elle se trouve dans l'espace des idées
-- **ADN** : définit son comportement (seuils, réactions)
+- **Position** : où elle se trouve dans l'espace des idées (16D)
+- **ADN** : définit son comportement (seuils, réactions, connectivité)
 
 Les cellules ne sont pas des neurones classiques - elles sont *vivantes*. Elles naissent, se reproduisent, et meurent.
+
+**Sparse Updates** : Les cellules inactives "dorment" pour économiser le CPU/GPU. Elles se réveillent quand un signal les atteint.
 
 ---
 
@@ -229,4 +231,102 @@ Une unité de temps dans ARIA. Le brain fait ~100 ticks/seconde.
 
 ---
 
-*Version ARIA : 0.1.4*
+## Résonance
+
+Comment une cellule gagne de l'énergie. Le signal doit "résonner" avec l'état interne de la cellule.
+
+```
+resonance = cosine_similarity(signal, cell_state)
+energy_gain = base * intensity * (1 + resonance * factor)
+```
+
+| Résonance | Signification |
+|-----------|---------------|
+| < 0.0 | Signal opposé à l'état → peu d'énergie |
+| 0.0-0.3 | Neutre → énergie de base |
+| 0.3-0.7 | Compatible → bonus d'énergie |
+| > 0.7 | Forte résonance → énergie maximale |
+
+---
+
+## La Vraie Faim (v0.6.0)
+
+**RIEN N'EST GRATUIT.** Les cellules doivent lutter pour survivre.
+
+| Action | Coût | Effet |
+|--------|------|-------|
+| `Rest` | 0.001 | Respirer coûte |
+| `Signal` | 0.01 | Parler est cher |
+| `Move` | 0.005 | Bouger consomme |
+| `Divide` | 0.5 | Créer la vie épuise |
+
+**Résultat** : Seules les cellules qui communiquent utilement survivent. Les cellules qui "crient dans le vide" meurent.
+
+---
+
+## Méta-apprentissage
+
+ARIA apprend à apprendre. Plus besoin d'attendre le feedback externe.
+
+**Composants :**
+- `InternalReward` : ARIA s'auto-évalue (cohérence, surprise, satisfaction)
+- `ExplorationStrategy` : 6 stratégies (semantic, emotional, cross-category...)
+- `MetaLearner` : sélectionne la meilleure stratégie
+- `ProgressTracker` : conscience de son propre progrès
+
+**Endpoint :** `curl http://localhost:8765/meta`
+
+---
+
+## Vision
+
+ARIA peut voir des images et les associer à des mots.
+
+**Flux :**
+```
+Image (base64) → 32 features visuelles → Signal substrate → Mémoire visuelle
+```
+
+**Méthodes :**
+- `see()` : stocke/reconnaît une image
+- `link_vision_to_word()` : associe image + mot
+- `visual_to_words()` : image → mots suggérés
+
+**Endpoint :** `curl -X POST http://localhost:8765/vision -d '{"image": "<base64>", "labels": ["moka"]}'`
+
+---
+
+## Auto-modification
+
+ARIA modifie consciemment ses propres paramètres.
+
+**Paramètres modifiables :**
+- `emission_threshold` : seuil pour émettre un signal
+- `response_probability` : probabilité de répondre
+- `learning_rate` : vitesse d'apprentissage
+- `spontaneity` : parole spontanée
+- `exploration_rate` : taux d'exploration
+
+**Règles de décision :**
+- Apprentissage en déclin → augmenter learning_rate
+- Taux d'échec élevé → augmenter emission_threshold
+- Peu de réponses → augmenter response_probability
+
+**Endpoint :** `curl http://localhost:8765/self`
+
+---
+
+## GPU Backend
+
+ARIA utilise wgpu/Vulkan pour le calcul parallèle.
+
+```bash
+task brain              # Auto-détection GPU/CPU
+ARIA_BACKEND=gpu task brain  # Forcer GPU
+```
+
+**Sparse Dispatch** : À partir de 100k cellules, seules les cellules actives sont traitées par le GPU (80%+ d'économie).
+
+---
+
+*Version ARIA : 0.6.0 | Dernière mise à jour : 2025-12-30*

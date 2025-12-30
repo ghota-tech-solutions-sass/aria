@@ -122,8 +122,9 @@ pub struct SleepConfig {
 impl Default for SleepConfig {
     fn default() -> Self {
         Self {
-            energy_delta_threshold: 0.001,
-            idle_ticks_to_sleep: 100,
+            // MUST be > cost_rest (0.001) otherwise cells never sleep!
+            energy_delta_threshold: 0.01,  // Was 0.001 - BUG: same as cost_rest
+            idle_ticks_to_sleep: 50,       // Was 100 - faster sleep for better sparse update
             wake_threshold: 0.1,
             min_sleep_ticks: 50,
         }

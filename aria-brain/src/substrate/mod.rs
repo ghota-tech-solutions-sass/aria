@@ -315,7 +315,31 @@ impl Substrate {
             }
         }
 
+        // === Sync GPU flags to CPU activity state ===
+        // Only sync every 100 ticks (matches GPU download frequency)
+        // The GPU is the source of truth - CPU only needs periodic updates
+        if current_tick % 100 == 0 {
+            for (cell, state) in self.cells.iter_mut().zip(self.states.iter()) {
+                let gpu_sleeping = state.is_sleeping();
+                if cell.activity.sleeping != gpu_sleeping {
+                    if gpu_sleeping {
+                        cell.activity.sleep();
+                    } else {
+                        cell.activity.wake();
+                    }
+                }
+            }
+        }
+
         let actions = all_actions;
+
+        // Increment age less frequently to reduce CPU overhead
+        // (Every 100 ticks instead of every tick)
+        if current_tick % 100 == 0 {
+            for cell in &mut self.cells {
+                cell.age += 100;
+            }
+        }
 
         // Handle actions
         let mut births = Vec::new();
@@ -405,7 +429,14 @@ impl Substrate {
             }
         }
 
-        // Natural selection
+        // Compact dead cells FIRST (La Vraie Faim cleanup)
+        // Must happen BEFORE natural_selection to avoid 100k+ element vectors
+        // Every 1000 ticks to reduce freezes (was 100)
+        if current_tick % 1000 == 0 {
+            self.compact_dead_cells();
+        }
+
+        // Natural selection (repopulate if needed)
         if current_tick % self.config.population.selection_interval as u64 == 0 {
             self.natural_selection();
         }
@@ -451,7 +482,8 @@ impl Substrate {
         // Collect signals from active cells
         for (cell, state) in self.cells.iter().zip(self.states.iter()) {
             // Skip sleeping, dead, or low-activity cells
-            if cell.activity.sleeping || state.is_dead() {
+            // Read from CellState.flags (GPU source of truth)
+            if state.is_sleeping() || state.is_dead() {
                 continue;
             }
 
@@ -497,8 +529,10 @@ impl Substrate {
             .filter(|(_, s)| !s.is_dead())
             .count();
 
-        let sleeping_count = self.cells.iter()
-            .filter(|c| c.activity.sleeping)
+        // Read sleeping from CellState.flags (GPU source of truth)
+        // NOT from Cell.activity.sleeping (CPU state that may be out of sync)
+        let sleeping_count = self.states.iter()
+            .filter(|s| s.is_sleeping() && !s.is_dead())
             .count();
 
         let total_energy: f32 = self.states.iter()
@@ -565,7 +599,7 @@ impl Substrate {
 
         // Count cells in each grid position
         // Using first 2 dimensions of position (typically in -10..10 range)
-        for (cell, state) in self.cells.iter().zip(self.states.iter()) {
+        for (_cell, state) in self.cells.iter().zip(self.states.iter()) {
             if state.is_dead() {
                 continue;
             }
@@ -581,7 +615,8 @@ impl Substrate {
             energy_grid[idx] += state.energy;
 
             // Activity: higher if awake and has high state activation
-            if !cell.activity.sleeping {
+            // Read from CellState.flags (GPU source of truth)
+            if !state.is_sleeping() {
                 let activation: f32 = state.state.iter().map(|x| x.abs()).sum();
                 activity_grid[idx] += activation;
             }
@@ -599,7 +634,8 @@ impl Substrate {
         // Population breakdown
         let total = self.cells.len();
         let alive = self.states.iter().filter(|s| !s.is_dead()).count();
-        let sleeping = self.cells.iter().filter(|c| c.activity.sleeping).count();
+        // Read from CellState.flags (GPU source of truth)
+        let sleeping = self.states.iter().filter(|s| s.is_sleeping() && !s.is_dead()).count();
         let dead = total - alive;
         let awake = alive - sleeping;
 

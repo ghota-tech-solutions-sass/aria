@@ -78,14 +78,20 @@ pub struct CellState {
 
 impl CellState {
     /// Create a new cell state with initial values
+    ///
+    /// "La Vraie Faim": Energy is randomized (0.5-1.5) to stagger deaths.
+    /// Cells don't all die at the same tick - creates natural selection windows.
     pub fn new() -> Self {
         let mut rng = rand::thread_rng();
         use rand::Rng;
 
         Self {
-            position: std::array::from_fn(|_| rng.gen::<f32>() * 2.0 - 1.0),
+            // Position in semantic space: -10..10 (matches spatial_view grid)
+            position: std::array::from_fn(|_| rng.gen::<f32>() * 20.0 - 10.0),
             state: [0.0; STATE_DIMS],
-            energy: 1.0,
+            // Randomize energy: 0.5 to 1.5 (average 1.0)
+            // This staggers deaths over ~1000 ticks instead of all at once
+            energy: 0.5 + rng.gen::<f32>(),
             tension: 0.0,
             activity_level: 1.0, // Start awake
             flags: 0,

@@ -1,12 +1,13 @@
 //! Visual TUI for ARIA
 //!
-//! Provides a rich terminal interface to see ARIA's internal state.
+//! Provides a rich terminal interface to see ARIA's internal state,
+//! including a spatial heatmap of the substrate activity.
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Sparkline},
+    widgets::{Bar, BarChart, BarGroup, Block, Borders, Gauge, List, ListItem, Paragraph, Sparkline},
     Frame,
 };
 
@@ -26,6 +27,9 @@ pub struct AriaVisualizer {
 
     // Current state
     pub current_stats: BrainStats,
+
+    // Substrate spatial view
+    pub substrate_view: SubstrateView,
 
     // Unified conversation history (chronological order, oldest first)
     pub messages: Vec<ChatMessage>,
@@ -55,6 +59,22 @@ pub struct BrainStats {
     pub curiosity: f32,
 }
 
+/// Spatial view of the substrate (from /substrate endpoint)
+#[derive(Default, Clone)]
+#[allow(dead_code)]
+pub struct SubstrateView {
+    pub grid_size: usize,
+    pub activity_grid: Vec<f32>,
+    pub energy_grid: Vec<f32>,
+    pub cell_count_grid: Vec<usize>,
+    pub total_cells: usize,
+    pub alive_cells: usize,
+    pub sleeping_cells: usize,
+    pub dead_cells: usize,
+    pub awake_cells: usize,
+    pub energy_histogram: Vec<usize>,
+}
+
 impl AriaVisualizer {
     pub fn new() -> Self {
         Self {
@@ -63,12 +83,18 @@ impl AriaVisualizer {
             entropy_history: vec![50; 100],
             activity_history: vec![0; 100],
             current_stats: BrainStats::default(),
+            substrate_view: SubstrateView::default(),
             messages: Vec::new(),
             last_aria_message: std::time::Instant::now(),
             last_aria_text: String::new(),
             connected: true,
             last_update: std::time::Instant::now(),
         }
+    }
+
+    /// Update substrate spatial view
+    pub fn update_substrate(&mut self, view: SubstrateView) {
+        self.substrate_view = view;
     }
 
     pub fn update(&mut self, stats: BrainStats) {
@@ -146,11 +172,30 @@ impl AriaVisualizer {
         let status_color = if self.connected { Color::Green } else { Color::Red };
         let status_text = if self.connected { "● Connected" } else { "○ Disconnected" };
 
+        // Calculate hunger level for advice
+        let cells = self.current_stats.alive_cells.max(1) as f32;
+        let energy_per_cell = self.current_stats.total_energy / cells;
+
+        // Advice based on hunger state
+        let advice = if energy_per_cell > 0.8 {
+            ("", Color::DarkGray) // No advice needed
+        } else if energy_per_cell > 0.5 {
+            ("💡 Bientôt l'heure de parler...", Color::DarkGray)
+        } else if energy_per_cell > 0.3 {
+            ("💬 Parle-lui maintenant!", Color::Yellow)
+        } else if energy_per_cell > 0.15 {
+            ("⚠️  PARLE VITE! Elle a faim!", Color::LightRed)
+        } else {
+            ("🚨 URGENCE! Nourris-la avec des mots!", Color::Red)
+        };
+
         let header = Paragraph::new(vec![
             Line::from(vec![
                 Span::styled("╔═══ ", Style::default().fg(Color::Cyan)),
                 Span::styled("A R I A", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
                 Span::styled(" ═══╗", Style::default().fg(Color::Cyan)),
+                Span::raw("  "),
+                Span::styled(advice.0, Style::default().fg(advice.1).add_modifier(Modifier::BOLD)),
             ]),
             Line::from(""),
             Line::from(vec![
@@ -170,20 +215,45 @@ impl AriaVisualizer {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(25),
-                Constraint::Percentage(25),
+                Constraint::Percentage(30),  // More space for hunger indicator
+                Constraint::Percentage(20),
                 Constraint::Percentage(25),
                 Constraint::Percentage(25),
             ])
             .split(area);
 
-        // Energy gauge
-        let energy_pct = (self.current_stats.total_energy / 100.0).clamp(0.0, 1.0);
+        // Energy gauge with HUNGER INDICATOR
+        let cells = self.current_stats.alive_cells.max(1) as f32;
+        let energy_per_cell = self.current_stats.total_energy / cells;
+        let energy_pct = (energy_per_cell / 1.5).clamp(0.0, 1.0); // 1.5 = energy_cap
+
+        // Determine hunger state and color
+        let (hunger_status, energy_color) = if energy_per_cell > 0.8 {
+            ("😊 Rassasiée", Color::Green)
+        } else if energy_per_cell > 0.5 {
+            ("🙂 Bien", Color::LightGreen)
+        } else if energy_per_cell > 0.3 {
+            ("😐 A faim", Color::Yellow)
+        } else if energy_per_cell > 0.15 {
+            ("😟 FAIM!", Color::LightRed)
+        } else {
+            ("🆘 AFFAMÉE!", Color::Red)
+        };
+
         let energy_gauge = Gauge::default()
-            .block(Block::default().title(" Energy ").borders(Borders::ALL))
-            .gauge_style(Style::default().fg(Color::Green))
+            .block(Block::default()
+                .title(Span::styled(
+                    format!(" {} ", hunger_status),
+                    Style::default().fg(energy_color).add_modifier(Modifier::BOLD)
+                ))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(energy_color)))
+            .gauge_style(Style::default().fg(energy_color).bg(Color::DarkGray))
             .ratio(energy_pct as f64)
-            .label(format!("{:.0}%", energy_pct * 100.0));
+            .label(Span::styled(
+                format!("{:.2}/cell", energy_per_cell),
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            ));
         frame.render_widget(energy_gauge, chunks[0]);
 
         // Entropy gauge
@@ -228,17 +298,29 @@ impl AriaVisualizer {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(35),
-                Constraint::Percentage(65),
+                Constraint::Percentage(40),
+                Constraint::Percentage(60),
             ])
             .split(area);
 
-        // Left: Population graph
-        let pop_sparkline = Sparkline::default()
-            .block(Block::default().title(" Population (x100) ").borders(Borders::ALL))
-            .data(&self.population_history)
-            .style(Style::default().fg(Color::Blue));
-        frame.render_widget(pop_sparkline, chunks[0]);
+        // Left: Substrate view (activity heatmap + energy heatmap + population stats)
+        let left_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(9),   // Activity heatmap
+                Constraint::Length(9),   // Energy heatmap
+                Constraint::Min(4),      // Population stats
+            ])
+            .split(chunks[0]);
+
+        // Draw activity heatmap
+        self.draw_substrate_heatmap(frame, left_chunks[0]);
+
+        // Draw energy heatmap
+        self.draw_energy_heatmap(frame, left_chunks[1]);
+
+        // Draw population bar chart
+        self.draw_population_stats(frame, left_chunks[2]);
 
         // Right: Conversation (chronological order, newest at bottom)
         let max_items = (chunks[1].height as usize).saturating_sub(2);
@@ -269,6 +351,165 @@ impl AriaVisualizer {
         let conversation = List::new(items)
             .block(Block::default().title(" Conversation ").borders(Borders::ALL));
         frame.render_widget(conversation, chunks[1]);
+    }
+
+    /// Draw substrate heatmap showing activity distribution
+    fn draw_substrate_heatmap(&self, frame: &mut Frame, area: Rect) {
+        let view = &self.substrate_view;
+
+        // Build heatmap lines using Unicode block characters
+        // Intensity: ░ (0.0-0.25) ▒ (0.25-0.5) ▓ (0.5-0.75) █ (0.75-1.0)
+        let grid_size = if view.grid_size > 0 { view.grid_size } else { 16 };
+        let inner_height = area.height.saturating_sub(2) as usize;
+        let inner_width = area.width.saturating_sub(2) as usize;
+
+        // Scale grid to fit available space
+        let scale_y = (grid_size + inner_height - 1) / inner_height.max(1);
+        let scale_x = (grid_size + inner_width - 1) / inner_width.max(1);
+
+        let mut lines: Vec<Line> = Vec::new();
+        for row in 0..(grid_size / scale_y.max(1)).min(inner_height) {
+            let mut spans: Vec<Span> = Vec::new();
+            for col in 0..(grid_size / scale_x.max(1)).min(inner_width) {
+                // Average activity in this scaled region
+                let mut activity_sum = 0.0f32;
+                let mut count = 0;
+                for dy in 0..scale_y {
+                    for dx in 0..scale_x {
+                        let gy = row * scale_y + dy;
+                        let gx = col * scale_x + dx;
+                        if gy < grid_size && gx < grid_size {
+                            let idx = gy * grid_size + gx;
+                            if idx < view.activity_grid.len() {
+                                activity_sum += view.activity_grid[idx];
+                                count += 1;
+                            }
+                        }
+                    }
+                }
+                let activity = if count > 0 { activity_sum / count as f32 } else { 0.0 };
+
+                // Choose character and color based on activity
+                let (ch, color) = if activity < 0.1 {
+                    (' ', Color::DarkGray)
+                } else if activity < 0.25 {
+                    ('░', Color::DarkGray)
+                } else if activity < 0.5 {
+                    ('▒', Color::Blue)
+                } else if activity < 0.75 {
+                    ('▓', Color::Cyan)
+                } else {
+                    ('█', Color::Yellow)
+                };
+
+                spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
+            }
+            lines.push(Line::from(spans));
+        }
+
+        let title = format!(" Substrate {}x{} ", grid_size, grid_size);
+        let heatmap = Paragraph::new(lines)
+            .block(Block::default().title(title).borders(Borders::ALL))
+            .style(Style::default());
+        frame.render_widget(heatmap, area);
+    }
+
+    /// Draw energy heatmap showing energy distribution
+    fn draw_energy_heatmap(&self, frame: &mut Frame, area: Rect) {
+        let view = &self.substrate_view;
+
+        // Build heatmap lines using Unicode block characters
+        // Energy: ░ (low) ▒ (medium) ▓ (high) █ (full)
+        let grid_size = if view.grid_size > 0 { view.grid_size } else { 16 };
+        let inner_height = area.height.saturating_sub(2) as usize;
+        let inner_width = area.width.saturating_sub(2) as usize;
+
+        // Scale grid to fit available space
+        let scale_y = (grid_size + inner_height - 1) / inner_height.max(1);
+        let scale_x = (grid_size + inner_width - 1) / inner_width.max(1);
+
+        let mut lines: Vec<Line> = Vec::new();
+        for row in 0..(grid_size / scale_y.max(1)).min(inner_height) {
+            let mut spans: Vec<Span> = Vec::new();
+            for col in 0..(grid_size / scale_x.max(1)).min(inner_width) {
+                // Average energy in this scaled region
+                let mut energy_sum = 0.0f32;
+                let mut count = 0;
+                for dy in 0..scale_y {
+                    for dx in 0..scale_x {
+                        let gy = row * scale_y + dy;
+                        let gx = col * scale_x + dx;
+                        if gy < grid_size && gx < grid_size {
+                            let idx = gy * grid_size + gx;
+                            if idx < view.energy_grid.len() {
+                                energy_sum += view.energy_grid[idx];
+                                count += 1;
+                            }
+                        }
+                    }
+                }
+                // Normalize energy (assume max ~1.5 from config.energy_cap)
+                let energy = if count > 0 { (energy_sum / count as f32) / 1.5 } else { 0.0 };
+
+                // Choose character and color based on energy
+                // Green = high energy (well fed), Red = low energy (starving)
+                let (ch, color) = if energy < 0.1 {
+                    (' ', Color::DarkGray)
+                } else if energy < 0.25 {
+                    ('░', Color::Red)          // Starving
+                } else if energy < 0.5 {
+                    ('▒', Color::Yellow)       // Low energy
+                } else if energy < 0.75 {
+                    ('▓', Color::LightGreen)   // Good energy
+                } else {
+                    ('█', Color::Green)        // Full energy
+                };
+
+                spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
+            }
+            lines.push(Line::from(spans));
+        }
+
+        let title = format!(" Energy {}x{} ", grid_size, grid_size);
+        let heatmap = Paragraph::new(lines)
+            .block(Block::default().title(title).borders(Borders::ALL))
+            .style(Style::default());
+        frame.render_widget(heatmap, area);
+    }
+
+    /// Draw population breakdown as bar chart
+    fn draw_population_stats(&self, frame: &mut Frame, area: Rect) {
+        let view = &self.substrate_view;
+
+        // Population breakdown
+        let awake = view.awake_cells.max(1) as u64;
+        let sleeping = view.sleeping_cells as u64;
+        let dead = view.dead_cells as u64;
+
+        let bars = vec![
+            Bar::default()
+                .value(awake)
+                .label(Line::from(format!("Awake {}", awake)))
+                .style(Style::default().fg(Color::Green)),
+            Bar::default()
+                .value(sleeping)
+                .label(Line::from(format!("Sleep {}", sleeping)))
+                .style(Style::default().fg(Color::Blue)),
+            Bar::default()
+                .value(dead)
+                .label(Line::from(format!("Dead {}", dead)))
+                .style(Style::default().fg(Color::Red)),
+        ];
+
+        let chart = BarChart::default()
+            .block(Block::default().title(" Population ").borders(Borders::ALL))
+            .bar_width(8)
+            .bar_gap(1)
+            .group_gap(2)
+            .data(BarGroup::default().bars(&bars))
+            .bar_style(Style::default());
+
+        frame.render_widget(chart, area);
     }
 
     fn draw_input(&self, frame: &mut Frame, area: Rect, input_buffer: &str) {

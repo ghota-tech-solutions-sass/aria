@@ -10,9 +10,20 @@ ARIA consists of two main components that communicate over WebSocket:
 ┌─────────────────┐         WebSocket          ┌─────────────────┐
 │                 │◄─────────────────────────►│                 │
 │   aria-body     │    Signals (JSON)         │   aria-brain    │
-│   (Interface)   │                           │   (Substrate)   │
+│   (MacBook)     │                           │   (PC + GPU)    │
+│   Interface TUI │                           │   50k+ cellules │
 │                 │                           │                 │
 └─────────────────┘                           └─────────────────┘
+```
+
+## Workspace Rust
+
+```
+aria/
+├── aria-core/      # Types compacts GPU-ready (Cell, DNA, Signal)
+├── aria-compute/   # CPU/GPU backends, sparse updates
+├── aria-brain/     # Substrate, mémoire, serveur WebSocket
+└── aria-body/      # Interface texte (TUI)
 ```
 
 ## aria-brain
@@ -21,7 +32,7 @@ The brain is the computational core where the living substrate exists.
 
 ### Components
 
-#### Cell (`cell.rs`)
+#### Cell (`aria-core/src/cell.rs`)
 
 The fundamental unit of computation. Each cell is a simple agent with:
 
@@ -52,7 +63,7 @@ struct Cell {
 - `Signal`: Emit information to nearby cells
 - `Move`: Change position in semantic space
 
-#### Substrate (`substrate.rs`)
+#### Substrate (`aria-brain/src/substrate/mod.rs`)
 
 The universe where cells live. Not a grid - a topological space where distance is semantic.
 
@@ -74,7 +85,7 @@ struct Substrate {
 6. Apply attractor influence
 7. Natural selection
 
-#### Signal (`signal.rs`)
+#### Signal (`aria-brain/src/substrate/signals.rs`)
 
 The quantum of information that travels through the system.
 
@@ -294,11 +305,80 @@ This represents a "thought" - many cells arriving at similar conclusions simulta
 - Circular buffers for histories
 - Periodic pruning of weak patterns/memories
 
-### Optimization Opportunities
+## aria-compute
 
-- GPU acceleration for:
-  - Distance calculations
-  - Signal propagation
-  - State updates
-- SIMD for vector operations
-- Connection pooling for WebSocket
+GPU/CPU backend for cell computation.
+
+### GPU Backend (`aria-compute/src/backend/gpu.rs`)
+
+Uses wgpu/Vulkan for parallel computation on NVIDIA/AMD GPUs.
+
+```rust
+// Auto-selection
+let backend = aria_compute::create_backend();
+
+// Force GPU
+ARIA_BACKEND=gpu task brain
+```
+
+**Features:**
+- Sparse dispatch: Only active cells are processed (80%+ savings)
+- AtomicCounter for GPU-side active cell counting
+- Activated automatically for populations > 100k cells
+
+### CPU Backend (`aria-compute/src/backend/cpu.rs`)
+
+Fallback when no GPU is available. Uses Rayon for parallel iteration.
+
+## Advanced Systems
+
+### Meta-Learning (`aria-brain/src/meta_learning.rs`)
+
+ARIA learns to learn without external feedback.
+
+**Components:**
+- `InternalReward`: Self-evaluation (coherence, surprise, satisfaction)
+- `ExplorationStrategy`: 6 strategies for autonomous exploration
+- `MetaLearner`: Selects and improves strategies over time
+- `ProgressTracker`: Awareness of learning progress (improving/stable/declining)
+- `SelfModifier`: Modifies ARIA's own parameters based on performance
+
+### Vision (`aria-brain/src/vision.rs`)
+
+Image perception and visual memory.
+
+**Pipeline:**
+```
+Image (base64) → VisualFeatures (32D) → VisualSignal → Substrate
+                                      → VisualMemory (recognition)
+```
+
+### La Vraie Faim (Evolution Pressure)
+
+Cells must struggle to survive. No free energy.
+
+**Energy Model:**
+- `energy_gain: 0.0` - No passive income
+- Energy ONLY through signal resonance
+- Action costs: Rest 0.001, Signal 0.01, Move 0.005, Divide 0.5
+
+**Result:** Natural selection favors cells that communicate usefully.
+
+## HTTP Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `/health` | Health check |
+| `/stats` | Brain statistics |
+| `/words` | Known vocabulary |
+| `/associations` | Learned associations |
+| `/episodes` | Episodic memory |
+| `/meta` | Meta-learning status |
+| `/self` | Self-modification history |
+| `/vision` | Send image (POST) |
+| `/visual` | Visual memory stats |
+| `/substrate` | Spatial visualization data |
+
+---
+
+*Version 0.6.0 | Updated 2025-12-30*

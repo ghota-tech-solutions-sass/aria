@@ -44,8 +44,10 @@ struct GpuConfig {
     signal_energy_base: f32,
     signal_resonance_factor: f32,
 
+    // Bootstrap energy (tiny passive gain to prevent total starvation)
+    energy_gain: f32,
+
     tick: u32,
-    _pad: f32,
 }
 
 impl GpuConfig {
@@ -66,8 +68,10 @@ impl GpuConfig {
             signal_energy_base: config.metabolism.signal_energy_base,
             signal_resonance_factor: config.metabolism.signal_resonance_factor,
 
+            // Bootstrap energy (0 = user must feed ARIA by talking)
+            energy_gain: config.metabolism.energy_gain,
+
             tick: tick as u32,
-            _pad: 0.0,
         }
     }
 }
@@ -679,6 +683,38 @@ impl GpuBackend {
         Ok(())
     }
 
+    /// Run signal propagation shader - LA VRAIE FAIM energy from resonance!
+    fn run_signal_propagate(&self) -> AriaResult<()> {
+        let pipeline = self
+            .signal_pipeline
+            .as_ref()
+            .ok_or_else(|| AriaError::gpu("Signal pipeline not initialized"))?;
+
+        let bind_group = self.create_bind_group()?;
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Signal Propagate Encoder"),
+            });
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Signal Propagate Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+
+            // Dispatch workgroups (256 threads per workgroup)
+            let workgroups = (self.cell_count as u32 + 255) / 256;
+            pass.dispatch_workgroups(workgroups, 1, 1);
+        }
+
+        self.queue.submit(Some(encoder.finish()));
+        Ok(())
+    }
+
     // === Sparse Dispatch Methods (Gemini optimization) ===
 
     /// Reset the atomic counter to zero
@@ -828,13 +864,15 @@ impl ComputeBackend for GpuBackend {
         self.tick += 1;
 
         // Initialize buffers on first call or if size changed
-        if !self.initialized || self.cell_count != cells.len() {
+        let first_init = !self.initialized || self.cell_count != cells.len();
+        if first_init {
             self.init_buffers(cells.len(), dna_pool.len())?;
+            // Only upload cells on first init - they live on GPU after that
+            self.upload_cells(states);
+            self.upload_dna(dna_pool);
         }
 
-        // Upload data to GPU
-        self.upload_cells(states);
-        self.upload_dna(dna_pool);
+        // Only upload signals (small) and config each tick
         self.upload_signals(signals);
         self.upload_config();
 
@@ -857,18 +895,33 @@ impl ComputeBackend for GpuBackend {
             (0, 0) // Will be computed after download
         };
 
-        // Run main cell update shader
+        // Run signal propagation FIRST (La Vraie Faim - energy from resonance)
+        // ALWAYS propagate if signals exist - they are meant to WAKE UP sleeping cells!
+        // The signal shader handles waking cells that receive strong signals.
+        if !signals.is_empty() {
+            self.run_signal_propagate()?;
+        }
+
+        // Run main cell update shader (costs, actions, death)
         self.run_cell_update()?;
 
-        // Download results
-        self.download_cells(states)?;
+        // OPTIMIZATION: Only download every 100 ticks (for stats/sync)
+        // The GPU is the source of truth - CPU only needs periodic updates
+        let should_download = self.tick % 100 == 0 || first_init;
 
-        // Compute stats (use GPU counts if available, else CPU)
-        let (final_awake, final_sleeping) = if self.use_sparse_dispatch && awake_count > 0 {
+        if should_download {
+            self.download_cells(states)?;
+        }
+
+        // Use GPU-computed stats (from compact pass) - no CPU iteration needed
+        let (final_awake, final_sleeping) = if self.use_sparse_dispatch {
             (awake_count, sleeping_count)
-        } else {
+        } else if should_download {
             let sleeping = states.iter().filter(|s| s.is_sleeping()).count();
             (cells.len() - sleeping, sleeping)
+        } else {
+            // Use cached stats from last download
+            (self.stats.cells_processed as usize, self.stats.cells_sleeping as usize)
         };
 
         // Update stats
@@ -876,11 +929,13 @@ impl ComputeBackend for GpuBackend {
         self.stats.cells_sleeping = final_sleeping as u64;
         self.stats.signals_propagated = signals.len() as u64;
 
-        // Check for dead cells and generate actions
+        // Check for dead cells only when we downloaded
         let mut actions = Vec::new();
-        for (i, state) in states.iter().enumerate() {
-            if state.is_dead() {
-                actions.push((cells[i].id, CellAction::Die));
+        if should_download {
+            for (i, state) in states.iter().enumerate() {
+                if state.is_dead() {
+                    actions.push((cells[i].id, CellAction::Die));
+                }
             }
         }
 
@@ -1018,8 +1073,10 @@ struct Config {
     signal_energy_base: f32,
     signal_resonance_factor: f32,
 
+    // Bootstrap energy (0 = user feeds ARIA by talking)
+    energy_gain: f32,
+
     tick: u32,
-    _pad: f32,
 }
 
 @group(0) @binding(0) var<storage, read_write> cells: array<CellState>;
@@ -1045,6 +1102,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // Sleeping cells still consume (hibernation cost)
     if is_sleeping {
         cell.energy -= config.cost_rest * 0.1;
+        cell.energy += config.energy_gain; // Tiny passive gain if enabled
         if cell.energy <= 0.0 {
             cell.flags = cell.flags | 32u; // Die
         }
@@ -1054,6 +1112,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     // === LA VRAIE FAIM: Resting costs energy (breathing) ===
     cell.energy -= config.cost_rest;
+    cell.energy += config.energy_gain; // Tiny passive gain if enabled (usually 0)
 
     // Death check
     if cell.energy <= 0.0 {
@@ -1065,8 +1124,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // Build tension slowly
     cell.tension += 0.01;
 
-    // Decay activity
-    cell.activity_level *= 0.99;
+    // Decay activity - faster decay for better sparse updates
+    // Was 0.99 (100+ ticks to sleep) → 0.9 (10-20 ticks to sleep)
+    cell.activity_level *= 0.9;
 
     // Action check - if tension exceeds threshold, reset it
     if cell.tension > 1.0 {
@@ -1074,10 +1134,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         // Actions would cost more energy (handled in CPU for now)
     }
 
-    // Decay tension when activity is low
-    if cell.activity_level < 0.1 {
-        cell.tension *= 0.9;
-        cell.tension -= 0.005;
+    // Decay tension when activity is low - aligned with sleep threshold
+    // Was: activity < 0.1 (tension never decayed before sleep)
+    if cell.activity_level < 0.3 {
+        cell.tension *= 0.8;  // Was 0.9 - faster decay
+        cell.tension -= 0.01; // Was 0.005 - faster decay
         if cell.tension < 0.0 {
             cell.tension = 0.0;
         }
@@ -1100,9 +1161,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // Cap energy
     cell.energy = clamp(cell.energy, 0.0, config.energy_cap);
 
-    // Sleep if inactive (low activity AND low tension)
-    if cell.activity_level < 0.05 && cell.tension < 0.1 {
-        cell.flags = cell.flags | 1u;
+    // Sleep if inactive - relaxed thresholds for better sparse updates
+    // Was: activity < 0.05 && tension < 0.1 (never reached!)
+    // Now: activity < 0.3 && tension < 0.5 (reachable after ~10 ticks idle)
+    if cell.activity_level < 0.3 && cell.tension < 0.5 && cell.energy > 0.0 {
+        cell.flags = cell.flags | 1u;  // Set sleeping flag
     }
 
     cells[cell_idx] = cell;
@@ -1150,8 +1213,10 @@ struct Config {
     signal_energy_base: f32,
     signal_resonance_factor: f32,
 
+    // Bootstrap energy (0 = user feeds ARIA by talking)
+    energy_gain: f32,
+
     tick: u32,
-    _pad: f32,
 }
 
 @group(0) @binding(0) var<storage, read_write> cells: array<CellState>;
@@ -1197,7 +1262,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let signal_count = arrayLength(&signals);
     var received_signal = false;
 
-    for (var s = 0u; s < signal_count; s++) {
+    // OPTIMIZATION: sleeping cells only check first few signals for wake-up
+    let max_signals_to_check = select(signal_count, min(signal_count, 5u), is_sleeping);
+
+    for (var s = 0u; s < max_signals_to_check; s++) {
         let signal = signals[s];
 
         if signal.intensity < 0.001 {
@@ -1231,11 +1299,25 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                 }
 
                 // === LA VRAIE FAIM: Resonance-based energy gain ===
+                // Only cells that UNDERSTAND the signal get fed!
                 let resonance = calculate_resonance(signal.content, cell.state);
-                let energy_gain = config.signal_energy_base
-                    * intensity
-                    * (1.0 + resonance * config.signal_resonance_factor);
-                cell.energy = min(cell.energy + energy_gain, config.energy_cap);
+
+                // Threshold: resonance < 0.3 = you don't understand = no food
+                // This creates REAL natural selection
+                if resonance > 0.3 {
+                    // Scale energy by how well you understand
+                    // resonance 0.3 → multiplier ~0.0
+                    // resonance 0.5 → multiplier ~0.4
+                    // resonance 0.8 → multiplier ~1.0
+                    // resonance 1.0 → multiplier ~1.4 (bonus!)
+                    let understanding = (resonance - 0.3) / 0.7; // 0 to 1
+                    let energy_gain = config.signal_energy_base
+                        * intensity
+                        * understanding
+                        * (1.0 + resonance * config.signal_resonance_factor);
+                    cell.energy = min(cell.energy + energy_gain, config.energy_cap);
+                }
+                // resonance <= 0.3: NO ENERGY - you didn't understand
 
                 cell.activity_level += intensity;
                 received_signal = true;
