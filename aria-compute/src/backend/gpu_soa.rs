@@ -2517,10 +2517,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                 states[idx * 8u] = state0;
                 states[idx * 8u + 1u] = state1;
 
-                // Resonance-based energy gain
+                // Resonance-based energy gain (threshold 0.1 for broader feeding)
                 let resonance = calculate_resonance(signal.content, idx);
-                if resonance > 0.3 {
-                    let understanding = (resonance - 0.3) / 0.7;
+                if resonance > 0.1 {
+                    let understanding = (resonance - 0.1) / 0.9;
                     let energy_gain = config.signal_energy_base
                         * intensity
                         * understanding

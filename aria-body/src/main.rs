@@ -409,6 +409,10 @@ async fn run_visual_mode() -> Result<(), Box<dyn std::error::Error>> {
                             .and_then(|v| v.as_array())
                             .map(|arr| arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
                             .unwrap_or_default(),
+                        tension_grid: json.get("tension_grid")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
+                            .unwrap_or_default(),
                         cell_count_grid: json.get("cell_count_grid")
                             .and_then(|v| v.as_array())
                             .map(|arr| arr.iter().filter_map(|v| v.as_u64().map(|n| n as usize)).collect())
@@ -422,9 +426,18 @@ async fn run_visual_mode() -> Result<(), Box<dyn std::error::Error>> {
                             .and_then(|v| v.as_array())
                             .map(|arr| arr.iter().filter_map(|v| v.as_u64().map(|n| n as usize)).collect())
                             .unwrap_or_default(),
-                        // New fields for health/entropy
+                        // Health and entropy
                         activity_entropy: json.get("activity_entropy").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32,
                         system_health: json.get("system_health").and_then(|v| v.as_f64()).unwrap_or(0.7) as f32,
+                        // Advanced metrics (lineage, sparse dispatch, tension)
+                        max_generation: json.get("max_generation").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                        avg_generation: json.get("avg_generation").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                        elite_count: json.get("elite_count").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+                        sparse_savings_percent: json.get("sparse_savings_percent").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                        avg_energy: json.get("avg_energy").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32,
+                        avg_tension: json.get("avg_tension").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                        total_tension: json.get("total_tension").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
+                        tps: json.get("tps").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
                     };
                     let _ = substrate_tx.send(view).await;
                 }
@@ -529,6 +542,10 @@ async fn run_visual_mode() -> Result<(), Box<dyn std::error::Error>> {
 
                 match key.code {
                     KeyCode::Esc => break,
+                    KeyCode::Tab => {
+                        // Cycle between heatmap views: Activity → Tension → Energy
+                        visualizer.cycle_view();
+                    }
                     KeyCode::Enter => {
                         if !input_buffer.is_empty() {
                             let text = input_buffer.clone();

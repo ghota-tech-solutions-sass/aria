@@ -89,7 +89,168 @@ Chats de Mickael :
 - **Obrigada** : Abyssin
 
 ---
-*Version : 0.8.0 | Dernière update : 2025-12-30*
+*Version : 0.8.2 | Dernière update : 2025-12-31*
+
+### Session 22 - Économie Équilibrée (Survival Fix)
+
+**ARIA peut enfin survivre plus de 60 secondes !**
+
+Le problème : l'économie "La Vraie Faim" était trop agressive. À 1000+ TPS, les cellules mouraient en ~10 secondes sans pouvoir manger assez.
+
+#### Changements majeurs
+
+**1. Coûts réduits (10x moins)**
+```rust
+// AVANT: Trop cher pour le TPS élevé
+cost_rest: 0.0001    // 10,000 ticks → mort (6 sec à 1700 TPS)
+cost_signal: 0.01
+cost_move: 0.005
+
+// APRÈS: Survivable
+cost_rest: 0.00001   // 100,000 ticks → mort (100 sec à 1000 TPS)
+cost_signal: 0.001
+cost_move: 0.0005
+```
+
+**2. Énergie des signaux augmentée (5x)**
+```rust
+signal_energy_base: 0.05      // AVANT: 0.01
+signal_resonance_factor: 3.0  // AVANT: 2.0
+```
+
+**3. Seuil de résonance abaissé**
+```rust
+// AVANT: Trop strict
+if resonance > 0.3 { /* eat */ }
+
+// APRÈS: Plus de cellules peuvent manger
+if resonance > 0.1 { /* eat */ }
+```
+
+**4. Signal radius augmenté (3x)**
+```rust
+signal_radius: 15.0  // AVANT: 5.0 - trop petit, cellules ne voyaient pas le signal
+```
+
+**5. Bruit de fond sémantique**
+
+Nouveau système pour éviter l'entropie = 0 (système gelé) :
+- Tous les 50 ticks sans signal
+- 0.1% des cellules dormantes reçoivent du bruit
+- Petite injection d'énergie pour éviter la famine totale
+
+**6. Visualisation améliorée**
+
+La grille Neural Activity montre maintenant les cellules dormantes (énergie × 0.2) pour ne plus être vide quand 99% des cellules dorment.
+
+#### Fichiers modifiés
+
+| Fichier | Changement |
+|---------|------------|
+| `aria-core/src/config.rs` | Coûts réduits, énergie augmentée |
+| `aria-compute/src/backend/cpu.rs` | Seuil résonance 0.1 |
+| `aria-compute/src/backend/gpu_soa.rs` | Seuil résonance 0.1 |
+| `aria-compute/src/spatial_gpu.rs` | Seuil résonance 0.1 (2 endroits) |
+| `aria-brain/src/substrate/mod.rs` | Bruit de fond + visualisation |
+
+#### Nouvelle économie
+
+| Métrique | Valeur | Signification |
+|----------|--------|---------------|
+| Temps de survie | ~100 sec | Sans nourriture à 1000 TPS |
+| Gain par signal | ~0.05-0.2 | Avec bonne résonance |
+| Cellules nourries | Plus large | Seuil 0.1 vs 0.3 |
+
+### Session 21 - Thermal Scanner Body (Visualisation Avancée)
+
+**Le body devient un scanner thermique de l'intelligence artificielle !**
+
+La visualisation n'est plus décorative - elle pilote une simulation massive où les données brutes sont devenues illisibles. Le nouveau body agit comme un diagnostic temps réel du substrat neural.
+
+#### 1. Heatmap Thermique 2D
+
+Projection des 16 dimensions sémantiques sur une carte 2D avec gradient thermique :
+
+```
+Couleurs: noir → bleu → cyan → vert → jaune → orange → rouge → blanc
+          (dormant)                    (modéré)                  (surchauffe)
+```
+
+**3 modes de vue** (Tab pour cycler) :
+- **ACTIVITY** : Activité neurale (cellules éveillées + activation interne)
+- **TENSION** : Champ de tension (désir physique d'agir)
+- **ENERGY** : Distribution énergétique (santé des cellules)
+
+#### 2. Graphes Sparklines Temps Réel
+
+Historique sur 60 échantillons (~30 secondes) :
+- **HP** : Santé du système (vert = équilibré)
+- **Entropy** : Niveau de chaos (magenta = organisation vs désordre)
+
+#### 3. Indicateurs de Lignée Élite
+
+Suivi de la pression évolutive :
+```
+🧬 Gen: 15 (avg: 3.2)    ← Génération max et moyenne
+👑 ████░░░░░░ 42 elite   ← Cellules génération >10
+📚 128 words 45 links    ← Mots et associations appris
+```
+
+#### 4. Métriques Avancées
+
+**Status bar compacte** :
+```
+● ARIA  HP:72%  E:0.45(balanced)  GPU:95%  T:12847  [ACTIVITY]
+```
+
+- HP : System health (composite de entropy + awake ratio + survival)
+- E : Entropie (ordered/balanced/chaotic)
+- GPU : Sparse dispatch savings (% de cellules dormantes)
+- T : Tick courant
+
+**Panel Cells** :
+- Énergie moyenne + indicateur visuel
+- Barre de tension (désir physique d'agir)
+- Compteurs awake/sleeping avec pourcentages
+
+#### 5. Endpoint `/substrate` Enrichi
+
+Nouvelles métriques exposées dans `SubstrateView` :
+
+```rust
+// Grilles 16x16
+tension_grid: Vec<f32>,        // Champ de tension spatiale
+
+// Lignée génétique
+max_generation: u32,           // Génération la plus ancienne
+avg_generation: f32,           // Génération moyenne
+elite_count: usize,            // Cellules gen > 10
+
+// Performance
+sparse_savings_percent: f32,   // % économie GPU
+
+// Tension physique
+avg_energy: f32,
+avg_tension: f32,
+total_tension: f32,
+```
+
+#### Fichiers modifiés
+
+| Fichier | Description |
+|---------|-------------|
+| `aria-body/src/visualizer.rs` | Refonte complète avec thermal gradient |
+| `aria-body/src/main.rs` | Support Tab + parsing nouvelles métriques |
+| `aria-brain/src/substrate/mod.rs` | SubstrateView enrichi |
+
+#### Touches clavier
+
+| Touche | Action |
+|--------|--------|
+| Tab | Cycler les vues heatmap |
+| y/Y | Feedback positif (Bravo!) |
+| n/N | Feedback négatif (Non) |
+| Esc | Quitter |
 
 ### Session 20 - Architecture GPU pour 5M+ Cellules (CIR R&D)
 

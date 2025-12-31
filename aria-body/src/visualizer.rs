@@ -1,16 +1,78 @@
-//! Visual TUI for ARIA - Redesigned for the new neural substrate
+//! Visual TUI for ARIA - Neural Substrate Visualization
 //!
-//! Shows: Neural activity, Hebbian connections, health/entropy,
-//! emotions, learning progress, and conversation with context.
+//! A thermal scanner for artificial intelligence. When managing millions of cells,
+//! raw data becomes unreadable - this visualization acts as a diagnostic window
+//! into ARIA's mind.
+//!
+//! Features:
+//! - Heatmap: 2D projection of 16D semantic space with thermal gradient
+//! - Health/Entropy graphs: Real-time sparklines of vital metrics
+//! - Sparse View: Focus on active cells (sleep% = GPU savings)
+//! - Elite Lineage: Genetic strength indicator (evolution pressure)
+//! - Tension Map: Physical desire to act (replaces semantic encoding)
 
 use chrono::Local;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Sparkline},
     Frame,
 };
+
+// ============================================================================
+// THERMAL GRADIENT COLORS
+// ============================================================================
+
+/// Thermal color palette: black → blue → cyan → green → yellow → red → white
+fn thermal_color(value: f32) -> Color {
+    let v = value.clamp(0.0, 1.0);
+    if v < 0.05 {
+        Color::Rgb(20, 20, 30) // Near-black (sleeping)
+    } else if v < 0.15 {
+        Color::Rgb(30, 30, 80) // Deep blue
+    } else if v < 0.25 {
+        Color::Rgb(40, 60, 140) // Blue
+    } else if v < 0.35 {
+        Color::Rgb(50, 100, 180) // Light blue
+    } else if v < 0.45 {
+        Color::Rgb(60, 160, 160) // Cyan
+    } else if v < 0.55 {
+        Color::Rgb(80, 180, 100) // Teal-green
+    } else if v < 0.65 {
+        Color::Rgb(120, 200, 80) // Green
+    } else if v < 0.75 {
+        Color::Rgb(200, 200, 60) // Yellow
+    } else if v < 0.85 {
+        Color::Rgb(255, 160, 40) // Orange
+    } else if v < 0.95 {
+        Color::Rgb(255, 80, 40) // Red
+    } else {
+        Color::Rgb(255, 220, 220) // White-hot
+    }
+}
+
+/// Character density for heatmap cells
+fn thermal_char(value: f32) -> char {
+    let v = value.clamp(0.0, 1.0);
+    if v < 0.05 {
+        ' '
+    } else if v < 0.15 {
+        '·'
+    } else if v < 0.30 {
+        '░'
+    } else if v < 0.50 {
+        '▒'
+    } else if v < 0.70 {
+        '▓'
+    } else {
+        '█'
+    }
+}
+
+// ============================================================================
+// DATA TYPES
+// ============================================================================
 
 /// A message in the conversation with timestamp and context
 #[derive(Clone)]
@@ -18,7 +80,7 @@ pub struct ChatMessage {
     pub timestamp: String,
     pub is_user: bool,
     pub text: String,
-    pub context: Option<String>, // e.g., "[memory: first_cat]" or "[+association]"
+    pub context: Option<String>,
 }
 
 impl ChatMessage {
@@ -41,29 +103,6 @@ impl ChatMessage {
     }
 }
 
-/// Main visualizer state
-pub struct AriaVisualizer {
-    // History for sparklines
-    pub energy_history: Vec<u64>,
-    pub entropy_history: Vec<u64>,
-    pub health_history: Vec<u64>,
-    pub activity_history: Vec<u64>,
-
-    // Current state from brain
-    pub current_stats: BrainStats,
-    pub substrate_view: SubstrateView,
-    pub learning_stats: LearningStats,
-
-    // Conversation
-    pub messages: Vec<ChatMessage>,
-    last_aria_message: std::time::Instant,
-    last_aria_text: String,
-
-    // Connection
-    pub connected: bool,
-    pub last_update: std::time::Instant,
-}
-
 /// Stats from /stats endpoint
 #[derive(Default, Clone)]
 pub struct BrainStats {
@@ -79,12 +118,13 @@ pub struct BrainStats {
     pub curiosity: f32,
 }
 
-/// Substrate view from /substrate endpoint (updated with new fields)
+/// Substrate view from /substrate endpoint (enhanced)
 #[derive(Default, Clone)]
 pub struct SubstrateView {
     pub grid_size: usize,
     pub activity_grid: Vec<f32>,
     pub energy_grid: Vec<f32>,
+    pub tension_grid: Vec<f32>,
     pub cell_count_grid: Vec<usize>,
     pub total_cells: usize,
     pub alive_cells: usize,
@@ -92,12 +132,20 @@ pub struct SubstrateView {
     pub dead_cells: usize,
     pub awake_cells: usize,
     pub energy_histogram: Vec<usize>,
-    // New fields
     pub activity_entropy: f32,
     pub system_health: f32,
+    // Advanced metrics
+    pub max_generation: u32,
+    pub avg_generation: f32,
+    pub elite_count: usize,
+    pub sparse_savings_percent: f32,
+    pub avg_energy: f32,
+    pub avg_tension: f32,
+    pub total_tension: f32,
+    pub tps: f32,
 }
 
-/// Learning progress stats (from /words, /associations, /episodes)
+/// Learning progress stats
 #[derive(Default, Clone)]
 pub struct LearningStats {
     pub word_count: usize,
@@ -107,45 +155,78 @@ pub struct LearningStats {
     pub strategy: String,
 }
 
+// ============================================================================
+// VISUALIZER STATE
+// ============================================================================
+
+/// Main visualizer state
+pub struct AriaVisualizer {
+    // History for sparklines (60 samples = ~30 seconds at 500ms refresh)
+    pub health_history: Vec<u64>,
+    pub entropy_history: Vec<u64>,
+    pub tension_history: Vec<u64>,
+    pub awake_history: Vec<u64>,
+
+    // Current state
+    pub current_stats: BrainStats,
+    pub substrate_view: SubstrateView,
+    pub learning_stats: LearningStats,
+
+    // Conversation
+    pub messages: Vec<ChatMessage>,
+    last_aria_message: std::time::Instant,
+    last_aria_text: String,
+
+    // View mode: 0=Activity, 1=Tension, 2=Energy
+    pub view_mode: u8,
+
+    // Connection
+    pub connected: bool,
+    pub last_update: std::time::Instant,
+}
+
 impl AriaVisualizer {
     pub fn new() -> Self {
         Self {
-            energy_history: vec![50; 60],
-            entropy_history: vec![50; 60],
             health_history: vec![70; 60],
-            activity_history: vec![0; 60],
+            entropy_history: vec![50; 60],
+            tension_history: vec![0; 60],
+            awake_history: vec![0; 60],
             current_stats: BrainStats::default(),
             substrate_view: SubstrateView::default(),
             learning_stats: LearningStats::default(),
             messages: Vec::new(),
             last_aria_message: std::time::Instant::now(),
             last_aria_text: String::new(),
+            view_mode: 0,
             connected: true,
             last_update: std::time::Instant::now(),
         }
     }
 
     pub fn update_substrate(&mut self, view: SubstrateView) {
-        // Update history
-        self.entropy_history.push((view.activity_entropy * 100.0) as u64);
-        self.entropy_history.remove(0);
-
+        // Update histories
         self.health_history.push((view.system_health * 100.0) as u64);
         self.health_history.remove(0);
 
+        self.entropy_history.push((view.activity_entropy * 100.0) as u64);
+        self.entropy_history.remove(0);
+
+        self.tension_history.push((view.avg_tension * 100.0).min(100.0) as u64);
+        self.tension_history.remove(0);
+
+        let awake_pct = if view.alive_cells > 0 {
+            view.awake_cells as f32 / view.alive_cells as f32 * 100.0
+        } else { 0.0 };
+        self.awake_history.push(awake_pct as u64);
+        self.awake_history.remove(0);
+
         self.substrate_view = view;
+        self.last_update = std::time::Instant::now();
     }
 
     pub fn update(&mut self, stats: BrainStats) {
-        self.current_stats = stats.clone();
-        self.last_update = std::time::Instant::now();
-
-        self.energy_history.push((stats.total_energy * 10.0) as u64);
-        self.energy_history.remove(0);
-
-        let awake_cells = stats.alive_cells.saturating_sub(stats.sleeping_cells);
-        self.activity_history.push((awake_cells / 100) as u64);
-        self.activity_history.remove(0);
+        self.current_stats = stats;
     }
 
     pub fn update_learning(&mut self, stats: LearningStats) {
@@ -156,7 +237,6 @@ impl AriaVisualizer {
         let now = std::time::Instant::now();
         let elapsed = now.duration_since(self.last_aria_message);
 
-        // Throttle: skip if same message or too fast
         if expr == self.last_aria_text || elapsed.as_millis() < 500 {
             return;
         }
@@ -177,129 +257,144 @@ impl AriaVisualizer {
         }
     }
 
+    pub fn cycle_view(&mut self) {
+        self.view_mode = (self.view_mode + 1) % 3;
+    }
+
+    // ========================================================================
+    // DRAWING
+    // ========================================================================
+
     pub fn draw(&self, frame: &mut Frame, input_buffer: &str) {
-        let chunks = Layout::default()
+        let main_chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(0)
             .constraints([
-                Constraint::Length(3),  // Header with health bar
-                Constraint::Length(8),  // Neural activity + stats
-                Constraint::Length(3),  // Emotion bar
-                Constraint::Min(8),     // Conversation
+                Constraint::Length(1),  // Status bar
+                Constraint::Min(10),    // Main content
                 Constraint::Length(3),  // Input
             ])
             .split(frame.size());
 
-        self.draw_header(frame, chunks[0]);
-        self.draw_dashboard(frame, chunks[1]);
-        self.draw_emotions(frame, chunks[2]);
-        self.draw_conversation(frame, chunks[3]);
-        self.draw_input(frame, chunks[4], input_buffer);
+        self.draw_status_bar(frame, main_chunks[0]);
+        self.draw_main_content(frame, main_chunks[1]);
+        self.draw_input(frame, main_chunks[2], input_buffer);
     }
 
-    fn draw_header(&self, frame: &mut Frame, area: Rect) {
-        let status = if self.connected { "●" } else { "○" };
-        let status_color = if self.connected { Color::Green } else { Color::Red };
+    fn draw_status_bar(&self, frame: &mut Frame, area: Rect) {
+        let view = &self.substrate_view;
+        let stats = &self.current_stats;
 
-        // Health bar color
-        let health = self.substrate_view.system_health;
-        let health_color = if health > 0.7 {
-            Color::Green
-        } else if health > 0.4 {
-            Color::Yellow
-        } else {
-            Color::Red
+        // Connection indicator
+        let conn = if self.connected { "●" } else { "○" };
+        let conn_color = if self.connected { Color::Green } else { Color::Red };
+
+        // Health color
+        let health = view.system_health;
+        let health_color = if health > 0.7 { Color::Green }
+            else if health > 0.4 { Color::Yellow }
+            else { Color::Red };
+
+        // Entropy description
+        let entropy = view.activity_entropy;
+        let entropy_desc = if entropy < 0.3 { "ordered" }
+            else if entropy < 0.6 { "balanced" }
+            else { "chaotic" };
+
+        // Sparse savings (GPU efficiency)
+        let sparse = view.sparse_savings_percent;
+        let sparse_color = if sparse > 90.0 { Color::Green }
+            else if sparse > 50.0 { Color::Yellow }
+            else { Color::Red };
+
+        // View mode indicator
+        let mode_name = match self.view_mode {
+            0 => "ACTIVITY",
+            1 => "TENSION",
+            _ => "ENERGY",
         };
 
-        let health_pct = (health * 100.0) as u16;
-        let health_bar = "█".repeat((health * 20.0) as usize);
-        let health_empty = "░".repeat(20 - (health * 20.0) as usize);
+        let status = Line::from(vec![
+            Span::styled(format!(" {} ", conn), Style::default().fg(conn_color)),
+            Span::styled("ARIA", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw("  "),
+            Span::styled(format!("HP:{:.0}%", health * 100.0), Style::default().fg(health_color)),
+            Span::raw("  "),
+            Span::styled(format!("E:{:.2}", entropy), Style::default().fg(Color::Magenta)),
+            Span::styled(format!("({})", entropy_desc), Style::default().fg(Color::DarkGray)),
+            Span::raw("  "),
+            Span::styled(format!("GPU:{:.0}%", sparse), Style::default().fg(sparse_color)),
+            Span::raw("  "),
+            Span::styled(format!("T:{}", stats.tick), Style::default().fg(Color::DarkGray)),
+            Span::raw("  "),
+            Span::styled(format!("[{}]", mode_name), Style::default().fg(Color::Yellow)),
+            Span::styled(" Tab=cycle", Style::default().fg(Color::DarkGray)),
+        ]);
 
-        let entropy = self.substrate_view.activity_entropy;
-        let entropy_desc = if entropy < 0.3 {
-            "ordered"
-        } else if entropy < 0.6 {
-            "balanced"
-        } else {
-            "chaotic"
-        };
-
-        let header = Paragraph::new(Line::from(vec![
-            Span::styled(" 🧒 ARIA ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled(status, Style::default().fg(status_color)),
-            Span::raw("  │  "),
-            Span::styled("Health: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&health_bar, Style::default().fg(health_color)),
-            Span::styled(&health_empty, Style::default().fg(Color::DarkGray)),
-            Span::styled(format!(" {}%", health_pct), Style::default().fg(health_color)),
-            Span::raw("  │  "),
-            Span::styled("Entropy: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{:.2}", entropy), Style::default().fg(Color::Magenta)),
-            Span::styled(format!(" ({})", entropy_desc), Style::default().fg(Color::DarkGray)),
-            Span::raw("  │  "),
-            Span::styled(format!("Tick: {}", self.current_stats.tick), Style::default().fg(Color::DarkGray)),
-        ]))
-        .block(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(Color::DarkGray)));
-
-        frame.render_widget(header, area);
+        frame.render_widget(Paragraph::new(status), area);
     }
 
-    fn draw_dashboard(&self, frame: &mut Frame, area: Rect) {
+    fn draw_main_content(&self, frame: &mut Frame, area: Rect) {
+        // Split: Heatmap (left 60%) | Sidebar (right 40%)
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(40),  // Neural activity heatmap
-                Constraint::Percentage(30),  // Stats
-                Constraint::Percentage(30),  // Learning
+                Constraint::Percentage(60),
+                Constraint::Percentage(40),
             ])
             .split(area);
 
-        self.draw_neural_activity(frame, chunks[0]);
-        self.draw_cell_stats(frame, chunks[1]);
-        self.draw_learning(frame, chunks[2]);
+        self.draw_heatmap(frame, chunks[0]);
+        self.draw_sidebar(frame, chunks[1]);
     }
 
-    fn draw_neural_activity(&self, frame: &mut Frame, area: Rect) {
+    fn draw_heatmap(&self, frame: &mut Frame, area: Rect) {
         let view = &self.substrate_view;
         let grid_size = if view.grid_size > 0 { view.grid_size } else { 16 };
+
+        // Select grid based on view mode
+        let (grid, title) = match self.view_mode {
+            0 => (&view.activity_grid, "Neural Activity"),
+            1 => (&view.tension_grid, "Tension Field"),
+            _ => (&view.energy_grid, "Energy Distribution"),
+        };
+
         let inner_height = area.height.saturating_sub(2) as usize;
         let inner_width = area.width.saturating_sub(2) as usize;
 
-        let scale_y = (grid_size + inner_height - 1) / inner_height.max(1);
-        let scale_x = (grid_size + inner_width - 1) / inner_width.max(1);
+        // Calculate scaling to fit grid in available space
+        let scale_y = (grid_size + inner_height.max(1) - 1) / inner_height.max(1);
+        let scale_x = (grid_size + inner_width.max(1) - 1) / inner_width.max(1);
 
         let mut lines: Vec<Line> = Vec::new();
-        for row in 0..(grid_size / scale_y.max(1)).min(inner_height) {
+        let rows = (grid_size / scale_y.max(1)).min(inner_height);
+
+        for row in 0..rows {
             let mut spans: Vec<Span> = Vec::new();
-            for col in 0..(grid_size / scale_x.max(1)).min(inner_width) {
-                let mut activity_sum = 0.0f32;
+            let cols = (grid_size / scale_x.max(1)).min(inner_width);
+
+            for col in 0..cols {
+                // Average values in this scaled cell
+                let mut sum = 0.0f32;
                 let mut count = 0;
+
                 for dy in 0..scale_y {
                     for dx in 0..scale_x {
                         let gy = row * scale_y + dy;
                         let gx = col * scale_x + dx;
                         if gy < grid_size && gx < grid_size {
                             let idx = gy * grid_size + gx;
-                            if idx < view.activity_grid.len() {
-                                activity_sum += view.activity_grid[idx];
+                            if idx < grid.len() {
+                                sum += grid[idx];
                                 count += 1;
                             }
                         }
                     }
                 }
-                let activity = if count > 0 { activity_sum / count as f32 } else { 0.0 };
 
-                let (ch, color) = if activity < 0.05 {
-                    ('·', Color::DarkGray)
-                } else if activity < 0.2 {
-                    ('░', Color::Blue)
-                } else if activity < 0.4 {
-                    ('▒', Color::Cyan)
-                } else if activity < 0.6 {
-                    ('▓', Color::Yellow)
-                } else {
-                    ('█', Color::Red)
-                };
+                let value = if count > 0 { sum / count as f32 } else { 0.0 };
+                let ch = thermal_char(value);
+                let color = thermal_color(value);
 
                 spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
             }
@@ -308,51 +403,82 @@ impl AriaVisualizer {
 
         let heatmap = Paragraph::new(lines)
             .block(Block::default()
-                .title(Span::styled(" 🧠 Neural Activity ", Style::default().fg(Color::Cyan)))
+                .title(Span::styled(
+                    format!(" {} ", title),
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                ))
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::DarkGray)));
+
         frame.render_widget(heatmap, area);
+    }
+
+    fn draw_sidebar(&self, frame: &mut Frame, area: Rect) {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(7),  // Stats
+                Constraint::Length(5),  // Sparklines
+                Constraint::Length(5),  // Lineage
+                Constraint::Min(5),     // Conversation
+            ])
+            .split(area);
+
+        self.draw_cell_stats(frame, chunks[0]);
+        self.draw_sparklines(frame, chunks[1]);
+        self.draw_lineage(frame, chunks[2]);
+        self.draw_conversation(frame, chunks[3]);
     }
 
     fn draw_cell_stats(&self, frame: &mut Frame, area: Rect) {
         let view = &self.substrate_view;
-        let stats = &self.current_stats;
+        let _stats = &self.current_stats;
 
         let alive = view.alive_cells;
         let awake = view.awake_cells;
         let sleeping = view.sleeping_cells;
 
-        let awake_pct = if alive > 0 { (awake as f32 / alive as f32 * 100.0) as u16 } else { 0 };
-        let energy_per_cell = if alive > 0 { stats.total_energy / alive as f32 } else { 0.0 };
+        let awake_pct = if alive > 0 { awake as f32 / alive as f32 * 100.0 } else { 0.0 };
 
-        let (energy_icon, energy_color) = if energy_per_cell > 0.6 {
+        // Energy indicator
+        let (energy_icon, energy_color) = if view.avg_energy > 0.6 {
             ("⚡", Color::Green)
-        } else if energy_per_cell > 0.3 {
+        } else if view.avg_energy > 0.3 {
             ("⚡", Color::Yellow)
         } else {
-            ("⚠️", Color::Red)
+            ("⚠", Color::Red)
         };
+
+        // Tension indicator (physical intelligence)
+        let tension_bar_len = (view.avg_tension * 8.0).min(8.0) as usize;
+        let tension_bar = "█".repeat(tension_bar_len);
+        let tension_empty = "░".repeat(8 - tension_bar_len);
+        let tension_color = if view.avg_tension > 0.5 { Color::Red }
+            else if view.avg_tension > 0.2 { Color::Yellow }
+            else { Color::Green };
 
         let content = Paragraph::new(vec![
             Line::from(vec![
                 Span::styled(format!(" {} ", energy_icon), Style::default().fg(energy_color)),
-                Span::styled(format!("{:.1}", stats.total_energy), Style::default().fg(energy_color).add_modifier(Modifier::BOLD)),
-                Span::styled(" total energy", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:.2}", view.avg_energy), Style::default().fg(energy_color).add_modifier(Modifier::BOLD)),
+                Span::styled(" avg energy", Style::default().fg(Color::DarkGray)),
             ]),
             Line::from(vec![
-                Span::styled("   ", Style::default()),
-                Span::styled(format!("{:.3}", energy_per_cell), Style::default().fg(Color::White)),
-                Span::styled(" /cell", Style::default().fg(Color::DarkGray)),
+                Span::raw("   "),
+                Span::styled(&tension_bar, Style::default().fg(tension_color)),
+                Span::styled(&tension_empty, Style::default().fg(Color::DarkGray)),
+                Span::styled(format!(" {:.2}", view.avg_tension), Style::default().fg(tension_color)),
+                Span::styled(" tension", Style::default().fg(Color::DarkGray)),
             ]),
             Line::from(""),
             Line::from(vec![
-                Span::styled(" 🟢 ", Style::default()),
-                Span::styled(format!("{}", awake), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::styled(format!(" awake ({}%)", awake_pct), Style::default().fg(Color::DarkGray)),
+                Span::styled(" ● ", Style::default().fg(Color::Green)),
+                Span::styled(format!("{:>5}", awake), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" awake ({:.0}%)", awake_pct), Style::default().fg(Color::DarkGray)),
             ]),
             Line::from(vec![
-                Span::styled(" 💤 ", Style::default()),
-                Span::styled(format!("{}", sleeping), Style::default().fg(Color::Blue)),
+                Span::styled(" ◐ ", Style::default().fg(Color::Blue)),
+                Span::styled(format!("{:>5}", sleeping), Style::default().fg(Color::Blue)),
                 Span::styled(" sleeping", Style::default().fg(Color::DarkGray)),
             ]),
         ])
@@ -364,82 +490,74 @@ impl AriaVisualizer {
         frame.render_widget(content, area);
     }
 
-    fn draw_learning(&self, frame: &mut Frame, area: Rect) {
+    fn draw_sparklines(&self, frame: &mut Frame, area: Rect) {
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area);
+
+        // Health sparkline
+        let health_spark = Sparkline::default()
+            .block(Block::default()
+                .title(Span::styled(" HP ", Style::default().fg(Color::Green)))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)))
+            .data(&self.health_history)
+            .max(100)
+            .style(Style::default().fg(Color::Green));
+
+        // Entropy sparkline
+        let entropy_spark = Sparkline::default()
+            .block(Block::default()
+                .title(Span::styled(" Entropy ", Style::default().fg(Color::Magenta)))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)))
+            .data(&self.entropy_history)
+            .max(100)
+            .style(Style::default().fg(Color::Magenta));
+
+        frame.render_widget(health_spark, chunks[0]);
+        frame.render_widget(entropy_spark, chunks[1]);
+    }
+
+    fn draw_lineage(&self, frame: &mut Frame, area: Rect) {
+        let view = &self.substrate_view;
         let learn = &self.learning_stats;
+
+        // Elite bar visualization
+        let elite_ratio = if view.alive_cells > 0 {
+            view.elite_count as f32 / view.alive_cells as f32
+        } else { 0.0 };
+        let elite_bar_len = (elite_ratio * 10.0).min(10.0) as usize;
+        let elite_bar = "█".repeat(elite_bar_len);
+        let elite_empty = "░".repeat(10 - elite_bar_len);
 
         let content = Paragraph::new(vec![
             Line::from(vec![
+                Span::styled(" 🧬 Gen:", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{}", view.max_generation), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" (avg:{:.1})", view.avg_generation), Style::default().fg(Color::DarkGray)),
+            ]),
+            Line::from(vec![
+                Span::styled(" 👑 ", Style::default()),
+                Span::styled(&elite_bar, Style::default().fg(Color::Yellow)),
+                Span::styled(&elite_empty, Style::default().fg(Color::DarkGray)),
+                Span::styled(format!(" {} elite", view.elite_count), Style::default().fg(Color::DarkGray)),
+            ]),
+            Line::from(vec![
                 Span::styled(" 📚 ", Style::default()),
-                Span::styled(format!("{}", learn.word_count), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                Span::styled(" words", Style::default().fg(Color::DarkGray)),
-            ]),
-            Line::from(vec![
-                Span::styled(" 🔗 ", Style::default()),
-                Span::styled(format!("{}", learn.association_count), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                Span::styled(" associations", Style::default().fg(Color::DarkGray)),
-            ]),
-            Line::from(vec![
-                Span::styled(" 💾 ", Style::default()),
-                Span::styled(format!("{}", learn.episode_count), Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-                Span::styled(" memories", Style::default().fg(Color::DarkGray)),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled(" Strategy: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(&learn.strategy, Style::default().fg(Color::Green)),
+                Span::styled(format!("{}", learn.word_count), Style::default().fg(Color::Cyan)),
+                Span::styled(" words ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{}", learn.association_count), Style::default().fg(Color::Green)),
+                Span::styled(" links", Style::default().fg(Color::DarkGray)),
             ]),
         ])
         .block(Block::default()
-            .title(Span::styled(" Learning ", Style::default().fg(Color::Yellow)))
+            .title(Span::styled(" Lineage ", Style::default().fg(Color::Yellow)))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray)));
 
         frame.render_widget(content, area);
-    }
-
-    fn draw_emotions(&self, frame: &mut Frame, area: Rect) {
-        let stats = &self.current_stats;
-
-        // Emotion icons and colors
-        let emotions = [
-            ("😊", "Joy", stats.happiness, Color::Yellow),
-            ("🔍", "Curious", stats.curiosity, Color::Cyan),
-            ("⚡", "Arousal", stats.arousal, Color::Red),
-        ];
-
-        let mut spans: Vec<Span> = vec![Span::raw(" ")];
-
-        for (icon, name, value, color) in emotions {
-            let bar_len = (value * 8.0) as usize;
-            let bar = "█".repeat(bar_len);
-            let empty = "░".repeat(8 - bar_len);
-
-            spans.push(Span::styled(format!(" {} ", icon), Style::default()));
-            spans.push(Span::styled(name, Style::default().fg(Color::DarkGray)));
-            spans.push(Span::styled(": ", Style::default().fg(Color::DarkGray)));
-            spans.push(Span::styled(bar, Style::default().fg(color)));
-            spans.push(Span::styled(empty, Style::default().fg(Color::DarkGray)));
-            spans.push(Span::raw("  │"));
-        }
-
-        // Dominant emotion
-        let emotion_color = match stats.dominant_emotion.as_str() {
-            "curious" => Color::Cyan,
-            "content" | "happy" => Color::Green,
-            "frustrated" => Color::Red,
-            "excited" => Color::Yellow,
-            "calm" => Color::Blue,
-            "bored" => Color::DarkGray,
-            _ => Color::White,
-        };
-
-        spans.push(Span::styled("  Mood: ", Style::default().fg(Color::DarkGray)));
-        spans.push(Span::styled(stats.mood.clone(), Style::default().fg(emotion_color).add_modifier(Modifier::BOLD)));
-
-        let emotions_line = Paragraph::new(Line::from(spans))
-            .block(Block::default().borders(Borders::NONE));
-
-        frame.render_widget(emotions_line, area);
     }
 
     fn draw_conversation(&self, frame: &mut Frame, area: Rect) {
@@ -453,20 +571,22 @@ impl AriaVisualizer {
         let items: Vec<ListItem> = self.messages[start_idx..]
             .iter()
             .map(|msg| {
-                let (icon, _name_color, text_color) = if msg.is_user {
-                    ("👤", Color::Green, Color::White)
+                let (icon, text_color) = if msg.is_user {
+                    ("▶", Color::Green)
                 } else {
-                    ("🧒", Color::Cyan, Color::White)
+                    ("◀", Color::Cyan)
                 };
 
                 let mut spans = vec![
-                    Span::styled(format!(" {} ", msg.timestamp), Style::default().fg(Color::DarkGray)),
-                    Span::styled(format!("{} ", icon), Style::default()),
-                    Span::styled(&msg.text, Style::default().fg(text_color)),
+                    Span::styled(format!("{} ", icon), Style::default().fg(text_color)),
+                    Span::styled(&msg.text, Style::default().fg(Color::White)),
                 ];
 
                 if let Some(ctx) = &msg.context {
-                    spans.push(Span::styled(format!("  {}", ctx), Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)));
+                    spans.push(Span::styled(
+                        format!(" [{}]", ctx),
+                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)
+                    ));
                 }
 
                 ListItem::new(Line::from(spans))
@@ -475,7 +595,7 @@ impl AriaVisualizer {
 
         let conversation = List::new(items)
             .block(Block::default()
-                .title(Span::styled(" Conversation ", Style::default().fg(Color::White)))
+                .title(Span::styled(" Chat ", Style::default().fg(Color::White)))
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::DarkGray)));
 
@@ -492,10 +612,12 @@ impl AriaVisualizer {
             .title(Line::from(vec![
                 Span::raw(" "),
                 Span::styled("y", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::raw("=Bravo "),
+                Span::raw("=Good "),
                 Span::styled("n", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-                Span::raw("=Non "),
-                Span::styled("ESC", Style::default().fg(Color::DarkGray)),
+                Span::raw("=Bad "),
+                Span::styled("Tab", Style::default().fg(Color::Yellow)),
+                Span::raw("=View "),
+                Span::styled("Esc", Style::default().fg(Color::DarkGray)),
                 Span::raw("=Quit "),
             ]))
             .borders(Borders::ALL)

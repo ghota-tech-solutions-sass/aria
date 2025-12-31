@@ -136,18 +136,19 @@ impl Default for MetabolismConfig {
             reproduction_threshold: 0.8, // Higher threshold - must be strong to divide
             child_energy: 0.5,           // Was 0.3 - give children a fighting chance
 
-            // Action costs - "La Vraie Faim"
-            cost_signal: 0.01,   // Speaking costs energy
-            cost_divide: 0.5,    // Creating life is exhausting
-            cost_move: 0.005,    // Moving costs energy
-            // Active cells: 1.0 / 0.0001 = 10,000 ticks to death without food
-            // This is ~6 seconds at 1700 TPS, or ~100 seconds at 100 TPS
-            // Creates pressure but allows time for interaction
-            cost_rest: 0.0001,
+            // Action costs - "La Vraie Faim" (balanced for high TPS)
+            cost_signal: 0.001,  // Speaking costs energy (reduced 10x)
+            cost_divide: 0.3,    // Creating life is exhausting (reduced)
+            cost_move: 0.0005,   // Moving costs energy (reduced 10x)
+            // Active cells: 1.0 / 0.00001 = 100,000 ticks to death without food
+            // At 1000 TPS = 100 seconds to death (survivable!)
+            // At 100 TPS = 1000 seconds (~17 minutes)
+            cost_rest: 0.00001,
 
-            // Signal energy - quality over quantity
-            signal_energy_base: 0.01,       // Was 0.005 - more energy from resonance
-            signal_resonance_factor: 2.0,   // Resonant signals give 2x
+            // Signal energy - generous to allow survival
+            // One signal with good resonance should feed many cells
+            signal_energy_base: 0.05,       // 5x increase - signals really feed!
+            signal_resonance_factor: 3.0,   // Resonant signals give 3x (was 2x)
         }
     }
 }
@@ -210,9 +211,10 @@ impl Default for SignalConfig {
             immediate_activation: 5.0,
             state_cap: 5.0,
             // Signal radius in semantic space [-10..10]
-            // 5.0 = local propagation (only nearby cells receive signal)
-            // Combined with resonance, this creates spatial specialization
-            signal_radius: 5.0,
+            // 15.0 = broad propagation (most cells can receive signal)
+            // At high TPS, cells need to receive signals to survive
+            // Spatial specialization comes from resonance, not distance
+            signal_radius: 15.0,
         }
     }
 }

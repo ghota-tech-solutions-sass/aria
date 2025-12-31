@@ -126,18 +126,19 @@ impl CpuBackend {
             }
 
             // === LA VRAIE FAIM: ENERGY FROM RESONANCE ===
-            // Only cells that UNDERSTAND the signal get fed!
-            // resonance < 0.3 = you don't understand = no food
-            if resonance > 0.3 {
-                // Scale energy by how well you understand
-                let understanding = (resonance - 0.3) / 0.7; // 0 to 1
+            // Cells that resonate with the signal get fed!
+            // resonance < 0.1 = pure noise = no food
+            // resonance > 0.1 = some understanding = food scaled by resonance
+            if resonance > 0.1 {
+                // Scale energy by how well you understand (0.1->0 to 1.0->1)
+                let understanding = (resonance - 0.1) / 0.9;
                 let energy_gain = config.metabolism.signal_energy_base
                     * signal.intensity
                     * understanding
                     * (1.0 + resonance * config.metabolism.signal_resonance_factor);
                 state.energy += energy_gain;
             }
-            // resonance <= 0.3: NO ENERGY - you didn't understand
+            // resonance <= 0.1: NO ENERGY - pure noise
         }
 
         // Normalize state

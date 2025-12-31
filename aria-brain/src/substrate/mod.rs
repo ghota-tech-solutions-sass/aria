@@ -273,6 +273,36 @@ impl Substrate {
             std::mem::take(&mut *buffer)
         };
 
+        // === BACKGROUND NOISE: Prevent entropy=0 freeze ===
+        // Inject tiny random perturbations to keep the system alive
+        // This acts like "neural noise" in biological brains
+        if current_tick % 50 == 0 && signals.is_empty() {
+            use rand::Rng;
+            let mut rng = rand::thread_rng();
+
+            // Wake up 0.1% of sleeping cells with random noise
+            let num_to_wake = (self.cells.len() / 1000).max(10);
+            for _ in 0..num_to_wake {
+                let idx = rng.gen_range(0..self.states.len());
+                if self.states[idx].is_sleeping() && !self.states[idx].is_dead() {
+                    // Generate small random noise signal
+                    let mut noise = [0.0f32; SIGNAL_DIMS];
+                    for n in noise.iter_mut() {
+                        *n = rng.gen_range(-0.1..0.1);
+                    }
+
+                    // Inject tiny tension
+                    for i in 0..SIGNAL_DIMS {
+                        self.states[idx].state[i] += noise[i] * 0.5;
+                    }
+                    self.states[idx].tension += 0.05;
+
+                    // Small energy boost to prevent starvation
+                    self.states[idx].energy = (self.states[idx].energy + 0.01).min(1.0);
+                }
+            }
+        }
+
         // === Multi-pass recurrent processing (Gemini optimization) ===
         let passes = if self.config.recurrent.enabled {
             self.config.recurrent.passes_per_tick.max(1)
@@ -585,14 +615,35 @@ impl Substrate {
         const GRID_SIZE: usize = 16;
         let mut activity_grid = vec![0.0f32; GRID_SIZE * GRID_SIZE];
         let mut energy_grid = vec![0.0f32; GRID_SIZE * GRID_SIZE];
+        let mut tension_grid = vec![0.0f32; GRID_SIZE * GRID_SIZE];
         let mut cell_count_grid = vec![0usize; GRID_SIZE * GRID_SIZE];
+
+        // Lineage tracking
+        let mut max_generation: u32 = 0;
+        let mut total_generation: u64 = 0;
+        let mut elite_count: usize = 0;
+        let mut total_energy: f32 = 0.0;
+        let mut total_tension: f32 = 0.0;
 
         // Count cells in each grid position
         // Using first 2 dimensions of position (typically in -10..10 range)
-        for (_cell, state) in self.cells.iter().zip(self.states.iter()) {
+        for (cell, state) in self.cells.iter().zip(self.states.iter()) {
             if state.is_dead() {
                 continue;
             }
+
+            // Track lineage
+            if cell.generation > max_generation {
+                max_generation = cell.generation;
+            }
+            total_generation += cell.generation as u64;
+            if cell.generation > 10 {
+                elite_count += 1;
+            }
+
+            // Track totals
+            total_energy += state.energy;
+            total_tension += state.tension;
 
             // Map position to grid (position is typically -10..10)
             let x = ((state.position[0] + 10.0) / 20.0 * GRID_SIZE as f32)
@@ -603,22 +654,29 @@ impl Substrate {
 
             cell_count_grid[idx] += 1;
             energy_grid[idx] += state.energy;
+            tension_grid[idx] += state.tension;
 
-            // Activity: higher if awake and has high state activation
-            // Read from CellState.flags (GPU source of truth)
+            // Activity: awake cells show full activation, sleeping show potential (energy)
+            // This ensures the heatmap always shows something even when cells sleep
             if !state.is_sleeping() {
                 let activation: f32 = state.state.iter().map(|x| x.abs()).sum();
                 activity_grid[idx] += activation;
+            } else {
+                // Sleeping cells contribute their energy as "potential activity"
+                // Dimmed (0.2x) so awake cells stand out
+                activity_grid[idx] += state.energy * 0.2;
             }
         }
 
         // Normalize grids
         let max_activity = activity_grid.iter().cloned().fold(0.0f32, f32::max).max(1.0);
-        let max_energy = energy_grid.iter().cloned().fold(0.0f32, f32::max).max(1.0);
+        let max_energy_grid = energy_grid.iter().cloned().fold(0.0f32, f32::max).max(1.0);
+        let max_tension = tension_grid.iter().cloned().fold(0.0f32, f32::max).max(0.1);
 
         for i in 0..activity_grid.len() {
             activity_grid[i] /= max_activity;
-            energy_grid[i] /= max_energy;
+            energy_grid[i] /= max_energy_grid;
+            tension_grid[i] /= max_tension;
         }
 
         // Population breakdown
@@ -628,6 +686,12 @@ impl Substrate {
         let sleeping = self.states.iter().filter(|s| s.is_sleeping() && !s.is_dead()).count();
         let dead = total - alive;
         let awake = alive - sleeping;
+
+        // Calculate averages
+        let avg_energy = if alive > 0 { total_energy / alive as f32 } else { 0.0 };
+        let avg_tension = if alive > 0 { total_tension / alive as f32 } else { 0.0 };
+        let avg_generation = if alive > 0 { total_generation as f32 / alive as f32 } else { 0.0 };
+        let sparse_savings_percent = if alive > 0 { sleeping as f32 / alive as f32 * 100.0 } else { 0.0 };
 
         // Energy distribution (histogram)
         let mut energy_histogram = [0usize; 10];
@@ -677,6 +741,7 @@ impl Substrate {
             grid_size: GRID_SIZE,
             activity_grid,
             energy_grid,
+            tension_grid,
             cell_count_grid,
             total_cells: total,
             alive_cells: alive,
@@ -686,6 +751,15 @@ impl Substrate {
             energy_histogram: energy_histogram.to_vec(),
             activity_entropy,
             system_health,
+            // Advanced metrics
+            max_generation,
+            avg_generation,
+            elite_count,
+            sparse_savings_percent,
+            avg_energy,
+            avg_tension,
+            total_tension,
+            tps: 0.0, // TPS computed in main loop, updated externally
         }
     }
 }
@@ -699,6 +773,8 @@ pub struct SubstrateView {
     pub activity_grid: Vec<f32>,
     /// Energy level per grid cell (normalized)
     pub energy_grid: Vec<f32>,
+    /// Tension level per grid cell (normalized)
+    pub tension_grid: Vec<f32>,
     /// Number of cells per grid position
     pub cell_count_grid: Vec<usize>,
     /// Total cells (including dead)
@@ -717,6 +793,23 @@ pub struct SubstrateView {
     pub activity_entropy: f32,
     /// System health (0.0 = dying, 1.0 = thriving)
     pub system_health: f32,
+    // === Advanced metrics for visualization ===
+    /// Maximum generation (lineage depth) - elite lineage indicator
+    pub max_generation: u32,
+    /// Average generation across alive cells
+    pub avg_generation: f32,
+    /// Elite cell count (generation > 10)
+    pub elite_count: usize,
+    /// Sparse dispatch savings (% of cells sleeping)
+    pub sparse_savings_percent: f32,
+    /// Average energy per cell
+    pub avg_energy: f32,
+    /// Average tension per cell
+    pub avg_tension: f32,
+    /// Total tension in the system (indicates desire to act)
+    pub total_tension: f32,
+    /// Tick per second (TPS) - computed externally but stored here
+    pub tps: f32,
 }
 
 // ============================================================================

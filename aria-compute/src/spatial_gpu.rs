@@ -409,10 +409,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                         states[cell_idx * 8u] = state0;
                         states[cell_idx * 8u + 1u] = state1;
 
-                        // Resonance-based energy
+                        // Resonance-based energy (threshold 0.1 for broader feeding)
                         let resonance = calculate_resonance(signal.content, state0, state1);
-                        if resonance > 0.3 {
-                            let understanding = (resonance - 0.3) / 0.7;
+                        if resonance > 0.1 {
+                            let understanding = (resonance - 0.1) / 0.9;
                             let energy_gain = config.signal_energy_base
                                 * intensity
                                 * understanding
@@ -480,10 +480,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                                 states[target_idx * 8u] = t_state0;
                                 states[target_idx * 8u + 1u] = t_state1;
 
-                                // Energy from connection-propagated signal
+                                // Energy from connection-propagated signal (threshold 0.1)
                                 let t_resonance = calculate_resonance(signal.content, t_state0, t_state1);
-                                if t_resonance > 0.3 {
-                                    let understanding = (t_resonance - 0.3) / 0.7;
+                                if t_resonance > 0.1 {
+                                    let understanding = (t_resonance - 0.1) / 0.9;
                                     let e_gain = config.signal_energy_base
                                         * conn_intensity
                                         * understanding
