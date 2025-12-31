@@ -297,16 +297,15 @@ impl Substrate {
                         *n = rng.gen_range(-0.1..0.1);
                     }
 
-                    // Inject tiny tension
+                    // Inject tiny tension (to create activity, not energy!)
                     for i in 0..SIGNAL_DIMS {
                         self.states[idx].state[i] += noise[i] * 0.3;
                     }
                     self.states[idx].tension += 0.02;
 
-                    // Energy maintenance: enough to survive hibernation
-                    // GPU drains ~0.003/sec, we give ~0.015/sec to touched cells
-                    // This creates a slow baseline metabolism
-                    self.states[idx].energy = (self.states[idx].energy + 0.003).min(1.2);
+                    // NO FREE ENERGY! "La Vraie Faim" - cells must earn energy through resonance
+                    // Background noise creates activity (tension) but doesn't feed cells
+                    // Only resonant signals provide energy (handled in backend)
                 }
             }
         }
@@ -466,8 +465,23 @@ impl Substrate {
         // Detect emergence
         let mut emergent = self.detect_emergence(current_tick);
 
-        // Spontaneous speech
+        // Spontaneous speech - NOW INJECTED INTO SUBSTRATE to wake cells!
         if let Some(spontaneous) = self.maybe_speak_spontaneously(current_tick) {
+            // Convert to SignalFragment and add to signal buffer for next tick
+            // This will wake sleeping cells that resonate with the spontaneous signal
+            let tension_8d: [f32; SIGNAL_DIMS] = std::array::from_fn(|i| {
+                spontaneous.content.get(i).copied().unwrap_or(0.0)
+            });
+            let position_8d = aria_core::tension::tension_to_position(&tension_8d);
+            let fragment = SignalFragment::external_at(tension_8d, position_8d, spontaneous.intensity * 3.0);
+
+            // Add to signal buffer so it propagates to cells
+            {
+                let mut buffer = self.signal_buffer.write();
+                buffer.push(fragment);
+            }
+
+            tracing::debug!("⚡ SPONTANEOUS INJECTED: intensity={:.2}", spontaneous.intensity * 3.0);
             emergent.push(spontaneous);
         }
 
