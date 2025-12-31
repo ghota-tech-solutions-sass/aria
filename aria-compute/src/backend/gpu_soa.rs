@@ -2801,12 +2801,12 @@ struct Config {
 
 const FLAG_SLEEPING: u32 = 1u;
 const FLAG_DEAD: u32 = 32u;
-// At ~1700 TPS, 100 ticks = ~0.06 seconds
-// We want death in ~2-3 minutes (120-180 seconds) for sleeping cells
-// Drain per run = 1.0 / (180 * 17) ≈ 0.00033 -> but that's slow
-// For more pressure: drain 0.01 per run = death in ~6 seconds when idle
-// This creates REAL selection pressure - talk to ARIA or she dies!
-const DRAIN_PER_RUN: f32 = 0.005;  // ~20 seconds to death if fully sleeping
+// At ~1000 TPS, 100 ticks = ~0.1 seconds = 10 drains/sec
+// We want death in ~3-5 minutes (180-300 seconds) for sleeping cells
+// With 1.0 energy: 0.0003 * 10/sec = 0.003/sec -> ~333 seconds to death
+// With 0.3 energy: ~100 seconds to death (manageable!)
+// This creates gentle pressure - hibernation isn't free, but isn't death
+const DRAIN_PER_RUN: f32 = 0.0003;  // Gentle hibernation cost
 
 @group(0) @binding(0) var<storage, read_write> energies: array<CellEnergy>;
 @group(0) @binding(1) var<storage, read_write> flags: array<u32>;

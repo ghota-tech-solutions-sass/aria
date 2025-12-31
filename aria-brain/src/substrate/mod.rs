@@ -278,17 +278,19 @@ impl Substrate {
         };
 
         // === BACKGROUND NOISE: Prevent entropy=0 freeze ===
-        // Inject tiny random perturbations to keep the system alive
+        // Inject random perturbations to keep the system alive
         // This acts like "neural noise" in biological brains
-        if current_tick % 50 == 0 && signals.is_empty() {
+        // Also provides baseline energy to prevent mass starvation
+        if current_tick % 20 == 0 {
             use rand::Rng;
             let mut rng = rand::thread_rng();
 
-            // Wake up 0.1% of sleeping cells with random noise
-            let num_to_wake = (self.cells.len() / 1000).max(10);
-            for _ in 0..num_to_wake {
+            // Touch 1% of cells with random noise (increased from 0.1%)
+            // This provides enough background activity to prevent complete freeze
+            let num_to_touch = (self.cells.len() / 100).max(50);
+            for _ in 0..num_to_touch {
                 let idx = rng.gen_range(0..self.states.len());
-                if self.states[idx].is_sleeping() && !self.states[idx].is_dead() {
+                if !self.states[idx].is_dead() {
                     // Generate small random noise signal
                     let mut noise = [0.0f32; SIGNAL_DIMS];
                     for n in noise.iter_mut() {
@@ -297,12 +299,14 @@ impl Substrate {
 
                     // Inject tiny tension
                     for i in 0..SIGNAL_DIMS {
-                        self.states[idx].state[i] += noise[i] * 0.5;
+                        self.states[idx].state[i] += noise[i] * 0.3;
                     }
-                    self.states[idx].tension += 0.05;
+                    self.states[idx].tension += 0.02;
 
-                    // Small energy boost to prevent starvation
-                    self.states[idx].energy = (self.states[idx].energy + 0.01).min(1.0);
+                    // Energy maintenance: enough to survive hibernation
+                    // GPU drains ~0.003/sec, we give ~0.015/sec to touched cells
+                    // This creates a slow baseline metabolism
+                    self.states[idx].energy = (self.states[idx].energy + 0.003).min(1.2);
                 }
             }
         }
