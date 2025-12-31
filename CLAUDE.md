@@ -143,15 +143,47 @@ Nouveau système pour éviter l'entropie = 0 (système gelé) :
 
 La grille Neural Activity montre maintenant les cellules dormantes (énergie × 0.2) pour ne plus être vide quand 99% des cellules dorment.
 
+**7. Bruit stochastique (anti-pattern statique)**
+
+Le même mot "Moka" ne génère plus exactement le même vecteur :
+```rust
+// Dans text_to_tension() - 10% de variation aléatoire
+let noise = rng.gen_range(-0.1..0.1);
+*t = (*t + noise).clamp(-1.0, 1.0);
+```
+
+**8. Feedback Loop (boucle de rétroaction)**
+
+Quand ARIA émet et que l'utilisateur répond rapidement :
+- Les cellules qui ont participé à l'émission reçoivent un bonus d'énergie
+- "Je bouge, le monde me répond, donc j'existe"
+```rust
+// Dans inject_signal - si réponse < 500 ticks après émission
+let feedback_bonus = 0.1 * (1.0 - ticks_since_emit / 500.0);
+```
+
+**9. Harmoniques 16D (expansion spectrale)**
+
+Le vecteur 8D de tension est étendu en 16D avec des harmoniques :
+```rust
+// Dimensions 0-7: signal direct
+// Dimensions 8-11: produits croisés (arousal×valence, etc.)
+// Dimensions 12-13: différences (arousal-intensity, etc.)
+// Dimensions 14-15: modulations sinusoïdales
+```
+
 #### Fichiers modifiés
 
 | Fichier | Changement |
 |---------|------------|
-| `aria-core/src/config.rs` | Coûts réduits, énergie augmentée |
+| `aria-core/src/config.rs` | Coûts réduits, signal_radius 15.0 |
+| `aria-core/src/tension.rs` | Bruit stochastique + harmoniques 16D |
 | `aria-compute/src/backend/cpu.rs` | Seuil résonance 0.1 |
 | `aria-compute/src/backend/gpu_soa.rs` | Seuil résonance 0.1 |
 | `aria-compute/src/spatial_gpu.rs` | Seuil résonance 0.1 (2 endroits) |
-| `aria-brain/src/substrate/mod.rs` | Bruit de fond + visualisation |
+| `aria-brain/src/substrate/mod.rs` | Bruit de fond + visualisation + last_emission_cells |
+| `aria-brain/src/substrate/signals.rs` | Feedback loop + harmoniques |
+| `aria-brain/src/substrate/emergence.rs` | Tracking des cellules émettrices |
 
 #### Nouvelle économie
 

@@ -100,6 +100,15 @@ impl Substrate {
             // META-LEARNING: Evaluate this response
             self.evaluate_response(coherence, coherence, current_tick);
 
+            // === FEEDBACK LOOP (Gemini suggestion) ===
+            // Store cells that participated in this emission
+            // If user responds, these cells get a plasticity bonus
+            {
+                let cell_indices: Vec<usize> = active_states.iter().map(|(i, _)| *i).collect();
+                let mut last_cells = self.last_emission_cells.write();
+                *last_cells = cell_indices;
+            }
+
             // === PHYSICAL INTELLIGENCE: Emit tension, not words ===
             let emotional = self.emotional_state.read();
             let tension_signal = self.generate_tension_response(&emergent_tension, coherence, &emotional);

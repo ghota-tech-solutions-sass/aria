@@ -134,6 +134,9 @@ pub struct Substrate {
     /// Last emission tick (anti-spam cooldown)
     last_emission_tick: AtomicU64,
 
+    /// Cells that participated in last emission (for feedback loop - Gemini suggestion)
+    last_emission_cells: RwLock<Vec<usize>>,
+
     /// Last spontaneous emission tick (separate cooldown for exploration)
     last_spontaneous_tick: AtomicU64,
 
@@ -235,6 +238,7 @@ impl Substrate {
             emotional_state: RwLock::new(EmotionalState::default()),
             last_interaction_tick: AtomicU64::new(0),
             last_emission_tick: AtomicU64::new(0),
+            last_emission_cells: RwLock::new(Vec::new()),
             last_spontaneous_tick: AtomicU64::new(0),
             adaptive_params: RwLock::new(adaptive_params),
             signal_buffer: RwLock::new(Vec::new()),

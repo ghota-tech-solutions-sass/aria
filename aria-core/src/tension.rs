@@ -18,6 +18,12 @@
 //! 6. **Complexity**: simple (0) ↔ complex (1)
 //! 7. **Novelty**: repetitive (0) ↔ varied (1)
 //!
+//! ## Stochastic Variation (Gemini suggestion)
+//!
+//! The same word "Moka" should NOT produce the exact same vector every time.
+//! A small phase noise forces cells to develop GENERALIZATION (a resonance zone)
+//! rather than dead mathematical precision.
+//!
 //! ## Why?
 //!
 //! A baby doesn't understand "I love you" semantically.
@@ -25,6 +31,7 @@
 //! ARIA should be the same - resonating with vibration, not meaning.
 
 use crate::SIGNAL_DIMS;
+use rand::Rng;
 
 /// 8D Tension vector - the physical qualities of a message
 pub type TensionVector = [f32; SIGNAL_DIMS];
@@ -136,8 +143,17 @@ pub fn text_to_tension(text: &str) -> TensionVector {
     let variety = (unique_chars / len.max(1.0)).clamp(0.0, 1.0);
     tension[7] = (variety - repetition_penalty).clamp(0.0, 1.0);
 
-    // Normalize to [-10, 10] range for cell space compatibility
-    // But keep values in [-1, 1] for signal content
+    // === STOCHASTIC VARIATION (Gemini suggestion) ===
+    // Add small random noise to prevent "dead mathematical precision"
+    // The same "Moka" at morning should vibrate slightly differently than at evening
+    // This forces cells to develop GENERALIZATION rather than exact matching
+    let mut rng = rand::thread_rng();
+    let noise_scale = 0.1; // 10% variation
+    for t in tension.iter_mut() {
+        let noise = rng.gen_range(-noise_scale..noise_scale);
+        *t = (*t + noise).clamp(-1.0, 1.0);
+    }
+
     tension
 }
 
@@ -164,6 +180,52 @@ pub fn tension_to_position(tension: &TensionVector) -> [f32; SIGNAL_DIMS] {
         }
     }
     position
+}
+
+/// Expand 8D tension to 16D with harmonics (Gemini suggestion)
+///
+/// The 8D tension vector is too "flat" for a 16D cell space.
+/// Harmonics create a spectral signature that resonates differently
+/// at different positions in the 16D substrate.
+///
+/// Dimensions 0-7: Base signal (tension direct)
+/// Dimensions 8-15: Harmonics (cross-products and modulations)
+pub fn tension_to_harmonics_16d(tension: &TensionVector) -> [f32; 16] {
+    let mut harmonics = [0.0f32; 16];
+
+    // First 8 dimensions: direct tension values (scaled to cell space)
+    for i in 0..SIGNAL_DIMS {
+        if i == 1 {
+            harmonics[i] = tension[i] * 10.0; // valence: -1..1 → -10..10
+        } else {
+            harmonics[i] = tension[i] * 20.0 - 10.0; // 0..1 → -10..10
+        }
+    }
+
+    // Dimensions 8-15: Harmonic combinations
+    // These create "overtones" that differentiate signals spatially
+
+    // Arousal × Valence interaction (emotional intensity direction)
+    harmonics[8] = tension[0] * tension[1] * 10.0;
+
+    // Urgency × Intensity (pressure)
+    harmonics[9] = tension[2] * tension[3] * 10.0;
+
+    // Rhythm × Weight (physical texture)
+    harmonics[10] = tension[4] * tension[5] * 10.0;
+
+    // Complexity × Novelty (information density)
+    harmonics[11] = tension[6] * tension[7] * 10.0;
+
+    // Second-order harmonics: differences
+    harmonics[12] = (tension[0] - tension[3]).abs() * 10.0 - 5.0; // Arousal vs Intensity
+    harmonics[13] = (tension[1] - tension[2]).abs() * 10.0 - 5.0; // Valence vs Urgency
+
+    // Phase harmonics: sine-like modulations
+    harmonics[14] = (tension[0] * std::f32::consts::PI).sin() * tension[4] * 10.0;
+    harmonics[15] = (tension[1] * std::f32::consts::PI).cos() * tension[5] * 10.0;
+
+    harmonics
 }
 
 #[cfg(test)]

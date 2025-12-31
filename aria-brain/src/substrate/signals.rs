@@ -27,6 +27,31 @@ impl Substrate {
             memory.stats.total_interactions += 1;
         }
 
+        // === FEEDBACK LOOP (Gemini suggestion) ===
+        // If user responds shortly after ARIA emitted, reward the cells that participated
+        // "I acted, the world responded, therefore I exist"
+        let last_emit = self.last_emission_tick.load(Ordering::Relaxed);
+        let ticks_since_emit = current_tick.saturating_sub(last_emit);
+        if ticks_since_emit < 500 {
+            // User responded within ~500 ticks of emission = feedback!
+            let feedback_bonus = 0.1 * (1.0 - ticks_since_emit as f32 / 500.0); // Faster = more bonus
+            let last_cells = self.last_emission_cells.read();
+            for &idx in last_cells.iter() {
+                if idx < self.states.len() && !self.states[idx].is_dead() {
+                    // Energy bonus for participating in useful emission
+                    self.states[idx].energy = (self.states[idx].energy + feedback_bonus).min(1.5);
+                    // Slight state reinforcement (plasticity)
+                    for s in self.states[idx].state.iter_mut() {
+                        *s *= 1.0 + feedback_bonus * 0.5;
+                    }
+                }
+            }
+            if !last_cells.is_empty() {
+                tracing::debug!("🔄 FEEDBACK LOOP: {} cells rewarded (bonus={:.3})",
+                    last_cells.len(), feedback_bonus);
+            }
+        }
+
         // Get tension vector from signal (already computed in Signal::from_text)
         // The first 8 dimensions are the tension values
         let tension_vector = signal.to_vector();
@@ -48,22 +73,22 @@ impl Substrate {
         let cell_scale = (self.cells.len() as f32 / 10_000.0).max(1.0);
         let base_intensity = signal.intensity * 5.0 * cell_scale;
 
-        // Use tension-based position (already calculated in Signal::from_text)
-        // Tension values map directly to cell space
-        let mut target_position_8d = [0.0f32; 8];
-        let mut target_position_16d = [0.0f32; 16];
+        // Build 8D tension array from signal content
+        let mut tension_8d = [0.0f32; SIGNAL_DIMS];
+        for i in 0..SIGNAL_DIMS {
+            tension_8d[i] = tension_vector.get(i).copied().unwrap_or(0.0);
+        }
 
+        // === HARMONICS (Gemini suggestion) ===
+        // Expand 8D tension to 16D with harmonic overtones
+        // This creates a spectral signature that resonates differently
+        // at different positions in the 16D substrate
+        let target_position_16d = aria_core::tension::tension_to_harmonics_16d(&tension_8d);
+
+        // 8D position for signal fragment (first 8 dimensions of harmonics)
+        let mut target_position_8d = [0.0f32; 8];
         for i in 0..8 {
-            // Tension is in [-1, 1] for valence, [0, 1] for others
-            // Scale to cell space [-10, 10]
-            let t = tension_vector.get(i).copied().unwrap_or(0.0);
-            let scaled = if i == 1 {
-                t * 10.0  // valence: -1..1 → -10..10
-            } else {
-                t * 20.0 - 10.0  // others: 0..1 → -10..10
-            };
-            target_position_8d[i] = scaled;
-            target_position_16d[i] = scaled;
+            target_position_8d[i] = target_position_16d[i];
         }
 
         // Create fragment with tension-based position
