@@ -183,6 +183,9 @@ pub struct AriaVisualizer {
     // Connection
     pub connected: bool,
     pub last_update: std::time::Instant,
+
+    // Auto-trainer status
+    pub trainer_status: String,
 }
 
 impl AriaVisualizer {
@@ -201,7 +204,12 @@ impl AriaVisualizer {
             view_mode: 0,
             connected: true,
             last_update: std::time::Instant::now(),
+            trainer_status: "AUTO: Off (press 'a' to start)".to_string(),
         }
+    }
+
+    pub fn set_trainer_status(&mut self, status: String) {
+        self.trainer_status = status;
     }
 
     pub fn update_substrate(&mut self, view: SubstrateView) {
@@ -603,6 +611,15 @@ impl AriaVisualizer {
     }
 
     fn draw_input(&self, frame: &mut Frame, area: Rect, input_buffer: &str) {
+        // Determine trainer status color
+        let trainer_color = if self.trainer_status.contains("ON") || self.trainer_status.contains("Vocabulary")
+            || self.trainer_status.contains("Associations") || self.trainer_status.contains("Conversation")
+            || self.trainer_status.contains("Emotional") {
+            Color::Cyan
+        } else {
+            Color::DarkGray
+        };
+
         let input = Paragraph::new(Line::from(vec![
             Span::styled(" > ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
             Span::raw(input_buffer),
@@ -615,10 +632,14 @@ impl AriaVisualizer {
                 Span::raw("=Good "),
                 Span::styled("n", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
                 Span::raw("=Bad "),
+                Span::styled("a", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::raw("=Auto "),
                 Span::styled("Tab", Style::default().fg(Color::Yellow)),
                 Span::raw("=View "),
                 Span::styled("Esc", Style::default().fg(Color::DarkGray)),
                 Span::raw("=Quit "),
+                Span::raw("│ "),
+                Span::styled(&self.trainer_status, Style::default().fg(trainer_color)),
             ]))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray)));

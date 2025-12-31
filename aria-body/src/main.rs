@@ -4,6 +4,7 @@
 //! It connects to the Brain and provides a terminal UI.
 
 mod signal;
+mod trainer;
 mod visualizer;
 
 use std::io::{self, Write};
@@ -19,6 +20,7 @@ use crossterm::{
 use ratatui::{backend::CrosstermBackend, Terminal};
 
 use signal::Signal;
+use trainer::Trainer;
 use visualizer::AriaVisualizer;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -339,6 +341,7 @@ async fn run_visual_mode() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut visualizer = AriaVisualizer::new();
     let mut input_buffer = String::new();
+    let mut trainer = Trainer::new();
 
     // Channel for incoming messages
     let (msg_tx, mut msg_rx) = mpsc::channel::<Signal>(100);
@@ -510,8 +513,23 @@ async fn run_visual_mode() -> Result<(), Box<dyn std::error::Error>> {
             let expression = signal.to_expression();
             // Extract context from signal label for conversation display
             let context = extract_context(&signal.label);
-            visualizer.add_expression(expression, context);
+            visualizer.add_expression(expression.clone(), context);
+
+            // Notify trainer of ARIA's response (for auto-feedback)
+            trainer.on_response(&expression);
         }
+
+        // Auto-training: send stimuli if enabled
+        if let Some(stimulus) = trainer.tick() {
+            visualizer.add_input(format!("[AUTO] {}", stimulus));
+            let signal = Signal::from_text(&stimulus);
+            if let Ok(json) = serde_json::to_string(&signal) {
+                let _ = write.send(Message::Text(json)).await;
+            }
+        }
+
+        // Update trainer status in visualizer
+        visualizer.set_trainer_status(trainer.status());
 
         // Handle stats updates
         while let Ok(stats) = stats_rx.try_recv() {
@@ -579,6 +597,12 @@ async fn run_visual_mode() -> Result<(), Box<dyn std::error::Error>> {
                                 if let Ok(json) = serde_json::to_string(&signal) {
                                     let _ = write.send(Message::Text(json)).await;
                                 }
+                                continue;
+                            } else if c == 'a' || c == 'A' {
+                                // Toggle auto-training
+                                trainer.toggle();
+                                let status = if trainer.enabled { "ON" } else { "OFF" };
+                                visualizer.add_input(format!("🤖 Auto-training: {}", status));
                                 continue;
                             }
                         }
