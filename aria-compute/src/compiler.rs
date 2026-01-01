@@ -23,16 +23,16 @@ impl ShaderCompiler {
 
         match metabolism_type {
             0 => { // Linear (standard)
-                logic.push_str(&format!("    cell_energy.energy += config.energy_gain * {:.4};\n", metabolism_gain_mod));
+                logic.push_str(&format!("    cell_energy.energy = cell_energy.energy + config.energy_gain * {:.4};\n", metabolism_gain_mod));
             }
             1 => { // Logistic (saturation)
-                logic.push_str(&format!("    cell_energy.energy += config.energy_gain * {:.4} * (1.0 - cell_energy.energy / config.energy_cap);\n", metabolism_gain_mod));
+                logic.push_str(&format!("    cell_energy.energy = cell_energy.energy + config.energy_gain * {:.4} * (1.0 - cell_energy.energy / config.energy_cap);\n", metabolism_gain_mod));
             }
             2 => { // Pulsed (oscillatory)
-                logic.push_str(&format!("    let pulse = 0.5 + 0.5 * sin(f32(config.tick) * 0.1);\n    cell_energy.energy += config.energy_gain * {:.4} * pulse;\n", metabolism_gain_mod));
+                logic.push_str(&format!("    let pulse = 0.5 + 0.5 * sin(f32(config.tick) * 0.1);\n    cell_energy.energy = cell_energy.energy + config.energy_gain * {:.4} * pulse;\n", metabolism_gain_mod));
             }
             _ => { // Tension-regulated
-                logic.push_str(&format!("    cell_energy.energy += config.energy_gain * {:.4} * (1.0 - cell_energy.tension);\n", metabolism_gain_mod));
+                logic.push_str(&format!("    cell_energy.energy = cell_energy.energy + config.energy_gain * {:.4} * (1.0 - cell_energy.tension);\n", metabolism_gain_mod));
             }
         }
 
@@ -41,18 +41,22 @@ impl ShaderCompiler {
         let decay_nonlinear = (checksum >> 12) & 0x01;
 
         if decay_nonlinear != 0 {
-             logic.push_str(&format!("    cell_energy.activity_level *= ({:.4} + 0.1 * (cell_energy.energy / config.energy_cap));\n", decay_rate - 0.1));
+            logic.push_str(&format!("    cell_energy.activity_level = cell_energy.activity_level * ({:.4} + 0.1 * (cell_energy.energy / config.energy_cap));\n", decay_rate - 0.1));
         } else {
-             logic.push_str(&format!("    cell_energy.activity_level *= {:.4};\n", decay_rate));
+            logic.push_str(&format!("    cell_energy.activity_level = cell_energy.activity_level * {:.4};\n", decay_rate));
         }
 
         // 3. Reflexivity processing (Bits 16-23)
         let reflex_pow = 0.5 + ((checksum >> 16) & 0x0F) as f32 * 0.125; // Range: 0.5 to 2.375
-        logic.push_str(&format!("    let reflexive_boost = pow(max(0.001, reflexivity_gain), {:.4});\n", reflex_pow));
+        logic.push_str(&format!("    let raw_reflex = pow(max(0.001, reflexivity_gain), {:.4});\n", reflex_pow));
 
         // 4. Selective Attention (Axe 3 - Genesis)
         logic.push_str("    let attention_boost = 0.5 + attention_focus * 1.5;\n");
         logic.push_str("    let semantic_threshold = semantic_filter * 0.2;\n");
+
+        // 5. Structural Hysteresis (Phase 6)
+        logic.push_str("    let hysteresis_val = cell_meta.hysteresis;\n");
+        logic.push_str("    let reflexive_boost = raw_reflex * (0.5 + 0.5 * hysteresis_val);\n");
 
         logic
     }
@@ -103,18 +107,25 @@ const SLEEP_COUNTER_MASK: u32 = 192u;
 const SLEEP_COUNTER_SHIFT: u32 = 6u;
 const SLEEP_COUNTER_MAX: u32 = 3u;
 
+struct CellMetadata {
+    flags: u32,
+    cluster_id: u32,
+    hysteresis: f32,
+    _pad: u32,
+}
+
 @group(0) @binding(0) var<storage, read_write> energies: array<CellEnergy>;
 @group(0) @binding(1) var<storage, read> positions: array<vec4<f32>>;
 @group(0) @binding(2) var<storage, read_write> states: array<vec4<f32>>;
-@group(0) @binding(3) var<storage, read_write> flags: array<u32>;
+@group(0) @binding(3) var<storage, read_write> metadata: array<CellMetadata>;
 @group(0) @binding(4) var<storage, read> dna_pool: array<vec4<f32>>;
 @group(0) @binding(5) var<storage, read> signals: array<vec4<f32>>;
 @group(0) @binding(6) var<uniform> config: Config;
 @group(0) @binding(7) var<storage, read> dna_indices: array<u32>;
 
 fn get_sleep_counter(f: u32) -> u32 { return (f & SLEEP_COUNTER_MASK) >> SLEEP_COUNTER_SHIFT; }
-fn set_sleep_counter(f: ptr<function, u32>, counter: u32) {
-    *f = (*f & ~SLEEP_COUNTER_MASK) | ((counter & 3u) << SLEEP_COUNTER_SHIFT);
+fn set_sleep_counter(f: u32, counter: u32) -> u32 {
+    return (f & ~SLEEP_COUNTER_MASK) | ((counter & 3u) << SLEEP_COUNTER_SHIFT);
 }
 
 @compute @workgroup_size(256)
@@ -122,21 +133,21 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let idx = id.x;
     if idx >= config.cell_count { return; }
     var cell_energy = energies[idx];
-    var cell_flags = flags[idx];
-    if (cell_flags & FLAG_DEAD) != 0u { return; }
+    var cell_meta = metadata[idx];
+    if (cell_meta.flags & FLAG_DEAD) != 0u { return; }
     let dna_idx = dna_indices[idx];
     let dna_base = dna_idx * 5u;
     let gene_sleep = dna_pool[dna_base+1u].y;
     let gene_wake = dna_pool[dna_base+1u].z;
-    if (cell_flags & FLAG_SLEEPING) != 0u {
+    if (cell_meta.flags & FLAG_SLEEPING) != 0u {
         if cell_energy.activity_level > gene_wake {
-            cell_flags &= ~FLAG_SLEEPING;
-            set_sleep_counter(&cell_flags, 0u);
+            cell_meta.flags = cell_meta.flags & ~FLAG_SLEEPING;
+            cell_meta.flags = set_sleep_counter(cell_meta.flags, 0u);
         } else {
             cell_energy.energy -= config.cost_rest * 0.1;
             cell_energy.energy += config.energy_gain;
-            if cell_energy.energy <= 0.0 { cell_flags |= FLAG_DEAD; }
-            energies[idx] = cell_energy; flags[idx] = cell_flags; return;
+            if cell_energy.energy <= 0.0 { cell_meta.flags = cell_meta.flags | FLAG_DEAD; }
+            energies[idx] = cell_energy; metadata[idx] = cell_meta; return;
         }
     }
 
@@ -147,12 +158,18 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     // [DYNAMIC_LOGIC]
     if cell_energy.activity_level < gene_sleep {
-        let counter = get_sleep_counter(cell_flags);
-        if counter >= SLEEP_COUNTER_MAX { cell_flags |= FLAG_SLEEPING; set_sleep_counter(&cell_flags, 0u); }
-        else { set_sleep_counter(&cell_flags, counter + 1u); }
-    } else { set_sleep_counter(&cell_flags, 0u); }
+        let counter = get_sleep_counter(cell_meta.flags);
+        if counter >= SLEEP_COUNTER_MAX {
+            cell_meta.flags = cell_meta.flags | FLAG_SLEEPING;
+            cell_meta.flags = set_sleep_counter(cell_meta.flags, 0u);
+        } else {
+            cell_meta.flags = set_sleep_counter(cell_meta.flags, counter + 1u);
+        }
+    } else {
+        cell_meta.flags = set_sleep_counter(cell_meta.flags, 0u);
+    }
     cell_energy.energy = clamp(cell_energy.energy, 0.0, config.energy_cap);
-    energies[idx] = cell_energy; flags[idx] = cell_flags;
+    energies[idx] = cell_energy; metadata[idx] = cell_meta;
 }
 "#;
 
@@ -166,10 +183,11 @@ struct Config {
 }
 const FLAG_SLEEPING: u32 = 1u;
 const FLAG_DEAD: u32 = 32u;
+struct CellMetadata { flags: u32, cluster_id: u32, hysteresis: f32, _pad: u32 }
 @group(0) @binding(0) var<storage, read_write> energies: array<CellEnergy>;
 @group(0) @binding(1) var<storage, read> positions: array<vec4<f32>>;
 @group(0) @binding(2) var<storage, read_write> states: array<vec4<f32>>;
-@group(0) @binding(3) var<storage, read_write> flags: array<u32>;
+@group(0) @binding(3) var<storage, read_write> metadata: array<CellMetadata>;
 @group(0) @binding(4) var<storage, read> dna_pool: array<vec4<f32>>;
 @group(0) @binding(5) var<storage, read> signals: array<vec4<f32>>;
 @group(0) @binding(6) var<uniform> config: Config;
@@ -179,7 +197,8 @@ const FLAG_DEAD: u32 = 32u;
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let idx = id.x;
     if idx >= config.cell_count { return; }
-    if (flags[idx] & (FLAG_SLEEPING | FLAG_DEAD)) != 0u { return; }
+    let cell_meta = metadata[idx];
+    if (cell_meta.flags & (FLAG_SLEEPING | FLAG_DEAD)) != 0u { return; }
     var cell_energy = energies[idx];
     let dna_idx = dna_indices[idx];
     let dna_base = dna_idx * 5u;
@@ -207,7 +226,8 @@ struct Config {
 }
 const FLAG_SLEEPING: u32 = 1u;
 const FLAG_DEAD: u32 = 32u;
-@group(0) @binding(0) var<storage, read> flags: array<u32>;
+struct CellMetadata { flags: u32, cluster_id: u32, hysteresis: f32, _pad: u32 }
+@group(0) @binding(0) var<storage, read> metadata: array<CellMetadata>;
 @group(0) @binding(1) var<storage, read_write> dispatch: SparseDispatch;
 @group(0) @binding(2) var<storage, read_write> indirect: array<u32>;
 @group(0) @binding(3) var<uniform> config: Config;
@@ -215,7 +235,7 @@ const FLAG_DEAD: u32 = 32u;
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let idx = id.x;
     if idx >= config.cell_count { return; }
-    let f = flags[idx];
+    let f = metadata[idx].flags;
     if (f & (FLAG_SLEEPING | FLAG_DEAD)) == 0u {
         let write_idx = atomicAdd(&dispatch.counter, 1u);
         if write_idx < arrayLength(&dispatch.indices) { dispatch.indices[write_idx] = idx; }
@@ -232,7 +252,8 @@ struct Config {
     signal_energy_base: f32, signal_resonance_factor: f32, energy_gain: f32,
     tick: u32, cell_count: u32, workgroup_size: u32, _pad: vec2<u32>
 }
-@group(0) @binding(0) var<storage, read> flags: array<u32>;
+struct CellMetadata { flags: u32, cluster_id: u32, hysteresis: f32, _pad: u32 }
+@group(0) @binding(0) var<storage, read> metadata: array<CellMetadata>;
 @group(0) @binding(1) var<storage, read_write> dispatch: SparseDispatch;
 @group(0) @binding(2) var<storage, read_write> indirect: IndirectArgs;
 @group(0) @binding(3) var<uniform> config: Config;
@@ -254,16 +275,21 @@ struct Config {
 }
 const FLAG_SLEEPING: u32 = 1u;
 const FLAG_DEAD: u32 = 32u;
+struct CellMetadata { flags: u32, cluster_id: u32, hysteresis: f32, _pad: u32 }
 @group(0) @binding(0) var<storage, read_write> energies: array<CellEnergy>;
-@group(0) @binding(1) var<storage, read_write> flags: array<u32>;
+@group(0) @binding(1) var<storage, read_write> metadata: array<CellMetadata>;
 @group(0) @binding(2) var<uniform> config: Config;
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let idx = id.x;
     if idx >= config.cell_count { return; }
-    if (flags[idx] & FLAG_SLEEPING) != 0u {
-        energies[idx].energy -= config.cost_rest * 0.1;
-        if energies[idx].energy <= 0.0 { flags[idx] |= FLAG_DEAD; }
+    var cell_meta = metadata[idx];
+    if (cell_meta.flags & FLAG_SLEEPING) != 0u {
+        var cell_energy = energies[idx];
+        cell_energy.energy -= config.cost_rest * 0.1;
+        if cell_energy.energy <= 0.0 { cell_meta.flags |= FLAG_DEAD; }
+        energies[idx] = cell_energy;
+        metadata[idx] = cell_meta;
     }
 }
 "#;
@@ -287,11 +313,12 @@ const FLAG_DEAD: u32 = 32u;
 const NO_CONNECTION: u32 = 0xFFFFFFFFu;
 const CONNECTION_SIGNAL_FACTOR: f32 = 0.5;
 const HUB_INFLUENCE_FACTOR: f32 = 0.1;
+struct CellMetadata { flags: u32, cluster_id: u32, hysteresis: f32, _pad: u32 }
 
 @group(0) @binding(0) var<storage, read_write> energies: array<CellEnergy>;
 @group(0) @binding(1) var<storage, read> positions: array<CellPosition>;
 @group(0) @binding(2) var<storage, read_write> states: array<vec4<f32>>;
-@group(0) @binding(3) var<storage, read_write> flags: array<u32>;
+@group(0) @binding(3) var<storage, read_write> metadata: array<CellMetadata>;
 @group(0) @binding(4) var<storage, read> signals: array<SignalFragment>;
 @group(0) @binding(5) var<storage, read> grid: array<GridRegion>;
 @group(0) @binding(6) var<uniform> config: Config;
@@ -337,8 +364,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                     let cell_idx = region.cell_indices[i];
                     if cell_idx >= config.cell_count { continue; }
                     var cell_energy = energies[cell_idx];
-                    var cell_flags = flags[cell_idx];
-                    if (cell_flags & FLAG_DEAD) != 0u { continue; }
+                    var cell_meta = metadata[cell_idx];
+                    if (cell_meta.flags & FLAG_DEAD) != 0u { continue; }
                     let cell_pos = positions[cell_idx];
                     var dist_sq = 0.0;
                     for (var d = 0u; d < 8u; d++) { let diff = cell_pos.position[d] - signal.position[d]; dist_sq += diff * diff; }
@@ -346,8 +373,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                     if dist >= config.signal_radius { continue; }
                     let attenuation = 1.0 - (dist / config.signal_radius);
                     let intensity = signal.intensity * attenuation * config.reaction_amplification;
-                    if (cell_flags & FLAG_SLEEPING) != 0u && intensity > 0.1 { cell_flags &= ~FLAG_SLEEPING; cell_energy.activity_level = 0.5; cell_energy.tension = 0.2; }
-                    if (cell_flags & FLAG_SLEEPING) == 0u {
+                    if (cell_meta.flags & FLAG_SLEEPING) != 0u && intensity > 0.1 { cell_meta.flags = cell_meta.flags & ~FLAG_SLEEPING; cell_energy.activity_level = 0.5; cell_energy.tension = 0.2; }
+                    if (cell_meta.flags & FLAG_SLEEPING) == 0u {
                         let dna_idx = dna_indices[cell_idx];
                         let dna_base = dna_idx * 5u;
                         let reflexivity_gain = dna_pool[dna_base+1u].w;
@@ -369,10 +396,50 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                         }
                         cell_energy.activity_level += dynamic_intensity;
                     }
-                    energies[cell_idx] = cell_energy; flags[cell_idx] = cell_flags;
+                    energies[cell_idx] = cell_energy; metadata[cell_idx] = cell_meta;
                 }
             }
         }
     }
+}
+"#;
+
+pub const CLUSTER_SYNTHESIS_TEMPLATE: &str = r#"
+struct CellMetadata {
+    flags: u32,
+    cluster_id: u32,
+    hysteresis: f32,
+    _pad: u32,
+}
+
+struct CellEnergy { energy: f32, tension: f32, activity_level: f32, _pad: f32 }
+
+@group(0) @binding(0) var<storage, read> energies: array<CellEnergy>;
+@group(0) @binding(3) var<storage, read> metadata: array<CellMetadata>;
+
+struct ClusterData {
+    center_tension: f32,
+    total_activity: f32,
+    cell_count: u32,
+    _pad: u32,
+}
+
+@group(1) @binding(0) var<storage, read_write> clusters: array<ClusterData>;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let idx = id.x;
+    let meta = metadata[idx];
+    if (meta.flags & 32u) != 0u { return; } // DEAD
+
+    let cid = meta.cluster_id;
+    if cid == 0u { return; }
+
+    let energy = energies[idx];
+
+    // Synthesis logic: accumulate into cluster center
+    // Use atomicAdd if possible or separate reduction pass
+    // For now, simple stable placeholder
+    clusters[cid].total_activity += energy.activity_level;
 }
 "#;

@@ -7,6 +7,8 @@
 //! What you "hear" is the physical state of her being, not language.
 
 use super::*;
+use crate::memory::{ProtoConcept, WorkingContent};
+use std::collections::HashMap;
 
 impl Substrate {
     /// Detect emergence and generate tension responses
@@ -173,7 +175,63 @@ impl Substrate {
         signal
     }
 
-    // NOTE: generate_babble, maybe_recall_memory, and generate_word_response
-    // removed in Session 20 (Physical Intelligence)
     // ARIA now emits tension patterns instead of words
+    pub(super) fn conceptualize(&self, current_tick: u64) {
+        if current_tick % 100 != 0 { return; }
+
+        // Statistical sampling of clusters
+        let mut cluster_data: HashMap<u32, (Vec<f32>, f32, usize)> = HashMap::new();
+
+        for state in &self.states {
+            if state.cluster_id > 0 && !state.is_dead() {
+                let entry = cluster_data.entry(state.cluster_id).or_insert((vec![0.0f32; SIGNAL_DIMS], 0.0f32, 0));
+                for (j, &val) in state.state.iter().take(SIGNAL_DIMS).enumerate() {
+                    entry.0[j] += val;
+                }
+                entry.1 += state.hysteresis;
+                entry.2 += 1;
+            }
+        }
+
+        let mut memory = self.memory.write();
+        for (cid, (sum_vec, sum_h, count)) in cluster_data {
+            if count < 5 { continue; } // Minimum density to be a "concept"
+
+            let avg_h = sum_h / count as f32;
+            let mut signature = [0.0f32; 8];
+            for (j, val) in sum_vec.iter().enumerate() {
+                signature[j] = val / count as f32;
+            }
+
+            // Promote or update ProtoConcept
+            let concept = memory.proto_concepts.entry(cid).or_insert_with(|| ProtoConcept {
+                cluster_id: cid,
+                name: format!("Concept-{}", cid),
+                signature,
+                stability: avg_h,
+                related_words: Vec::new(),
+                emerged_at: current_tick,
+            });
+
+            concept.signature = signature;
+            concept.stability = avg_h;
+
+            // If highly stable, it enters the conscious "Working Memory"
+            if avg_h > 0.7 && count > 20 {
+                memory.working.push(WorkingContent::Concept(cid), 0.5, current_tick);
+
+                // Also inject back as a reflexivity signal if very strong
+                if avg_h > 0.9 {
+                    let fragment = SignalFragment::new(
+                        u64::MAX - 1, // ID for Conceptual Reflexivity
+                        signature,
+                        aria_core::tension::tension_to_position(&signature),
+                        avg_h * 1.5
+                    );
+                    let mut buffer = self.signal_buffer.write();
+                    buffer.push(fragment);
+                }
+            }
+        }
+    }
 }

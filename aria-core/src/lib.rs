@@ -42,7 +42,7 @@ pub use config::AriaConfig;
 pub use error::AriaError;
 pub use traits::*;
 pub use soa::{
-    CellEnergy, CellPosition, CellInternalState, CellFlags, SoABuffers, IndirectDispatchArgs,
+    CellEnergy, CellPosition, CellInternalState, CellMetadata, SoABuffers, IndirectDispatchArgs,
     // Hebbian learning
     CellConnections, MAX_CONNECTIONS,
     HEBBIAN_COACTIVATION_THRESHOLD, HEBBIAN_STRENGTHEN_RATE, HEBBIAN_DECAY_RATE, HEBBIAN_MAX_STRENGTH,

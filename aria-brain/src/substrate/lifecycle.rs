@@ -193,6 +193,7 @@ impl Substrate {
                             activity: 0.5,
                             exploring: true,
                             is_elite: true,
+                            hysteresis: 0.0,
                         };
                         let child_dna = DNA::from_parent_adaptive(
                             parent_dna,
@@ -234,6 +235,7 @@ impl Substrate {
                         activity: 0.5,
                         exploring: true,
                         is_elite: parent_idx < 3, // Top 3 are elite
+                        hysteresis: 0.0,
                     };
                     let child_dna = DNA::from_parent_adaptive(
                         parent_dna,

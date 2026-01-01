@@ -42,6 +42,8 @@ pub enum WorkingContent {
     Goal(String),
     /// A memory being recalled
     RecalledMemory(u64), // episode ID
+    /// An emergent concept from GPU clusters (Phase 6)
+    Concept(u32), // cluster_id
 }
 
 /// Working memory - what ARIA is thinking about RIGHT NOW

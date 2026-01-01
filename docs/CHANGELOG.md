@@ -6,6 +6,20 @@ Historique des sessions de développement.
 
 ## 2026-01-01
 
+### Session 24: CellMetadata & Naga Fix
+- **Migration `CellFlags` → `CellMetadata`**
+  - Nouveau struct 16 bytes : `flags`, `cluster_id`, `hysteresis`, `_pad`
+  - Préparation Phase 6 : Semantic Synthesis et Structural Stability
+- **Fix critique compilateur WGSL (naga)**
+  - Erreur `Expression [50] is not cached!` corrigée
+  - Cause : opérateurs compound (`&=`, `|=`) sur champs de struct
+  - Cause : pointeurs vers champs de struct (`ptr<function, u32>`)
+  - Solution : assignations explicites et return values
+- **GPU backend stabilisé**
+  - AMD Radeon NAVI14 (Vulkan) fonctionnel
+  - JIT compilation + Hot-reloading opérationnels
+  - 100% sparse savings au repos
+
 ### Session 23: ARIA Genesis (Structural Evolution)
 - **Compilation JIT (Just-In-Time)**
   - Nouveau module `compiler.rs` centralisant les templates WGSL
@@ -200,7 +214,8 @@ Historique des sessions de développement.
 | 2025-12-29 | ARIA se modifie elle-même (AGI milestone) |
 | 2025-12-30 | "La Vraie Faim" - pression évolutive activée |
 | 2025-12-30 | Architecture 5M+ cellules (SoA, Hysteresis, Spatial Hash GPU) |
+| 2026-01-01 | Session 24: Fix naga, GPU backend stabilisé |
 
 ---
 
-*Mis à jour le 2026-01-01 | Version 0.9.0*
+*Mis à jour le 2026-01-01 | Version 0.9.1*

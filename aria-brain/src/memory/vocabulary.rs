@@ -74,3 +74,20 @@ pub struct WordMeaning {
     /// Times encountered
     pub frequency: u64,
 }
+
+/// ProtoConcept - Bridge between GPU clusters and symbolic language (Phase 6)
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ProtoConcept {
+    /// ID of the cluster in the GPU backend
+    pub cluster_id: u32,
+    /// Temporary name (e.g., "Concept-12") until a word is mapped
+    pub name: String,
+    /// Semantic signature (average vector of member cells)
+    pub signature: [f32; 8],
+    /// Survival/Stability score (based on hysteresis)
+    pub stability: f32,
+    /// Words that are most associated with this conceptual signature
+    pub related_words: Vec<(String, f32)>,
+    /// When this concept first emerged
+    pub emerged_at: u64,
+}

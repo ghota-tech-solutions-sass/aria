@@ -42,6 +42,8 @@ pub struct MutationContext {
     pub exploring: bool,
     /// Is this DNA from the elite pool? (reduces mutation)
     pub is_elite: bool,
+    /// Structural hysteresis lock 0.0-1.0 (higher = more stable)
+    pub hysteresis: f32,
 }
 
 /// Computational DNA - defines the "character" of a cell
@@ -133,11 +135,16 @@ impl DNA {
         // Elite protection: elite DNA mutates at 20% rate
         let elite_factor = if ctx.is_elite { 0.2 } else { 1.0 };
 
+        // Hysteresis factor (Phase 6 - Axe 2)
+        // High hysteresis = high stability (lower mutation)
+        let hysteresis_factor = 1.0 - ctx.hysteresis;
+
         // Combine all factors
         let rate = (base_rate * age_factor * fitness_factor * activity_factor
             * exploration_bonus
-            * elite_factor)
-            .clamp(0.01, 0.5); // Min 1%, max 50% mutation rate
+            * elite_factor
+            * hysteresis_factor)
+            .clamp(0.0, 0.5); // Min 0%, max 50% mutation rate
 
         // Magnitude also varies: younger/exploring cells have larger mutations
         // Young cells (age_factor ~1.0) get larger mutations
@@ -172,6 +179,12 @@ impl DNA {
                 let delta = rng.gen::<f32>() * magnitude * 2.0 - magnitude;
                 *r = (*r + delta).clamp(0.0, 1.0);
             }
+        }
+
+        // Structural mutation (Phase 6 - Axe 2)
+        // Extremely rare, and blocked by hysteresis
+        if rate > 0.0 && rng.gen::<f32>() < (rate * 0.01).clamp(0.0, 0.001) {
+             self.structural_checksum = rng.gen();
         }
     }
 

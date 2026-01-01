@@ -97,24 +97,19 @@ impl Default for CellInternalState {
 }
 
 /// Cell flags (compact booleans)
-/// Buffer: u32[] - one per cell
-///
-/// Bit layout:
-/// - bit 0: is_sleeping
-/// - bit 1: wants_to_divide
-/// - bit 2: wants_to_signal
-/// - bit 3: wants_to_connect
-/// - bit 4: wants_to_move
-/// - bit 5: is_dead
-/// - bits 6-7: sleep_counter (0-3 for hysteresis)
-/// - bits 8-31: reserved
+/// Cell metadata (flags, cluster, hysteresis)
+/// Buffer: CellMetadata[] - one per cell
+/// Size: 16 bytes per cell
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 #[repr(C)]
-pub struct CellFlags {
+pub struct CellMetadata {
     pub flags: u32,
+    pub cluster_id: u32,
+    pub hysteresis: f32,
+    pub _pad: u32,
 }
 
-impl CellFlags {
+impl CellMetadata {
     pub const SLEEPING: u32 = 1 << 0;
     pub const WANTS_DIVIDE: u32 = 1 << 1;
     pub const WANTS_SIGNAL: u32 = 1 << 2;
@@ -122,12 +117,17 @@ impl CellFlags {
     pub const WANTS_MOVE: u32 = 1 << 4;
     pub const DEAD: u32 = 1 << 5;
 
-    // Hysteresis counter (2 bits: 0-3)
+    // Hysteresis counter (legacy 2 bits: 0-3)
     pub const SLEEP_COUNTER_MASK: u32 = 0b11 << 6;
     pub const SLEEP_COUNTER_SHIFT: u32 = 6;
 
     pub fn new() -> Self {
-        Self { flags: 0 }
+        Self {
+            flags: 0,
+            cluster_id: 0,
+            hysteresis: 0.0,
+            _pad: 0,
+        }
     }
 
     #[inline]
@@ -177,7 +177,7 @@ impl CellFlags {
     }
 }
 
-impl Default for CellFlags {
+impl Default for CellMetadata {
     fn default() -> Self {
         Self::new()
     }
@@ -349,7 +349,7 @@ pub struct SoABuffers {
     pub energies: Vec<CellEnergy>,
     pub positions: Vec<CellPosition>,
     pub states: Vec<CellInternalState>,
-    pub flags: Vec<CellFlags>,
+    pub metadata: Vec<CellMetadata>,
 }
 
 impl SoABuffers {
@@ -366,7 +366,7 @@ impl SoABuffers {
             states: (0..cell_count)
                 .map(|_| CellInternalState::new())
                 .collect(),
-            flags: (0..cell_count).map(|_| CellFlags::new()).collect(),
+            metadata: (0..cell_count).map(|_| CellMetadata::new()).collect(),
         }
     }
 
@@ -392,7 +392,12 @@ impl SoABuffers {
                 .iter()
                 .map(|s| CellInternalState { state: s.state })
                 .collect(),
-            flags: states.iter().map(|s| CellFlags { flags: s.flags }).collect(),
+            metadata: states.iter().map(|s| CellMetadata {
+                flags: s.flags,
+                cluster_id: s.cluster_id,
+                hysteresis: s.hysteresis,
+                _pad: 0,
+            }).collect(),
         }
     }
 
@@ -410,8 +415,10 @@ impl SoABuffers {
             if i < self.states.len() {
                 state.state = self.states[i].state;
             }
-            if i < self.flags.len() {
-                state.flags = self.flags[i].flags;
+            if i < self.metadata.len() {
+                state.flags = self.metadata[i].flags;
+                state.cluster_id = self.metadata[i].cluster_id;
+                state.hysteresis = self.metadata[i].hysteresis;
             }
         }
     }
@@ -445,8 +452,8 @@ mod tests {
     }
 
     #[test]
-    fn test_cell_flags_size() {
-        assert_eq!(std::mem::size_of::<CellFlags>(), 4);
+    fn test_cell_metadata_size() {
+        assert_eq!(std::mem::size_of::<CellMetadata>(), 16);
     }
 
     #[test]

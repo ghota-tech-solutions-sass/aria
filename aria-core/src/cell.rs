@@ -72,8 +72,15 @@ pub struct CellState {
     /// - bit 5: is_dead
     pub flags: u32,
 
-    /// Reserved for alignment and future use
-    _reserved: [f32; 4],
+    /// Cluster ID (Phase 6 - Semantic Synthesis)
+    pub cluster_id: u32,
+
+    /// Mutation hysteresis (Phase 6 - Structural Stability)
+    /// 0.0 = fully mutable, 1.0 = structurally locked
+    pub hysteresis: f32,
+
+    /// Reserved for alignment and future use (Total struct size = 256 bytes)
+    _reserved: [f32; 10],
 }
 
 impl CellState {
@@ -95,7 +102,9 @@ impl CellState {
             tension: 0.0,
             activity_level: 1.0, // Start awake
             flags: 0,
-            _reserved: [0.0; 4],
+            cluster_id: 0,
+            hysteresis: 0.0,
+            _reserved: [0.0; 10],
         }
     }
 

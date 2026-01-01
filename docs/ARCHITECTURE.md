@@ -392,4 +392,4 @@ ARIA's emergent thoughts are réinjected into her substrate as internal sensory 
 
 ---
 
-*Version 0.7.0 | Updated 2026-01-01*
+*Version 0.9.1 | Updated 2026-01-01*

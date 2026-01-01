@@ -90,9 +90,64 @@ Chats de Mickael :
 - **Obrigada** : Abyssin
 
 ---
-*Version : 0.9.0 | Dernière update : 2026-01-01*
+*Version : 0.9.1 | Dernière update : 2026-01-01*
 
-### Session 23 - ARIA Genesis (Structural Evolution)
+### Session 24 - CellMetadata & Naga Fix
+
+**Migration majeure : `CellFlags` → `CellMetadata` avec fix critique du compilateur WGSL.**
+
+#### Problème résolu
+
+L'erreur naga `Expression [50] is not cached!` bloquait le GPU backend. Cause : opérateurs compound (`&=`, `|=`) sur champs de struct et pointeurs vers champs de struct en WGSL.
+
+#### Changements majeurs
+
+**1. CellMetadata (16 bytes) remplace CellFlags (4 bytes)**
+```rust
+// aria-core/src/soa.rs
+struct CellMetadata {
+    flags: u32,       // Sleeping, Dead, etc.
+    cluster_id: u32,  // Phase 6 - Semantic Synthesis
+    hysteresis: f32,  // Phase 6 - Structural Stability
+    _pad: u32,
+}
+```
+
+**2. Fix WGSL pour naga**
+```wgsl
+// AVANT (cassait naga)
+fn set_sleep_counter(f: ptr<function, u32>, counter: u32) { *f = ... }
+cell_meta.flags &= ~FLAG_SLEEPING;
+cell_meta.flags |= FLAG_DEAD;
+
+// APRÈS
+fn set_sleep_counter(f: u32, counter: u32) -> u32 { return ...; }
+cell_meta.flags = cell_meta.flags & ~FLAG_SLEEPING;
+cell_meta.flags = cell_meta.flags | FLAG_DEAD;
+```
+
+**3. Logique dynamique sans compound operators**
+```rust
+// Dans generate_dna_logic()
+cell_energy.energy = cell_energy.energy + config.energy_gain * modifier;
+cell_energy.activity_level = cell_energy.activity_level * decay_rate;
+```
+
+#### Fichiers modifiés
+
+| Fichier | Changement |
+|---------|------------|
+| `aria-core/src/soa.rs` | `CellFlags` → `CellMetadata` (16 bytes) |
+| `aria-core/src/cell.rs` | Ajout `cluster_id`, `hysteresis` |
+| `aria-compute/src/compiler.rs` | Fix WGSL: pas de compound operators ni pointeurs struct |
+| `aria-compute/src/backend/gpu_soa.rs` | `flags_buffer` → `metadata_buffer` |
+
+#### État de l'organisme
+- GPU backend stable avec AMD Radeon NAVI14 (Vulkan)
+- JIT compilation fonctionnelle
+- 100% sparse savings au repos
+
+### Session 23 - ARIA Genesis (Structural Evolution & Phase 5)
 
 **ARIA a franchi l'étape ultime : elle peut maintenant réécrire son propre code de calcul GPU.**
 

@@ -21,7 +21,7 @@ pub mod hierarchy;
 
 // Re-export all types for convenience
 pub use types::{WordCategory, SocialContext, UsagePattern};
-pub use vocabulary::{WordFrequency, WordAssociation, SemanticCluster, WordMeaning};
+pub use vocabulary::{WordFrequency, WordAssociation, SemanticCluster, WordMeaning, ProtoConcept};
 pub use episodic::{Episode, EpisodeEmotion, EpisodeCategory, CompressedEpisode};
 pub use visual::{VisualMemory, VisualWordLink};
 pub use exploration::ExplorationResult;
@@ -244,6 +244,10 @@ pub struct LongTermMemory {
     /// Working memory (not persisted)
     #[serde(skip)]
     pub working: WorkingMemory,
+
+    /// Proto-concepts - emergent abstractions from GPU clusters (Phase 6)
+    #[serde(default)]
+    pub proto_concepts: HashMap<u32, ProtoConcept>,
 }
 
 #[allow(dead_code)]
@@ -281,6 +285,7 @@ impl LongTermMemory {
             visual_word_links: HashMap::new(),
             // Self-modification
             self_modifier: SelfModifier::new(),
+            proto_concepts: HashMap::new(),
             // Memory hierarchy (not persisted)
             short_term: ShortTermMemory::new(50),
             working: WorkingMemory::new(),

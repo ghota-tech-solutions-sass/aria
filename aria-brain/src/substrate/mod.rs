@@ -424,8 +424,42 @@ impl Substrate {
 
         let actions = all_actions;
 
+        // === CLUSTER MAINTENANCE & HYSTERESIS (Phase 6 - Axe 2) ===
+        if current_tick % 50 == 0 {
+            // In a real implementation with millions of cells, this would be partially
+            // delegated to GPU or optimized. Here we do a statistical sampling.
+            let mut cluster_activity = std::collections::HashMap::new();
+            let mut cluster_counts = std::collections::HashMap::new();
+
+            // Calculate cluster stability
+            for state in &self.states {
+                if state.cluster_id > 0 && !state.is_dead() {
+                    *cluster_activity.entry(state.cluster_id).or_insert(0.0) += state.activity_level;
+                    *cluster_counts.entry(state.cluster_id).or_insert(0) += 1;
+                }
+            }
+
+            // Update hysteresis based on cluster activity
+            for state in &mut self.states {
+                if state.cluster_id > 0 {
+                    let avg_activity = cluster_activity.get(&state.cluster_id).cloned().unwrap_or(0.0)
+                        / cluster_counts.get(&state.cluster_id).cloned().unwrap_or(1) as f32;
+
+                    if avg_activity > 0.6 {
+                        // Stable & Active: lock it in!
+                        state.hysteresis = (state.hysteresis + 0.05).min(1.0);
+                    } else if avg_activity < 0.2 {
+                        // Fading out: release bond
+                        state.hysteresis = (state.hysteresis - 0.02).max(0.0);
+                    }
+                } else {
+                    // No cluster: decay hysteresis faster
+                    state.hysteresis = (state.hysteresis - 0.1).max(0.0);
+                }
+            }
+        }
+
         // Increment age less frequently to reduce CPU overhead
-        // (Every 100 ticks instead of every tick)
         if current_tick % 100 == 0 {
             for cell in &mut self.cells {
                 cell.age += 100;
@@ -463,6 +497,7 @@ impl Substrate {
                                 activity: parent_state.activity_level,
                                 exploring: !parent.activity.sleeping, // Active cells are exploring
                                 is_elite,
+                                hysteresis: parent_state.hysteresis,
                             };
 
                             // Create child DNA with adaptive mutation
@@ -532,7 +567,8 @@ impl Substrate {
             self.natural_selection();
         }
 
-        // Detect emergence
+        // Detect emergence (Axe 3 - Genesis & Phase 6)
+        self.conceptualize(current_tick);
         let mut emergent = self.detect_emergence(current_tick);
 
         // Spontaneous speech - NOW INJECTED INTO SUBSTRATE to wake cells!

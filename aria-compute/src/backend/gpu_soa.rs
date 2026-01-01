@@ -24,7 +24,7 @@ use aria_core::dna::DNA;
 use aria_core::error::{AriaError, AriaResult};
 use aria_core::signal::{Signal, SignalFragment};
 use aria_core::soa::{
-    CellConnections, CellEnergy, CellFlags, CellInternalState, CellPosition, IndirectDispatchArgs,
+    CellConnections, CellEnergy, CellMetadata, CellInternalState, CellPosition, IndirectDispatchArgs,
 };
 use aria_core::traits::{BackendStats, ComputeBackend};
 use bytemuck::{Pod, Zeroable};
@@ -94,7 +94,7 @@ pub struct GpuSoABackend {
     energy_buffer: Option<wgpu::Buffer>,
     position_buffer: Option<wgpu::Buffer>,
     state_buffer: Option<wgpu::Buffer>,
-    flags_buffer: Option<wgpu::Buffer>,
+    metadata_buffer: Option<wgpu::Buffer>,
 
     // Other buffers
     dna_buffer: Option<wgpu::Buffer>,
@@ -115,7 +115,7 @@ pub struct GpuSoABackend {
 
     // Staging buffers for readback
     energy_staging: Option<wgpu::Buffer>,
-    flags_staging: Option<wgpu::Buffer>,
+    metadata_staging: Option<wgpu::Buffer>,
     counter_staging: Option<wgpu::Buffer>,
 
     // Pipelines
@@ -212,7 +212,7 @@ impl GpuSoABackend {
             energy_buffer: None,
             position_buffer: None,
             state_buffer: None,
-            flags_buffer: None,
+            metadata_buffer: None,
             dna_buffer: None,
             signals_buffer: None,
             config_buffer: None,
@@ -222,7 +222,7 @@ impl GpuSoABackend {
             dna_indices_buffer: None,
             spatial_config_buffer: None,
             energy_staging: None,
-            flags_staging: None,
+            metadata_staging: None,
             counter_staging: None,
             cell_update_pipeline: None,
             cell_update_sparse_pipeline: None,
@@ -263,7 +263,7 @@ impl GpuSoABackend {
         let energy_bytes = std::mem::size_of::<CellEnergy>() * cell_count_with_headroom;
         let position_bytes = std::mem::size_of::<CellPosition>() * cell_count_with_headroom;
         let state_bytes = std::mem::size_of::<CellInternalState>() * cell_count_with_headroom;
-        let flags_bytes = std::mem::size_of::<CellFlags>() * cell_count_with_headroom;
+        let metadata_bytes = std::mem::size_of::<CellMetadata>() * cell_count_with_headroom;
         let dna_bytes = std::mem::size_of::<DNA>() * dna_count_with_headroom;
         let signals_bytes = std::mem::size_of::<SignalFragment>() * 1024;
         let indices_bytes = std::mem::size_of::<u32>() * cell_count_with_headroom;
@@ -276,7 +276,7 @@ impl GpuSoABackend {
         let total_bytes = energy_bytes
             + position_bytes
             + state_bytes
-            + flags_bytes
+            + metadata_bytes
             + dna_bytes
             + signals_bytes
             + sparse_bytes
@@ -315,9 +315,9 @@ impl GpuSoABackend {
             mapped_at_creation: false,
         }));
 
-        self.flags_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Flags Buffer"),
-            size: flags_bytes as u64,
+        self.metadata_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Metadata Buffer"),
+            size: metadata_bytes as u64,
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_DST
                 | wgpu::BufferUsages::COPY_SRC,
@@ -380,9 +380,9 @@ impl GpuSoABackend {
             mapped_at_creation: false,
         }));
 
-        self.flags_staging = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Flags Staging"),
-            size: flags_bytes as u64,
+        self.metadata_staging = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Metadata Staging"),
+            size: metadata_bytes as u64,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         }));
@@ -1258,9 +1258,14 @@ impl GpuSoABackend {
             .map(|s| CellInternalState { state: s.state })
             .collect();
 
-        let flags: Vec<CellFlags> = states[..count]
+        let metadata: Vec<CellMetadata> = states[..count]
             .iter()
-            .map(|s| CellFlags { flags: s.flags })
+            .map(|s| CellMetadata {
+                flags: s.flags,
+                cluster_id: s.cluster_id,
+                hysteresis: s.hysteresis,
+                _pad: 0,
+            })
             .collect();
 
         if let Some(buf) = &self.energy_buffer {
@@ -1275,9 +1280,9 @@ impl GpuSoABackend {
             self.queue
                 .write_buffer(buf, 0, bytemuck::cast_slice(&internal_states));
         }
-        if let Some(buf) = &self.flags_buffer {
+        if let Some(buf) = &self.metadata_buffer {
             self.queue
-                .write_buffer(buf, 0, bytemuck::cast_slice(&flags));
+                .write_buffer(buf, 0, bytemuck::cast_slice(&metadata));
         }
     }
 
@@ -1333,7 +1338,7 @@ impl GpuSoABackend {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: self.flags_buffer.as_ref().unwrap().as_entire_binding(),
+                    resource: self.metadata_buffer.as_ref().unwrap().as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
@@ -1395,7 +1400,7 @@ impl GpuSoABackend {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: self.flags_buffer.as_ref().unwrap().as_entire_binding(),
+                    resource: self.metadata_buffer.as_ref().unwrap().as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
@@ -1434,7 +1439,7 @@ impl GpuSoABackend {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: self.flags_buffer.as_ref().unwrap().as_entire_binding(),
+                    resource: self.metadata_buffer.as_ref().unwrap().as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -1533,7 +1538,7 @@ impl GpuSoABackend {
     fn create_sleeping_drain_bind_group(&self) -> Option<wgpu::BindGroup> {
         let layout = self.sleeping_drain_bind_group_layout.as_ref()?;
         let energy_buffer = self.energy_buffer.as_ref()?;
-        let flags_buffer = self.flags_buffer.as_ref()?;
+        let metadata_buffer = self.metadata_buffer.as_ref()?;
         let config_buffer = self.config_buffer.as_ref()?;
 
         Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1546,7 +1551,7 @@ impl GpuSoABackend {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: flags_buffer.as_entire_binding(),
+                    resource: metadata_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -1697,7 +1702,7 @@ impl GpuSoABackend {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: self.flags_buffer.as_ref().unwrap().as_entire_binding(),
+                    resource: self.metadata_buffer.as_ref().unwrap().as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
@@ -2090,21 +2095,21 @@ impl GpuSoABackend {
             .energy_buffer
             .as_ref()
             .ok_or_else(|| AriaError::gpu("Energy buffer not initialized"))?;
-        let flags_buffer = self
-            .flags_buffer
+        let metadata_buffer = self
+            .metadata_buffer
             .as_ref()
-            .ok_or_else(|| AriaError::gpu("Flags buffer not initialized"))?;
+            .ok_or_else(|| AriaError::gpu("Metadata buffer not initialized"))?;
         let energy_staging = self
             .energy_staging
             .as_ref()
             .ok_or_else(|| AriaError::gpu("Energy staging not initialized"))?;
-        let flags_staging = self
-            .flags_staging
+        let metadata_staging = self
+            .metadata_staging
             .as_ref()
-            .ok_or_else(|| AriaError::gpu("Flags staging not initialized"))?;
+            .ok_or_else(|| AriaError::gpu("Metadata staging not initialized"))?;
 
         let energy_size = std::mem::size_of::<CellEnergy>() * states.len();
-        let flags_size = std::mem::size_of::<CellFlags>() * states.len();
+        let metadata_size = std::mem::size_of::<CellMetadata>() * states.len();
 
         let mut encoder = self
             .device
@@ -2112,7 +2117,7 @@ impl GpuSoABackend {
                 label: Some("Download States"),
             });
         encoder.copy_buffer_to_buffer(energy_buffer, 0, energy_staging, 0, energy_size as u64);
-        encoder.copy_buffer_to_buffer(flags_buffer, 0, flags_staging, 0, flags_size as u64);
+        encoder.copy_buffer_to_buffer(metadata_buffer, 0, metadata_staging, 0, metadata_size as u64);
         self.queue.submit(Some(encoder.finish()));
 
         // Map energy
@@ -2122,10 +2127,10 @@ impl GpuSoABackend {
             let _ = tx1.send(r);
         });
 
-        // Map flags
-        let flags_slice = flags_staging.slice(..);
+        // Map metadata
+        let metadata_slice = metadata_staging.slice(..);
         let (tx2, rx2) = std::sync::mpsc::channel();
-        flags_slice.map_async(wgpu::MapMode::Read, move |r| {
+        metadata_slice.map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx2.send(r);
         });
 
@@ -2139,8 +2144,8 @@ impl GpuSoABackend {
             .map_err(|e| AriaError::gpu(format!("Energy map error: {:?}", e)))?;
 
         rx2.recv()
-            .map_err(|e| AriaError::gpu(format!("Flags map failed: {}", e)))?
-            .map_err(|e| AriaError::gpu(format!("Flags map error: {:?}", e)))?;
+            .map_err(|e| AriaError::gpu(format!("Metadata map failed: {}", e)))?
+            .map_err(|e| AriaError::gpu(format!("Metadata map error: {:?}", e)))?;
 
         // Copy data
         {
@@ -2156,17 +2161,19 @@ impl GpuSoABackend {
         }
 
         {
-            let flags_data = flags_slice.get_mapped_range();
-            let flags: &[CellFlags] = bytemuck::cast_slice(&flags_data);
+            let metadata_data = metadata_slice.get_mapped_range();
+            let metadata: &[CellMetadata] = bytemuck::cast_slice(&metadata_data);
             for (i, state) in states.iter_mut().enumerate() {
-                if i < flags.len() {
-                    state.flags = flags[i].flags;
+                if i < metadata.len() {
+                    state.flags = metadata[i].flags;
+                    state.cluster_id = metadata[i].cluster_id;
+                    state.hysteresis = metadata[i].hysteresis;
                 }
             }
         }
 
         energy_staging.unmap();
-        flags_staging.unmap();
+        metadata_staging.unmap();
         Ok(())
     }
 
