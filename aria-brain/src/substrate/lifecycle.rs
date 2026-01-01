@@ -137,14 +137,15 @@ impl Substrate {
             let to_spawn = min_pop - alive_count;
 
             // Find TOP 10 survivors without sorting everything - O(n) instead of O(n log n)
+            // Tuple: (cell_idx, energy, dna_index, generation) - generation for lineage tracking!
             const ELITE_COUNT: usize = 10;
-            let mut top_survivors: Vec<(usize, f32, u32)> = Vec::with_capacity(ELITE_COUNT);
+            let mut top_survivors: Vec<(usize, f32, u32, u32)> = Vec::with_capacity(ELITE_COUNT);
 
             for (i, (cell, state)) in self.cells.iter().zip(self.states.iter()).enumerate() {
                 if state.is_dead() {
                     continue;
                 }
-                let entry = (i, state.energy, cell.dna_index);
+                let entry = (i, state.energy, cell.dna_index, cell.generation);
 
                 if top_survivors.len() < ELITE_COUNT {
                     top_survivors.push(entry);
@@ -161,12 +162,13 @@ impl Substrate {
 
             if survivors.is_empty() {
                 // Total extinction - try to use elite_dna from memory first!
-                let elite_dna: Vec<DNA> = {
+                // Elite DNA stores (dna, generation) for lineage continuity
+                let elite_with_gen: Vec<(DNA, u64)> = {
                     let memory = self.memory.read();
-                    memory.elite_dna.iter().map(|e| e.dna.clone()).collect()
+                    memory.elite_dna.iter().map(|e| (e.dna.clone(), e.generation)).collect()
                 };
 
-                if elite_dna.is_empty() {
+                if elite_with_gen.is_empty() {
                     // True extinction - no elite DNA saved, must use random
                     tracing::warn!("⚠️ TOTAL EXTINCTION - no elite DNA, spawning random cells");
                     for _ in 0..to_spawn {
@@ -181,10 +183,10 @@ impl Substrate {
                     }
                 } else {
                     // RESURRECTION from elite DNA!
-                    tracing::info!("🧬 RESURRECTION: {} new cells from {} elite DNA", to_spawn, elite_dna.len());
+                    tracing::info!("🧬 RESURRECTION: {} new cells from {} elite DNA", to_spawn, elite_with_gen.len());
                     for i in 0..to_spawn {
                         let new_id = self.next_id.fetch_add(1, Ordering::SeqCst);
-                        let parent_dna = &elite_dna[i % elite_dna.len()];
+                        let (parent_dna, parent_gen) = &elite_with_gen[i % elite_with_gen.len()];
 
                         // Mutate from elite
                         let mutation_ctx = MutationContext {
@@ -203,7 +205,10 @@ impl Substrate {
                         let dna_index = self.dna_pool.len() as u32;
                         self.dna_pool.push(child_dna);
 
-                        let cell = Cell::new(new_id, dna_index);
+                        // LINEAGE: Resurrect with parent's generation + 1
+                        let mut cell = Cell::new(new_id, dna_index);
+                        cell.generation = (*parent_gen as u32) + 1;
+
                         let mut state = CellState::new();
                         state.energy = self.config.metabolism.child_energy;
 
@@ -218,6 +223,7 @@ impl Substrate {
                 }
             } else {
                 // EVOLUTION: New cells inherit from survivors with mutation
+                // THIS IS WHERE LINEAGE IS BUILT - children inherit parent's generation + 1
                 tracing::info!("🧬 REPOPULATING: {} new cells from {} survivors", to_spawn, survivors.len());
 
                 for i in 0..to_spawn {
@@ -225,7 +231,7 @@ impl Substrate {
 
                     // Pick parent from survivors (round-robin through best ones)
                     let parent_idx = i % survivors.len();
-                    let (_, parent_energy, parent_dna_idx) = survivors[parent_idx];
+                    let (_, parent_energy, parent_dna_idx, parent_generation) = survivors[parent_idx];
                     let parent_dna = &self.dna_pool[parent_dna_idx as usize];
 
                     // Create child DNA with mutation (survivors are fit, so lower mutation)
@@ -245,7 +251,10 @@ impl Substrate {
                     let dna_index = self.dna_pool.len() as u32;
                     self.dna_pool.push(child_dna);
 
-                    let cell = Cell::new(new_id, dna_index);
+                    // LINEAGE: Child inherits parent's generation + 1
+                    let mut cell = Cell::new(new_id, dna_index);
+                    cell.generation = parent_generation + 1;
+
                     let mut state = CellState::new();
                     state.energy = self.config.metabolism.child_energy; // Start weak
 
