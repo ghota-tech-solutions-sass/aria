@@ -14,6 +14,7 @@
 //! - `auto` (default) - Auto-select GPU if available
 
 pub mod backend;
+pub mod compiler;
 pub mod spatial;
 pub mod spatial_gpu;
 

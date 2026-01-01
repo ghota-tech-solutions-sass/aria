@@ -147,6 +147,7 @@ pub struct GpuSoABackend {
     max_cell_count: usize,
     initialized: bool,
     use_spatial_hash: bool,
+    compiler: crate::compiler::ShaderCompiler,
 }
 
 impl GpuSoABackend {
@@ -247,6 +248,7 @@ impl GpuSoABackend {
             max_cell_count: 0,
             initialized: false,
             use_spatial_hash,
+            compiler: crate::compiler::ShaderCompiler::new(),
         })
     }
 
@@ -997,103 +999,19 @@ impl GpuSoABackend {
     }
 
     fn create_pipelines(&mut self) -> AriaResult<()> {
-        let main_layout = self
-            .main_bind_group_layout
-            .as_ref()
-            .ok_or_else(|| AriaError::gpu("Main bind group layout not created"))?;
+        // Initial compilation of dynamic pipelines
+        self.recompile_dynamic_pipelines(None)?;
+
         let sparse_layout = self
             .sparse_bind_group_layout
             .as_ref()
             .ok_or_else(|| AriaError::gpu("Sparse bind group layout not created"))?;
 
-        // Cell update shader
-        let cell_shader = self
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("SoA Cell Update Shader"),
-                source: wgpu::ShaderSource::Wgsl(CELL_UPDATE_SHADER_SOA.into()),
-            });
-
-        let main_pipeline_layout = self
-            .device
-            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("SoA Main Pipeline Layout"),
-                bind_group_layouts: &[main_layout],
-                immediate_size: 0,
-            });
-
-        self.cell_update_pipeline = Some(
-            self.device
-                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some("SoA Cell Update Pipeline"),
-                    layout: Some(&main_pipeline_layout),
-                    module: &cell_shader,
-                    entry_point: Some("main"),
-                    compilation_options: Default::default(),
-                    cache: None,
-                }),
-        );
-
-        // Sparse cell update shader (uses active_indices for indirect dispatch)
-        let sparse_cell_layout = self
-            .sparse_cell_bind_group_layout
-            .as_ref()
-            .ok_or_else(|| AriaError::gpu("Sparse cell bind group layout not created"))?;
-
-        let sparse_cell_pipeline_layout = self
-            .device
-            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Sparse Cell Pipeline Layout"),
-                bind_group_layouts: &[sparse_cell_layout],
-                immediate_size: 0,
-            });
-
-        let sparse_cell_shader = self
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("Sparse Cell Update Shader"),
-                source: wgpu::ShaderSource::Wgsl(CELL_UPDATE_SPARSE_SHADER.into()),
-            });
-
-        self.cell_update_sparse_pipeline = Some(
-            self.device
-                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some("Sparse Cell Update Pipeline"),
-                    layout: Some(&sparse_cell_pipeline_layout),
-                    module: &sparse_cell_shader,
-                    entry_point: Some("main"),
-                    compilation_options: Default::default(),
-                    cache: None,
-                }),
-        );
-
-        // Signal propagation shader
-        let signal_shader = self
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("SoA Signal Shader"),
-                source: wgpu::ShaderSource::Wgsl(SIGNAL_SHADER_SOA.into()),
-            });
-
-        self.signal_pipeline = Some(
-            self.device
-                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some("SoA Signal Pipeline"),
-                    layout: Some(&main_pipeline_layout),
-                    module: &signal_shader,
-                    entry_point: Some("main"),
-                    compilation_options: Default::default(),
-                    cache: None,
-                }),
-        );
-
         // Compact shader
-        let compact_shader = self
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("SoA Compact Shader"),
-                source: wgpu::ShaderSource::Wgsl(COMPACT_SHADER_SOA.into()),
-            });
+        let compact_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("SoA Compact Shader"),
+            source: wgpu::ShaderSource::Wgsl(self.compiler.get_compact_shader().into()),
+        });
 
         let sparse_pipeline_layout = self
             .device
@@ -1116,12 +1034,10 @@ impl GpuSoABackend {
         );
 
         // Prepare indirect dispatch shader
-        let prepare_shader = self
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("Prepare Dispatch Shader"),
-                source: wgpu::ShaderSource::Wgsl(PREPARE_DISPATCH_SHADER.into()),
-            });
+        let prepare_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Prepare Dispatch Shader"),
+            source: wgpu::ShaderSource::Wgsl(self.compiler.get_prepare_dispatch_shader().into()),
+        });
 
         self.prepare_dispatch_pipeline = Some(
             self.device
@@ -1239,12 +1155,10 @@ impl GpuSoABackend {
                     immediate_size: 0,
                 });
 
-            let hebbian_shader = self
-                .device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("Hebbian Shader"),
-                    source: wgpu::ShaderSource::Wgsl(HEBBIAN_SHADER.into()),
-                });
+            let hebbian_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Hebbian Shader"),
+                source: wgpu::ShaderSource::Wgsl(self.compiler.get_hebbian_shader().into()),
+            });
 
             self.hebbian_pipeline = Some(
                 self.device
@@ -1271,12 +1185,10 @@ impl GpuSoABackend {
                     immediate_size: 0,
                 });
 
-            let sleeping_shader = self
-                .device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("Sleeping Drain Shader"),
-                    source: wgpu::ShaderSource::Wgsl(SLEEPING_DRAIN_SHADER.into()),
-                });
+            let sleeping_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Sleeping Drain Shader"),
+                source: wgpu::ShaderSource::Wgsl(self.compiler.get_sleeping_drain_shader().into()),
+            });
 
             self.sleeping_drain_pipeline = Some(
                 self.device
@@ -2219,916 +2131,92 @@ impl GpuSoABackend {
 
         energy_staging.unmap();
         flags_staging.unmap();
+        Ok(())
+    }
 
+    /// Recompile dynamic pipelines with new logic from DNA
+    pub fn recompile_dynamic_pipelines(&mut self, dna_logic: Option<&str>) -> AriaResult<()> {
+        let logic = dna_logic.unwrap_or("");
+
+        let cell_update_source = self.compiler.generate_shader(self.compiler.get_cell_update_template(), logic);
+        let signal_source = self.compiler.generate_shader(self.compiler.get_signal_template(), logic);
+
+        let main_layout = self
+            .main_bind_group_layout
+            .as_ref()
+            .ok_or_else(|| AriaError::gpu("Main bind group layout not created"))?;
+
+        let main_pipeline_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Dynamic Main Pipeline Layout"),
+            bind_group_layouts: &[main_layout],
+            immediate_size: 0,
+        });
+
+        // Cell Update Pipeline
+        let cell_shader_module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Dynamic Cell Update Shader"),
+            source: wgpu::ShaderSource::Wgsl(cell_update_source.into()),
+        });
+
+        self.cell_update_pipeline = Some(self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Dynamic Cell Update Pipeline"),
+            layout: Some(&main_pipeline_layout),
+            module: &cell_shader_module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        }));
+
+        // Signal Pipeline
+        let signal_shader_module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Dynamic Signal Shader"),
+            source: wgpu::ShaderSource::Wgsl(signal_source.into()),
+        });
+
+        self.signal_pipeline = Some(self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Dynamic Signal Pipeline"),
+            layout: Some(&main_pipeline_layout),
+            module: &signal_shader_module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        }));
+
+        // Also update sparse version (uses same logic but different layout)
+        let sparse_cell_layout = self
+            .sparse_cell_bind_group_layout
+            .as_ref()
+            .ok_or_else(|| AriaError::gpu("Sparse cell bind group layout not created"))?;
+
+        let sparse_cell_pipeline_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Dynamic Sparse Cell Pipeline Layout"),
+            bind_group_layouts: &[sparse_cell_layout],
+            immediate_size: 0,
+        });
+
+        self.cell_update_sparse_pipeline = Some(self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Dynamic Sparse Cell Update Pipeline"),
+            layout: Some(&sparse_cell_pipeline_layout),
+            module: &cell_shader_module, // Reuse same module
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        }));
+
+        tracing::info!("🧬 GPU: Dynamic pipelines recompiled (logic size: {})", logic.len());
         Ok(())
     }
 }
 
-// ============================================================================
-// WGSL Shaders for SoA Layout
-// ============================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// Cell update shader with SoA + Hysteresis sleep
-const CELL_UPDATE_SHADER_SOA: &str = r#"
-// Cell update with SoA layout + Hysteresis sleep
-
-struct CellEnergy {
-    energy: f32,
-    tension: f32,
-    activity_level: f32,
-    _pad: f32,
-}
-
-struct Config {
-    energy_cap: f32,
-    reaction_amplification: f32,
-    state_cap: f32,
-    signal_radius: f32,
-    cost_rest: f32,
-    cost_signal: f32,
-    cost_move: f32,
-    cost_divide: f32,
-    signal_energy_base: f32,
-    signal_resonance_factor: f32,
-    energy_gain: f32,
-    tick: u32,
-    cell_count: u32,
-    workgroup_size: u32,
-    _pad: vec2<u32>,
-}
-
-// Flags bit layout
-const FLAG_SLEEPING: u32 = 1u;
-const FLAG_DEAD: u32 = 32u;
-const SLEEP_COUNTER_MASK: u32 = 192u; // bits 6-7
-const SLEEP_COUNTER_SHIFT: u32 = 6u;
-
-// Hysteresis thresholds (Schmitt Trigger)
-const SLEEP_ENTER_THRESHOLD: f32 = 0.2;  // Activity below this → start sleep counter
-const SLEEP_EXIT_THRESHOLD: f32 = 0.4;   // Activity above this → wake up
-const SLEEP_COUNTER_MAX: u32 = 3u;       // Must be low for N ticks to sleep
-
-@group(0) @binding(0) var<storage, read_write> energies: array<CellEnergy>;
-@group(0) @binding(1) var<storage, read> positions: array<vec4<f32>>;
-@group(0) @binding(2) var<storage, read_write> states: array<vec4<f32>>;
-@group(0) @binding(3) var<storage, read_write> flags: array<u32>;
-@group(0) @binding(4) var<storage, read> dna_pool: array<vec4<f32>>;
-@group(0) @binding(5) var<storage, read> signals: array<vec4<f32>>;
-@group(0) @binding(6) var<uniform> config: Config;
-@group(0) @binding(7) var<storage, read> dna_indices: array<u32>;
-
-fn get_sleep_counter(f: u32) -> u32 {
-    return (f & SLEEP_COUNTER_MASK) >> SLEEP_COUNTER_SHIFT;
-}
-
-fn set_sleep_counter(f: ptr<function, u32>, counter: u32) {
-    *f = (*f & ~SLEEP_COUNTER_MASK) | ((counter & 3u) << SLEEP_COUNTER_SHIFT);
-}
-
-@compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let idx = id.x;
-    if idx >= config.cell_count {
-        return;
-    }
-
-    var cell_energy = energies[idx];
-    var cell_flags = flags[idx];
-
-    let is_sleeping = (cell_flags & FLAG_SLEEPING) != 0u;
-    let is_dead = (cell_flags & FLAG_DEAD) != 0u;
-
-    if is_dead {
-        return;
-    }
-
-    // Get DNA for this cell
-    let dna_idx = dna_indices[idx];
-    let dna_base = dna_idx * 5u;
-    let thresholds1 = dna_pool[dna_base + 1u];
-    let gene_sleep = thresholds1.y; // thresholds[5]
-    let gene_wake = thresholds1.z;  // thresholds[6]
-
-    // === HYSTERESIS SLEEP LOGIC ===
-    if is_sleeping {
-        // Check for wake up (above genetic exit threshold)
-        // Scaled to match SLEEP_EXIT_THRESHOLD typical range [0.4]
-        if cell_energy.activity_level > gene_wake {
-            cell_flags = cell_flags & ~FLAG_SLEEPING;
-            set_sleep_counter(&cell_flags, 0u);
-        } else {
-            // Sleeping cells still consume minimal energy
-            cell_energy.energy -= config.cost_rest * 0.1;
-            cell_energy.energy += config.energy_gain;
-            if cell_energy.energy <= 0.0 {
-                cell_flags = cell_flags | FLAG_DEAD;
-            }
-            energies[idx] = cell_energy;
-            flags[idx] = cell_flags;
-            return;
-        }
-    }
-
-    // Active cell processing
-    cell_energy.energy -= config.cost_rest;
-    cell_energy.energy += config.energy_gain;
-
-    if cell_energy.energy <= 0.0 {
-        cell_flags = cell_flags | FLAG_DEAD;
-        energies[idx] = cell_energy;
-        flags[idx] = cell_flags;
-        return;
-    }
-
-    // Tension builds
-    cell_energy.tension += 0.01;
-    if cell_energy.tension > 1.0 {
-        cell_energy.tension = 0.0;
-    }
-
-    // Activity decays
-    cell_energy.activity_level *= 0.9;
-
-    // === HYSTERESIS ENTER SLEEP ===
-    // Scaled to match SLEEP_ENTER_THRESHOLD typical range [0.2]
-    if cell_energy.activity_level < gene_sleep {
-        let counter = get_sleep_counter(cell_flags);
-        if counter >= SLEEP_COUNTER_MAX {
-            // Counter reached max → enter sleep
-            cell_flags = cell_flags | FLAG_SLEEPING;
-            set_sleep_counter(&cell_flags, 0u);
-        } else {
-            // Increment sleep counter
-            set_sleep_counter(&cell_flags, counter + 1u);
-        }
-    } else {
-        // Reset counter if activity is above enter threshold
-        set_sleep_counter(&cell_flags, 0u);
-    }
-
-    // Cap energy
-    cell_energy.energy = clamp(cell_energy.energy, 0.0, config.energy_cap);
-
-    energies[idx] = cell_energy;
-    flags[idx] = cell_flags;
-}
-"#;
-
-/// Signal propagation shader with SoA layout
-const SIGNAL_SHADER_SOA: &str = r#"
-// Signal propagation with SoA layout
-// ... (Wait, I'll do this in a multi_replace because I need to update bindings)
-
-struct CellEnergy {
-    energy: f32,
-    tension: f32,
-    activity_level: f32,
-    _pad: f32,
-}
-
-struct SignalFragment {
-    source_id_low: u32,
-    source_id_high: u32,
-    content: array<f32, 8>,
-    intensity: f32,
-    _pad: f32,
-}
-
-struct Config {
-    energy_cap: f32,
-    reaction_amplification: f32,
-    state_cap: f32,
-    signal_radius: f32,
-    cost_rest: f32,
-    cost_signal: f32,
-    cost_move: f32,
-    cost_divide: f32,
-    signal_energy_base: f32,
-    signal_resonance_factor: f32,
-    energy_gain: f32,
-    tick: u32,
-    cell_count: u32,
-    workgroup_size: u32,
-    _pad: vec2<u32>,
-}
-
-const FLAG_SLEEPING: u32 = 1u;
-const FLAG_DEAD: u32 = 32u;
-const SLEEP_EXIT_THRESHOLD: f32 = 0.4;
-
-@group(0) @binding(0) var<storage, read_write> energies: array<CellEnergy>;
-@group(0) @binding(1) var<storage, read> positions: array<vec4<f32>>;
-@group(0) @binding(2) var<storage, read_write> states: array<vec4<f32>>;
-@group(0) @binding(3) var<storage, read_write> flags: array<u32>;
-@group(0) @binding(4) var<storage, read> dna_pool: array<vec4<f32>>;
-@group(0) @binding(5) var<storage, read> signals: array<SignalFragment>;
-@group(0) @binding(6) var<uniform> config: Config;
-@group(0) @binding(7) var<storage, read> dna_indices: array<u32>;
-
-fn calculate_resonance(signal_content: array<f32, 8>, cell_idx: u32) -> f32 {
-    var dot: f32 = 0.0;
-    var norm_sig: f32 = 0.0;
-    var norm_state: f32 = 0.0;
-
-    // Read state as vec4 arrays (states is array<vec4<f32>>)
-    let state0 = states[cell_idx * 8u];
-    let state1 = states[cell_idx * 8u + 1u];
-
-    for (var i = 0u; i < 4u; i++) {
-        dot += signal_content[i] * state0[i];
-        norm_sig += signal_content[i] * signal_content[i];
-        norm_state += state0[i] * state0[i];
-    }
-    for (var i = 0u; i < 4u; i++) {
-        dot += signal_content[i + 4u] * state1[i];
-        norm_sig += signal_content[i + 4u] * signal_content[i + 4u];
-        norm_state += state1[i] * state1[i];
-    }
-
-    let denom = sqrt(norm_sig * norm_state);
-    if denom > 0.001 {
-        return (dot / denom + 1.0) * 0.5;
-    }
-    return 0.5;
-}
-
-@compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let idx = id.x;
-    if idx >= config.cell_count {
-        return;
-    }
-
-    var cell_energy = energies[idx];
-    var cell_flags = flags[idx];
-
-    let is_sleeping = (cell_flags & FLAG_SLEEPING) != 0u;
-    let is_dead = (cell_flags & FLAG_DEAD) != 0u;
-
-    if is_dead {
-        return;
-    }
-
-    // Get DNA for this cell
-    let dna_idx = dna_indices[idx];
-    let dna_base = dna_idx * 5u;
-    let thresholds1 = dna_pool[dna_base + 1u];
-    let reflexivity_gain = thresholds1.w;
-
-    let signal_count = arrayLength(&signals);
-    var received_signal = false;
-
-    // Sleeping cells only check first few signals for wake-up
-    let max_signals = select(signal_count, min(signal_count, 5u), is_sleeping);
-
-    // Read cell position (first 8 dimensions)
-    let pos0 = positions[idx * 4u];
-    let pos1 = positions[idx * 4u + 1u];
-
-    for (var s = 0u; s < max_signals; s++) {
-        let signal = signals[s];
-
-        if signal.intensity < 0.001 {
-            continue;
-        }
-
-        // Check if signal is reflexive (source_id = u64::MAX)
-        let is_reflexive = (signal.source_id_low == 0xffffffffu) && (signal.source_id_high == 0xffffffffu);
-        let current_reflexivity = select(1.0, reflexivity_gain, is_reflexive);
-
-        // Distance in semantic space (first 8 dimensions)
-        var dist_sq: f32 = 0.0;
-        for (var i = 0u; i < 4u; i++) {
-            let diff = pos0[i] - signal.content[i];
-            dist_sq += diff * diff;
-        }
-        for (var i = 0u; i < 4u; i++) {
-            let diff = pos1[i] - signal.content[i + 4u];
-            dist_sq += diff * diff;
-        }
-        let dist = sqrt(dist_sq);
-
-        if dist < config.signal_radius {
-            let attenuation = 1.0 - (dist / config.signal_radius);
-            let intensity = signal.intensity * attenuation * config.reaction_amplification * current_reflexivity;
-
-            // Wake sleeping cells if signal strong enough
-            if is_sleeping && intensity > 0.1 {
-                cell_flags = cell_flags & ~FLAG_SLEEPING;
-                cell_energy.activity_level = 0.5;
-                cell_energy.tension = 0.2;
-                received_signal = true;
-            }
-
-            // Process signal if awake
-            if (cell_flags & FLAG_SLEEPING) == 0u {
-                // Update state (simplified - first 8 values)
-                var state0 = states[idx * 8u];
-                var state1 = states[idx * 8u + 1u];
-                for (var i = 0u; i < 4u; i++) {
-                    state0[i] += signal.content[i] * intensity;
-                }
-                for (var i = 0u; i < 4u; i++) {
-                    state1[i] += signal.content[i + 4u] * intensity;
-                }
-                states[idx * 8u] = state0;
-                states[idx * 8u + 1u] = state1;
-
-                // Resonance-based energy gain (threshold 0.1 for broader feeding)
-                let resonance = calculate_resonance(signal.content, idx);
-                if resonance > 0.1 {
-                    let understanding = (resonance - 0.1) / 0.9;
-                    let energy_gain = config.signal_energy_base
-                        * intensity
-                        * understanding
-                        * (1.0 + resonance * config.signal_resonance_factor);
-                    cell_energy.energy = min(cell_energy.energy + energy_gain, config.energy_cap);
-                }
-
-                cell_energy.activity_level += intensity;
-                received_signal = true;
-            }
-        }
-    }
-
-    if received_signal || !is_sleeping {
-        energies[idx] = cell_energy;
-        flags[idx] = cell_flags;
+    #[test]
+    fn test_gpu_config_size() {
+        assert_eq!(std::mem::size_of::<GpuConfig>(), 64);
     }
 }
-"#;
-
-/// Compact shader for sparse dispatch
-const COMPACT_SHADER_SOA: &str = r#"
-// Compact shader - counts active cells
-
-struct Config {
-    energy_cap: f32,
-    reaction_amplification: f32,
-    state_cap: f32,
-    signal_radius: f32,
-    cost_rest: f32,
-    cost_signal: f32,
-    cost_move: f32,
-    cost_divide: f32,
-    signal_energy_base: f32,
-    signal_resonance_factor: f32,
-    energy_gain: f32,
-    tick: u32,
-    cell_count: u32,
-    workgroup_size: u32,
-    _pad: vec2<u32>,
-}
-
-const FLAG_SLEEPING: u32 = 1u;
-const FLAG_DEAD: u32 = 32u;
-
-struct SparseDispatch {
-    counter: atomic<u32>,
-    _pad: array<u32, 3>,
-    indices: array<u32>,
-}
-
-@group(0) @binding(0) var<storage, read> flags: array<u32>;
-@group(0) @binding(1) var<storage, read_write> dispatch: SparseDispatch;
-@group(0) @binding(2) var<storage, read_write> indirect: array<u32>;
-@group(0) @binding(3) var<uniform> config: Config;
-
-@compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let idx = id.x;
-    if idx >= config.cell_count {
-        return;
-    }
-
-    let cell_flags = flags[idx];
-    let is_sleeping = (cell_flags & FLAG_SLEEPING) != 0u;
-    let is_dead = (cell_flags & FLAG_DEAD) != 0u;
-
-    if !is_sleeping && !is_dead {
-        let write_idx = atomicAdd(&dispatch.counter, 1u);
-        if write_idx < arrayLength(&dispatch.indices) {
-            dispatch.indices[write_idx] = idx;
-        }
-    }
-}
-"#;
-
-/// Prepare indirect dispatch arguments (GPU computes workgroup count)
-const PREPARE_DISPATCH_SHADER: &str = r#"
-// Prepare indirect dispatch - computes workgroup count from active cell count
-
-struct SparseDispatch {
-    counter: atomic<u32>,
-    _pad: array<u32, 3>,
-    indices: array<u32>,
-}
-
-struct IndirectArgs {
-    x: u32,
-    y: u32,
-    z: u32,
-    _pad: u32,
-}
-
-struct Config {
-    energy_cap: f32,
-    reaction_amplification: f32,
-    state_cap: f32,
-    signal_radius: f32,
-    cost_rest: f32,
-    cost_signal: f32,
-    cost_move: f32,
-    cost_divide: f32,
-    signal_energy_base: f32,
-    signal_resonance_factor: f32,
-    energy_gain: f32,
-    tick: u32,
-    cell_count: u32,
-    workgroup_size: u32,
-    _pad: vec2<u32>,
-}
-
-@group(0) @binding(0) var<storage, read> flags: array<u32>;
-@group(0) @binding(1) var<storage, read_write> dispatch: SparseDispatch;
-@group(0) @binding(2) var<storage, read_write> indirect: IndirectArgs;
-@group(0) @binding(3) var<uniform> config: Config;
-
-@compute @workgroup_size(1)
-fn main() {
-    let active_count = atomicLoad(&dispatch.counter);
-    indirect.x = (active_count + config.workgroup_size - 1u) / config.workgroup_size;
-    indirect.y = 1u;
-    indirect.z = 1u;
-}
-"#;
-
-/// Sparse cell update shader - only processes active cells using indirect dispatch
-const CELL_UPDATE_SPARSE_SHADER: &str = r#"
-// Sparse cell update - processes only active cells via active_indices buffer
-
-struct CellEnergy {
-    energy: f32,
-    tension: f32,
-    activity_level: f32,
-    _pad: f32,
-}
-
-struct Config {
-    energy_cap: f32,
-    reaction_amplification: f32,
-    state_cap: f32,
-    signal_radius: f32,
-    cost_rest: f32,
-    cost_signal: f32,
-    cost_move: f32,
-    cost_divide: f32,
-    signal_energy_base: f32,
-    signal_resonance_factor: f32,
-    energy_gain: f32,
-    tick: u32,
-    cell_count: u32,
-    workgroup_size: u32,
-    _pad: vec2<u32>,
-}
-
-// Flags bit layout
-const FLAG_SLEEPING: u32 = 1u;
-const FLAG_DEAD: u32 = 32u;
-const SLEEP_COUNTER_MASK: u32 = 192u;
-const SLEEP_COUNTER_SHIFT: u32 = 6u;
-const SLEEP_ENTER_THRESHOLD: f32 = 0.2;
-const SLEEP_COUNTER_MAX: u32 = 3u;
-
-struct SparseDispatchReadOnly {
-    counter: u32,
-    _pad: array<u32, 3>,
-    indices: array<u32>,
-}
-
-@group(0) @binding(0) var<storage, read_write> energies: array<CellEnergy>;
-@group(0) @binding(1) var<storage, read> positions: array<vec4<f32>>;
-@group(0) @binding(2) var<storage, read_write> states: array<vec4<f32>>;
-@group(0) @binding(3) var<storage, read_write> flags: array<u32>;
-@group(0) @binding(4) var<storage, read> dna_pool: array<vec4<f32>>;
-@group(0) @binding(5) var<storage, read> signals: array<vec4<f32>>;
-@group(0) @binding(6) var<uniform> config: Config;
-@group(0) @binding(7) var<storage, read> dispatch: SparseDispatchReadOnly;
-@group(0) @binding(8) var<storage, read> dna_indices: array<u32>;
-
-fn get_sleep_counter(f: u32) -> u32 {
-    return (f & SLEEP_COUNTER_MASK) >> SLEEP_COUNTER_SHIFT;
-}
-
-fn set_sleep_counter(f: ptr<function, u32>, counter: u32) {
-    *f = (*f & ~SLEEP_COUNTER_MASK) | ((counter & 3u) << SLEEP_COUNTER_SHIFT);
-}
-
-@compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    // Thread index maps to active_indices, not directly to cell index
-    let active_idx = id.x;
-    if active_idx >= dispatch.counter {
-        return;
-    }
-
-    // Get actual cell index from active_indices buffer
-    let idx = dispatch.indices[active_idx];
-    if idx >= config.cell_count {
-        return;
-    }
-
-    var cell_energy = energies[idx];
-    var cell_flags = flags[idx];
-
-    let is_dead = (cell_flags & FLAG_DEAD) != 0u;
-    if is_dead {
-        return;
-    }
-
-    // Active cell processing (we know it's not sleeping since it's in active_indices)
-    cell_energy.energy -= config.cost_rest;
-    cell_energy.energy += config.energy_gain;
-
-    if cell_energy.energy <= 0.0 {
-        cell_flags = cell_flags | FLAG_DEAD;
-        energies[idx] = cell_energy;
-        flags[idx] = cell_flags;
-        return;
-    }
-
-    // Tension builds
-    cell_energy.tension += 0.01;
-    if cell_energy.tension > 1.0 {
-        cell_energy.tension = 0.0;
-    }
-
-    // Activity decays
-    cell_energy.activity_level *= 0.9;
-
-    // Check for sleep entry (hysteresis)
-    if cell_energy.activity_level < SLEEP_ENTER_THRESHOLD {
-        let counter = get_sleep_counter(cell_flags);
-        if counter >= SLEEP_COUNTER_MAX {
-            cell_flags = cell_flags | FLAG_SLEEPING;
-            set_sleep_counter(&cell_flags, 0u);
-        } else {
-            set_sleep_counter(&cell_flags, counter + 1u);
-        }
-    } else {
-        set_sleep_counter(&cell_flags, 0u);
-    }
-
-    // Cap energy
-    cell_energy.energy = clamp(cell_energy.energy, 0.0, config.energy_cap);
-
-    energies[idx] = cell_energy;
-    flags[idx] = cell_flags;
-}
-"#;
-
-/// Sleeping cells energy drain shader - runs periodically to drain sleeping cells
-/// This is needed because sparse dispatch skips sleeping cells entirely
-const SLEEPING_DRAIN_SHADER: &str = r#"
-// Drain energy from sleeping cells - runs on ALL cells but only affects sleepers
-
-struct CellEnergy {
-    energy: f32,
-    tension: f32,
-    activity_level: f32,
-    _pad: f32,
-}
-
-struct Config {
-    energy_cap: f32,
-    reaction_amplification: f32,
-    state_cap: f32,
-    signal_radius: f32,
-    cost_rest: f32,
-    cost_signal: f32,
-    cost_move: f32,
-    cost_divide: f32,
-    signal_energy_base: f32,
-    signal_resonance_factor: f32,
-    energy_gain: f32,
-    tick: u32,
-    cell_count: u32,
-    workgroup_size: u32,
-    _pad: vec2<u32>,
-}
-
-const FLAG_SLEEPING: u32 = 1u;
-const FLAG_DEAD: u32 = 32u;
-// At ~1000 TPS, 100 ticks = ~0.1 seconds = 10 drains/sec
-// We want death in ~3-5 minutes (180-300 seconds) for sleeping cells
-// With 1.0 energy: 0.0003 * 10/sec = 0.003/sec -> ~333 seconds to death
-// With 0.3 energy: ~100 seconds to death (manageable!)
-// This creates gentle pressure - hibernation isn't free, but isn't death
-const DRAIN_PER_RUN: f32 = 0.0003;  // Gentle hibernation cost
-
-@group(0) @binding(0) var<storage, read_write> energies: array<CellEnergy>;
-@group(0) @binding(1) var<storage, read_write> flags: array<u32>;
-@group(0) @binding(2) var<uniform> config: Config;
-
-@compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let idx = id.x;
-    if idx >= config.cell_count {
-        return;
-    }
-
-    var cell_energy = energies[idx];
-    var cell_flags = flags[idx];
-
-    let is_sleeping = (cell_flags & FLAG_SLEEPING) != 0u;
-    let is_dead = (cell_flags & FLAG_DEAD) != 0u;
-
-    if is_dead {
-        return;
-    }
-
-    // Only drain sleeping cells - active cells are handled by sparse update
-    if is_sleeping {
-        // Fixed drain per run - creates real selection pressure
-        cell_energy.energy -= DRAIN_PER_RUN;
-
-        if cell_energy.energy <= 0.0 {
-            cell_flags = cell_flags | FLAG_DEAD;
-        }
-
-        energies[idx] = cell_energy;
-        flags[idx] = cell_flags;
-    }
-}
-"#;
-
-/// Hebbian learning shader - "Cells that fire together, wire together"
-/// Uses spatial hash to find nearby co-active cells efficiently
-const HEBBIAN_SHADER: &str = r#"
-// Hebbian learning - creates connections between co-active cells
-
-struct CellEnergy {
-    energy: f32,
-    tension: f32,
-    activity_level: f32,
-    _pad: f32,
-}
-
-struct CellPosition {
-    position: array<f32, 16>,
-}
-
-// Connection structure: 16 targets + 16 strengths + count + pad
-struct CellConnections {
-    targets: array<u32, 16>,
-    strengths: array<f32, 16>,
-    count: u32,
-    _pad: array<u32, 3>,
-}
-
-struct GridRegion {
-    count: u32,
-    cell_indices: array<u32, 64>,
-    _pad: array<u32, 3>,
-}
-
-struct SpatialConfig {
-    grid_size: vec3<u32>,
-    max_cells_per_region: u32,
-    min_pos: vec3<f32>,
-    region_size: f32,
-    cell_count: u32,
-    _pad: array<u32, 3>,
-}
-
-struct Config {
-    energy_cap: f32,
-    reaction_amplification: f32,
-    state_cap: f32,
-    signal_radius: f32,
-    cost_rest: f32,
-    cost_signal: f32,
-    cost_move: f32,
-    cost_divide: f32,
-    signal_energy_base: f32,
-    signal_resonance_factor: f32,
-    energy_gain: f32,
-    tick: u32,
-    cell_count: u32,
-    workgroup_size: u32,
-    _pad: vec2<u32>,
-}
-
-const NO_CONNECTION: u32 = 0xFFFFFFFFu;
-const MAX_CONNECTIONS: u32 = 16u;
-const COACTIVATION_THRESHOLD: f32 = 0.3;
-const LONG_RANGE_THRESHOLD: f32 = 0.5;  // Higher threshold for long-range connections
-const STRENGTHEN_RATE: f32 = 0.1;
-const LONG_RANGE_RATE: f32 = 0.05;      // Weaker initial strength for long-range
-const DECAY_RATE: f32 = 0.001;
-const MAX_STRENGTH: f32 = 1.0;
-const LONG_RANGE_SAMPLES: u32 = 4u;     // Number of distant regions to sample
-
-@group(0) @binding(0) var<storage, read> energies: array<CellEnergy>;
-@group(0) @binding(1) var<storage, read> positions: array<CellPosition>;
-@group(0) @binding(2) var<storage, read_write> connections: array<CellConnections>;
-@group(0) @binding(3) var<storage, read> grid: array<GridRegion>;
-@group(0) @binding(4) var<uniform> config: Config;
-@group(0) @binding(5) var<uniform> spatial_config: SpatialConfig;
-
-fn position_to_grid(pos: vec3<f32>) -> vec3<i32> {
-    let normalized = (pos - spatial_config.min_pos) / spatial_config.region_size;
-    return vec3<i32>(
-        i32(normalized.x),
-        i32(normalized.y),
-        i32(normalized.z)
-    );
-}
-
-fn grid_index(coord: vec3<i32>) -> u32 {
-    let clamped = vec3<u32>(
-        u32(clamp(coord.x, 0, i32(spatial_config.grid_size.x) - 1)),
-        u32(clamp(coord.y, 0, i32(spatial_config.grid_size.y) - 1)),
-        u32(clamp(coord.z, 0, i32(spatial_config.grid_size.z) - 1))
-    );
-    return clamped.x + clamped.y * spatial_config.grid_size.x + clamped.z * spatial_config.grid_size.x * spatial_config.grid_size.y;
-}
-
-// Simple hash function for pseudo-random region selection
-fn hash_u32(x: u32) -> u32 {
-    var h = x;
-    h = h ^ (h >> 16u);
-    h = h * 0x85ebca6bu;
-    h = h ^ (h >> 13u);
-    h = h * 0xc2b2ae35u;
-    h = h ^ (h >> 16u);
-    return h;
-}
-
-// Get a pseudo-random distant region based on cell index and sample number
-fn get_distant_region(cell_idx: u32, sample: u32, tick: u32) -> u32 {
-    let total_regions = spatial_config.grid_size.x * spatial_config.grid_size.y * spatial_config.grid_size.z;
-    let seed = cell_idx * 7919u + sample * 104729u + tick * 31u;
-    return hash_u32(seed) % total_regions;
-}
-
-fn find_connection(conn: ptr<storage, CellConnections, read_write>, target: u32) -> i32 {
-    for (var i = 0u; i < (*conn).count; i++) {
-        if (*conn).targets[i] == target {
-            return i32(i);
-        }
-    }
-    return -1;
-}
-
-fn strengthen_connection(conn: ptr<storage, CellConnections, read_write>, target: u32, amount: f32) {
-    // Try to find existing connection
-    let slot = find_connection(conn, target);
-    if slot >= 0 {
-        (*conn).strengths[slot] = min((*conn).strengths[slot] + amount, MAX_STRENGTH);
-        return;
-    }
-
-    // Create new connection if room available
-    if (*conn).count < MAX_CONNECTIONS {
-        let new_slot = (*conn).count;
-        (*conn).targets[new_slot] = target;
-        (*conn).strengths[new_slot] = min(amount, MAX_STRENGTH);
-        (*conn).count += 1u;
-        return;
-    }
-
-    // Replace weakest connection if new one would be stronger
-    var weakest_slot = 0u;
-    var weakest_strength = (*conn).strengths[0];
-    for (var i = 1u; i < MAX_CONNECTIONS; i++) {
-        if (*conn).strengths[i] < weakest_strength {
-            weakest_slot = i;
-            weakest_strength = (*conn).strengths[i];
-        }
-    }
-
-    if amount > weakest_strength {
-        (*conn).targets[weakest_slot] = target;
-        (*conn).strengths[weakest_slot] = amount;
-    }
-}
-
-fn decay_connections(conn: ptr<storage, CellConnections, read_write>) {
-    var write = 0u;
-    for (var read = 0u; read < (*conn).count; read++) {
-        let new_strength = (*conn).strengths[read] - DECAY_RATE;
-        if new_strength > 0.001 {
-            if write != read {
-                (*conn).targets[write] = (*conn).targets[read];
-            }
-            (*conn).strengths[write] = new_strength;
-            write += 1u;
-        }
-    }
-
-    // Clear remaining slots
-    for (var i = write; i < (*conn).count; i++) {
-        (*conn).targets[i] = NO_CONNECTION;
-        (*conn).strengths[i] = 0.0;
-    }
-    (*conn).count = write;
-}
-
-@compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let idx = id.x;
-    if idx >= config.cell_count {
-        return;
-    }
-
-    let cell_energy = energies[idx];
-
-    // Only active cells form connections
-    if cell_energy.activity_level < COACTIVATION_THRESHOLD {
-        // Just decay existing connections
-        decay_connections(&connections[idx]);
-        return;
-    }
-
-    // Get cell position
-    let cell_pos = positions[idx];
-    let pos = vec3<f32>(cell_pos.position[0], cell_pos.position[1], cell_pos.position[2]);
-    let cell_grid = position_to_grid(pos);
-
-    // Search nearby grid cells for co-active neighbors
-    for (var dx = -1; dx <= 1; dx++) {
-        for (var dy = -1; dy <= 1; dy++) {
-            for (var dz = -1; dz <= 1; dz++) {
-                let neighbor_coord = cell_grid + vec3<i32>(dx, dy, dz);
-
-                // Bounds check
-                if neighbor_coord.x < 0 || neighbor_coord.x >= i32(spatial_config.grid_size.x) ||
-                   neighbor_coord.y < 0 || neighbor_coord.y >= i32(spatial_config.grid_size.y) ||
-                   neighbor_coord.z < 0 || neighbor_coord.z >= i32(spatial_config.grid_size.z) {
-                    continue;
-                }
-
-                let region_idx = grid_index(neighbor_coord);
-                let region = grid[region_idx];
-
-                // Check cells in this region
-                for (var i = 0u; i < min(region.count, spatial_config.max_cells_per_region); i++) {
-                    let other_idx = region.cell_indices[i];
-
-                    // Skip self
-                    if other_idx == idx || other_idx >= config.cell_count {
-                        continue;
-                    }
-
-                    let other_energy = energies[other_idx];
-
-                    // Both cells must be active
-                    if other_energy.activity_level >= COACTIVATION_THRESHOLD {
-                        // Strengthen connection based on product of activities
-                        let strength_delta = STRENGTHEN_RATE
-                            * cell_energy.activity_level
-                            * other_energy.activity_level;
-                        strengthen_connection(&connections[idx], other_idx, strength_delta);
-                    }
-                }
-            }
-        }
-    }
-
-    // LONG-RANGE CONNECTIONS: Sample distant regions for highly active cells
-    // This enables cross-domain associations (e.g., "cat" + "love")
-    if cell_energy.activity_level >= LONG_RANGE_THRESHOLD {
-        for (var s = 0u; s < LONG_RANGE_SAMPLES; s++) {
-            let distant_region = get_distant_region(idx, s, config.tick);
-            let region = grid[distant_region];
-
-            // Check one cell from this distant region
-            if region.count > 0u {
-                // Pick a cell based on hash (not just first one)
-                let cell_slot = hash_u32(idx + s * 17u) % region.count;
-                let other_idx = region.cell_indices[cell_slot];
-
-                if other_idx != idx && other_idx < config.cell_count {
-                    let other_energy = energies[other_idx];
-
-                    // Both cells must be highly active for long-range connection
-                    if other_energy.activity_level >= LONG_RANGE_THRESHOLD {
-                        // Weaker initial strength for long-range connections
-                        let strength_delta = LONG_RANGE_RATE
-                            * cell_energy.activity_level
-                            * other_energy.activity_level;
-                        strengthen_connection(&connections[idx], other_idx, strength_delta);
-                    }
-                }
-            }
-        }
-    }
-
-    // Decay connections
-    decay_connections(&connections[idx]);
-}
-"#;
 
 #[cfg(test)]
 mod tests {
