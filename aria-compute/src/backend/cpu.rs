@@ -110,11 +110,18 @@ impl CpuBackend {
             // Calculate resonance: how similar is this signal to cell's state?
             let resonance = Self::calculate_resonance(&signal.content, &state.state);
 
+            // Reflexivity: How much does ARIA listen to her own thoughts?
+            let reflexivity_gain = if signal.source_id == u64::MAX {
+                dna.reflexivity_gain()
+            } else {
+                1.0
+            };
+
             for (i, s) in signal.content.iter().enumerate() {
                 if i < SIGNAL_DIMS {
                     let reaction = dna.reactions[i];
-                    // Amplified reaction
-                    state.state[i] += s * signal.intensity * reaction * config.signals.reaction_amplification;
+                    // Amplified reaction with reflexivity multiplier
+                    state.state[i] += s * signal.intensity * reaction * config.signals.reaction_amplification * reflexivity_gain;
                 }
             }
 

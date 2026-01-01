@@ -98,12 +98,12 @@ pub struct GpuSoABackend {
 
     // Other buffers
     dna_buffer: Option<wgpu::Buffer>,
+    dna_indices_buffer: Option<wgpu::Buffer>,
     signals_buffer: Option<wgpu::Buffer>,
     config_buffer: Option<wgpu::Buffer>,
 
-    // Sparse dispatch buffers
-    active_count_buffer: Option<wgpu::Buffer>,
-    active_indices_buffer: Option<wgpu::Buffer>,
+    // Sparse dispatch buffers (merged into one to save storage bindings)
+    sparse_dispatch_buffer: Option<wgpu::Buffer>,
     indirect_buffer: Option<wgpu::Buffer>,
 
     // Spatial hash buffers
@@ -179,6 +179,8 @@ impl GpuSoABackend {
                 required_limits: wgpu::Limits {
                     max_storage_buffer_binding_size: 1024 * 1024 * 1024,
                     max_buffer_size: 1024 * 1024 * 1024,
+                    // Request actual hardware limits for storage buffers (fixes crash on limited hardware)
+                    max_storage_buffers_per_shader_stage: adapter.limits().max_storage_buffers_per_shader_stage,
                     ..Default::default()
                 },
                 memory_hints: wgpu::MemoryHints::Performance,
@@ -213,10 +215,10 @@ impl GpuSoABackend {
             dna_buffer: None,
             signals_buffer: None,
             config_buffer: None,
-            active_count_buffer: None,
-            active_indices_buffer: None,
+            sparse_dispatch_buffer: None,
             indirect_buffer: None,
             grid_buffer: None,
+            dna_indices_buffer: None,
             spatial_config_buffer: None,
             energy_staging: None,
             flags_staging: None,
@@ -263,8 +265,11 @@ impl GpuSoABackend {
         let dna_bytes = std::mem::size_of::<DNA>() * dna_count_with_headroom;
         let signals_bytes = std::mem::size_of::<SignalFragment>() * 1024;
         let indices_bytes = std::mem::size_of::<u32>() * cell_count_with_headroom;
-        let counter_bytes = std::mem::size_of::<AtomicCounter>();
+        let counter_bytes = 16; // Atomic counter + padding
         let indirect_bytes = std::mem::size_of::<IndirectDispatchArgs>();
+        let dna_indices_bytes = std::mem::size_of::<u32>() * cell_count_with_headroom;
+
+        let sparse_bytes = counter_bytes + indices_bytes;
 
         let total_bytes = energy_bytes
             + position_bytes
@@ -272,9 +277,9 @@ impl GpuSoABackend {
             + flags_bytes
             + dna_bytes
             + signals_bytes
-            + indices_bytes
-            + counter_bytes
-            + indirect_bytes;
+            + sparse_bytes
+            + indirect_bytes
+            + dna_indices_bytes;
 
         tracing::info!(
             "🎮 GPU SoA: Allocating {} MB for {} cells (SoA layout)",
@@ -338,20 +343,20 @@ impl GpuSoABackend {
             mapped_at_creation: false,
         }));
 
-        // Sparse dispatch buffers
-        self.active_count_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Active Count"),
-            size: counter_bytes as u64,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
+        self.dna_indices_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("DNA Indices"),
+            size: dna_indices_bytes as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         }));
 
-        self.active_indices_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Active Indices"),
-            size: indices_bytes as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        // Sparse dispatch buffer (contains BOTH counter and indices)
+        self.sparse_dispatch_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Sparse Dispatch Buffer"),
+            size: sparse_bytes as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         }));
 
@@ -530,12 +535,23 @@ impl GpuSoABackend {
                         },
                         count: None,
                     },
-                    // Config (uniform)
+                    // 6: Config (uniform)
                     wgpu::BindGroupLayoutEntry {
                         binding: 6,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 7: DNA Indices (read-only)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
@@ -627,7 +643,7 @@ impl GpuSoABackend {
                         },
                         count: None,
                     },
-                    // 7: Active indices (read-only)
+                    // 7: Sparse Dispatch (read-only counter + indices)
                     wgpu::BindGroupLayoutEntry {
                         binding: 7,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -638,7 +654,7 @@ impl GpuSoABackend {
                         },
                         count: None,
                     },
-                    // 8: Counter (read-only)
+                    // 8: DNA Indices (read-only)
                     wgpu::BindGroupLayoutEntry {
                         binding: 8,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -763,12 +779,12 @@ impl GpuSoABackend {
             ));
         }
 
-        // Sparse bind group layout
+        // Sparse bind group layout (Flags + Sparse Dispatch + Indirect + Config)
         self.sparse_bind_group_layout = Some(self.device.create_bind_group_layout(
             &wgpu::BindGroupLayoutDescriptor {
                 label: Some("SoA Sparse Bind Group Layout"),
                 entries: &[
-                    // Flags (read-only for compact)
+                    // 0: Flags (read-only for compact)
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -779,7 +795,7 @@ impl GpuSoABackend {
                         },
                         count: None,
                     },
-                    // Active count (atomic)
+                    // 1: Sparse Dispatch (counter + indices)
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -790,7 +806,7 @@ impl GpuSoABackend {
                         },
                         count: None,
                     },
-                    // Active indices (output)
+                    // 2: Indirect dispatch (output)
                     wgpu::BindGroupLayoutEntry {
                         binding: 2,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -801,20 +817,9 @@ impl GpuSoABackend {
                         },
                         count: None,
                     },
-                    // Indirect dispatch (output)
+                    // 3: Config (uniform)
                     wgpu::BindGroupLayoutEntry {
                         binding: 3,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: false },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    // Config (uniform)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 4,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
@@ -1462,11 +1467,42 @@ impl GpuSoABackend {
                 },
                 wgpu::BindGroupEntry {
                     binding: 7,
-                    resource: self.active_indices_buffer.as_ref().unwrap().as_entire_binding(),
+                    resource: self.sparse_dispatch_buffer.as_ref().unwrap().as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 8,
-                    resource: self.active_count_buffer.as_ref().unwrap().as_entire_binding(),
+                    resource: self.dna_indices_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+            ],
+        }))
+    }
+
+    /// Create bind group for sparse compact/prepare passes
+    fn create_sparse_bind_group(&self) -> AriaResult<wgpu::BindGroup> {
+        let layout = self
+            .sparse_bind_group_layout
+            .as_ref()
+            .ok_or_else(|| AriaError::gpu("Sparse bind group layout not initialized"))?;
+
+        Ok(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("SoA Sparse Bind Group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.flags_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.sparse_dispatch_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.indirect_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.config_buffer.as_ref().unwrap().as_entire_binding(),
                 },
             ],
         }))
@@ -1634,34 +1670,31 @@ impl GpuSoABackend {
     }
 
     fn reset_counter(&self) {
-        if let Some(buffer) = &self.active_count_buffer {
-            let zero = AtomicCounter {
-                count: 0,
-                _pad: [0; 3],
-            };
+        if let Some(buffer) = &self.sparse_dispatch_buffer {
+            let zero: [u32; 4] = [0; 4]; // Atomic count + padding
             self.queue
-                .write_buffer(buffer, 0, bytemuck::bytes_of(&zero));
+                .write_buffer(buffer, 0, bytemuck::cast_slice(&zero));
         }
     }
 
     fn read_active_count(&self) -> AriaResult<u32> {
-        let counter_buffer = self
-            .active_count_buffer
+        let sparse_buffer = self
+            .sparse_dispatch_buffer
             .as_ref()
-            .ok_or_else(|| AriaError::gpu("Counter buffer not initialized"))?;
+            .ok_or_else(|| AriaError::gpu("Sparse dispatch buffer not initialized"))?;
         let staging_buffer = self
             .counter_staging
             .as_ref()
             .ok_or_else(|| AriaError::gpu("Counter staging not initialized"))?;
 
-        let size = std::mem::size_of::<AtomicCounter>() as u64;
+        let size = 16; // Read only the counter part (16 bytes with padding)
 
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Read Counter"),
             });
-        encoder.copy_buffer_to_buffer(counter_buffer, 0, staging_buffer, 0, size);
+        encoder.copy_buffer_to_buffer(sparse_buffer, 0, staging_buffer, 0, size);
         self.queue.submit(Some(encoder.finish()));
 
         let buffer_slice = staging_buffer.slice(..);
@@ -1734,47 +1767,9 @@ impl GpuSoABackend {
                     binding: 6,
                     resource: self.config_buffer.as_ref().unwrap().as_entire_binding(),
                 },
-            ],
-        }))
-    }
-
-    fn create_sparse_bind_group(&self) -> AriaResult<wgpu::BindGroup> {
-        let layout = self
-            .sparse_bind_group_layout
-            .as_ref()
-            .ok_or_else(|| AriaError::gpu("Sparse bind group layout not initialized"))?;
-
-        Ok(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("SoA Sparse Bind Group"),
-            layout,
-            entries: &[
                 wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.flags_buffer.as_ref().unwrap().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self
-                        .active_count_buffer
-                        .as_ref()
-                        .unwrap()
-                        .as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: self
-                        .active_indices_buffer
-                        .as_ref()
-                        .unwrap()
-                        .as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: self.indirect_buffer.as_ref().unwrap().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: self.config_buffer.as_ref().unwrap().as_entire_binding(),
+                    binding: 7,
+                    resource: self.dna_indices_buffer.as_ref().unwrap().as_entire_binding(),
                 },
             ],
         }))
@@ -2280,6 +2275,7 @@ const SLEEP_COUNTER_MAX: u32 = 3u;       // Must be low for N ticks to sleep
 @group(0) @binding(4) var<storage, read> dna_pool: array<vec4<f32>>;
 @group(0) @binding(5) var<storage, read> signals: array<vec4<f32>>;
 @group(0) @binding(6) var<uniform> config: Config;
+@group(0) @binding(7) var<storage, read> dna_indices: array<u32>;
 
 fn get_sleep_counter(f: u32) -> u32 {
     return (f & SLEEP_COUNTER_MASK) >> SLEEP_COUNTER_SHIFT;
@@ -2306,10 +2302,18 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
 
+    // Get DNA for this cell
+    let dna_idx = dna_indices[idx];
+    let dna_base = dna_idx * 5u;
+    let thresholds1 = dna_pool[dna_base + 1u];
+    let gene_sleep = thresholds1.y; // thresholds[5]
+    let gene_wake = thresholds1.z;  // thresholds[6]
+
     // === HYSTERESIS SLEEP LOGIC ===
     if is_sleeping {
-        // Check for wake up (above exit threshold)
-        if cell_energy.activity_level > SLEEP_EXIT_THRESHOLD {
+        // Check for wake up (above genetic exit threshold)
+        // Scaled to match SLEEP_EXIT_THRESHOLD typical range [0.4]
+        if cell_energy.activity_level > gene_wake {
             cell_flags = cell_flags & ~FLAG_SLEEPING;
             set_sleep_counter(&cell_flags, 0u);
         } else {
@@ -2346,7 +2350,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     cell_energy.activity_level *= 0.9;
 
     // === HYSTERESIS ENTER SLEEP ===
-    if cell_energy.activity_level < SLEEP_ENTER_THRESHOLD {
+    // Scaled to match SLEEP_ENTER_THRESHOLD typical range [0.2]
+    if cell_energy.activity_level < gene_sleep {
         let counter = get_sleep_counter(cell_flags);
         if counter >= SLEEP_COUNTER_MAX {
             // Counter reached max → enter sleep
@@ -2372,6 +2377,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 /// Signal propagation shader with SoA layout
 const SIGNAL_SHADER_SOA: &str = r#"
 // Signal propagation with SoA layout
+// ... (Wait, I'll do this in a multi_replace because I need to update bindings)
 
 struct CellEnergy {
     energy: f32,
@@ -2417,6 +2423,7 @@ const SLEEP_EXIT_THRESHOLD: f32 = 0.4;
 @group(0) @binding(4) var<storage, read> dna_pool: array<vec4<f32>>;
 @group(0) @binding(5) var<storage, read> signals: array<SignalFragment>;
 @group(0) @binding(6) var<uniform> config: Config;
+@group(0) @binding(7) var<storage, read> dna_indices: array<u32>;
 
 fn calculate_resonance(signal_content: array<f32, 8>, cell_idx: u32) -> f32 {
     var dot: f32 = 0.0;
@@ -2462,6 +2469,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
 
+    // Get DNA for this cell
+    let dna_idx = dna_indices[idx];
+    let dna_base = dna_idx * 5u;
+    let thresholds1 = dna_pool[dna_base + 1u];
+    let reflexivity_gain = thresholds1.w;
+
     let signal_count = arrayLength(&signals);
     var received_signal = false;
 
@@ -2479,6 +2492,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             continue;
         }
 
+        // Check if signal is reflexive (source_id = u64::MAX)
+        let is_reflexive = (signal.source_id_low == 0xffffffffu) && (signal.source_id_high == 0xffffffffu);
+        let current_reflexivity = select(1.0, reflexivity_gain, is_reflexive);
+
         // Distance in semantic space (first 8 dimensions)
         var dist_sq: f32 = 0.0;
         for (var i = 0u; i < 4u; i++) {
@@ -2493,7 +2510,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
         if dist < config.signal_radius {
             let attenuation = 1.0 - (dist / config.signal_radius);
-            let intensity = signal.intensity * attenuation * config.reaction_amplification;
+            let intensity = signal.intensity * attenuation * config.reaction_amplification * current_reflexivity;
 
             // Wake sleeping cells if signal strong enough
             if is_sleeping && intensity > 0.1 {
@@ -2545,11 +2562,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 const COMPACT_SHADER_SOA: &str = r#"
 // Compact shader - counts active cells
 
-struct AtomicCounter {
-    count: atomic<u32>,
-    _pad: array<u32, 3>,
-}
-
 struct Config {
     energy_cap: f32,
     reaction_amplification: f32,
@@ -2571,11 +2583,16 @@ struct Config {
 const FLAG_SLEEPING: u32 = 1u;
 const FLAG_DEAD: u32 = 32u;
 
+struct SparseDispatch {
+    counter: atomic<u32>,
+    _pad: array<u32, 3>,
+    indices: array<u32>,
+}
+
 @group(0) @binding(0) var<storage, read> flags: array<u32>;
-@group(0) @binding(1) var<storage, read_write> counter: AtomicCounter;
-@group(0) @binding(2) var<storage, read_write> active_indices: array<u32>;
-@group(0) @binding(3) var<storage, read_write> indirect: array<u32>;
-@group(0) @binding(4) var<uniform> config: Config;
+@group(0) @binding(1) var<storage, read_write> dispatch: SparseDispatch;
+@group(0) @binding(2) var<storage, read_write> indirect: array<u32>;
+@group(0) @binding(3) var<uniform> config: Config;
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -2589,9 +2606,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let is_dead = (cell_flags & FLAG_DEAD) != 0u;
 
     if !is_sleeping && !is_dead {
-        let write_idx = atomicAdd(&counter.count, 1u);
-        if write_idx < arrayLength(&active_indices) {
-            active_indices[write_idx] = idx;
+        let write_idx = atomicAdd(&dispatch.counter, 1u);
+        if write_idx < arrayLength(&dispatch.indices) {
+            dispatch.indices[write_idx] = idx;
         }
     }
 }
@@ -2601,9 +2618,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 const PREPARE_DISPATCH_SHADER: &str = r#"
 // Prepare indirect dispatch - computes workgroup count from active cell count
 
-struct AtomicCounter {
-    count: atomic<u32>,
+struct SparseDispatch {
+    counter: atomic<u32>,
     _pad: array<u32, 3>,
+    indices: array<u32>,
 }
 
 struct IndirectArgs {
@@ -2632,14 +2650,13 @@ struct Config {
 }
 
 @group(0) @binding(0) var<storage, read> flags: array<u32>;
-@group(0) @binding(1) var<storage, read_write> counter: AtomicCounter;
-@group(0) @binding(2) var<storage, read_write> active_indices: array<u32>;
-@group(0) @binding(3) var<storage, read_write> indirect: IndirectArgs;
-@group(0) @binding(4) var<uniform> config: Config;
+@group(0) @binding(1) var<storage, read_write> dispatch: SparseDispatch;
+@group(0) @binding(2) var<storage, read_write> indirect: IndirectArgs;
+@group(0) @binding(3) var<uniform> config: Config;
 
 @compute @workgroup_size(1)
 fn main() {
-    let active_count = atomicLoad(&counter.count);
+    let active_count = atomicLoad(&dispatch.counter);
     indirect.x = (active_count + config.workgroup_size - 1u) / config.workgroup_size;
     indirect.y = 1u;
     indirect.z = 1u;
@@ -2683,9 +2700,10 @@ const SLEEP_COUNTER_SHIFT: u32 = 6u;
 const SLEEP_ENTER_THRESHOLD: f32 = 0.2;
 const SLEEP_COUNTER_MAX: u32 = 3u;
 
-struct AtomicCounter {
-    count: u32,
+struct SparseDispatchReadOnly {
+    counter: u32,
     _pad: array<u32, 3>,
+    indices: array<u32>,
 }
 
 @group(0) @binding(0) var<storage, read_write> energies: array<CellEnergy>;
@@ -2695,8 +2713,8 @@ struct AtomicCounter {
 @group(0) @binding(4) var<storage, read> dna_pool: array<vec4<f32>>;
 @group(0) @binding(5) var<storage, read> signals: array<vec4<f32>>;
 @group(0) @binding(6) var<uniform> config: Config;
-@group(0) @binding(7) var<storage, read> active_indices: array<u32>;
-@group(0) @binding(8) var<storage, read> counter: AtomicCounter;
+@group(0) @binding(7) var<storage, read> dispatch: SparseDispatchReadOnly;
+@group(0) @binding(8) var<storage, read> dna_indices: array<u32>;
 
 fn get_sleep_counter(f: u32) -> u32 {
     return (f & SLEEP_COUNTER_MASK) >> SLEEP_COUNTER_SHIFT;
@@ -2710,12 +2728,12 @@ fn set_sleep_counter(f: ptr<function, u32>, counter: u32) {
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // Thread index maps to active_indices, not directly to cell index
     let active_idx = id.x;
-    if active_idx >= counter.count {
+    if active_idx >= dispatch.counter {
         return;
     }
 
     // Get actual cell index from active_indices buffer
-    let idx = active_indices[active_idx];
+    let idx = dispatch.indices[active_idx];
     if idx >= config.cell_count {
         return;
     }

@@ -109,6 +109,13 @@ impl Substrate {
                 *last_cells = cell_indices;
             }
 
+            // === REFLEXIVITY (Axe 3 - Genesis) ===
+            // Store the emergent tension as ARIA's "current thought"
+            {
+                let mut last_thought = self.last_emergent_tension.write();
+                *last_thought = emergent_tension;
+            }
+
             // === PHYSICAL INTELLIGENCE: Emit tension, not words ===
             let emotional = self.emotional_state.read();
             let tension_signal = self.generate_tension_response(&emergent_tension, coherence, &emotional);

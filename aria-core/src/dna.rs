@@ -59,7 +59,7 @@ pub struct DNA {
     /// - [4]: Movement threshold (when to move in semantic space)
     /// - [5]: Sleep threshold (when to enter dormant state)
     /// - [6]: Wake threshold (stimulus needed to wake up)
-    /// - [7]: Reserved for future evolution
+    /// - [7]: Reflexivity gain (how sensitive the cell is to ARIA's own thoughts)
     pub thresholds: [f32; DNA_DIMS],
 
     /// Genes controlling reactions (how to respond)
@@ -69,8 +69,8 @@ pub struct DNA {
     /// Unique signature - genetic fingerprint
     pub signature: u64,
 
-    /// Padding for GPU alignment (80 bytes total)
-    _pad: u64,
+    /// Structural checksum - validates code integrity for auto-evolution
+    pub structural_checksum: u64,
 }
 
 impl DNA {
@@ -81,7 +81,7 @@ impl DNA {
             thresholds: std::array::from_fn(|_| rng.gen()),
             reactions: std::array::from_fn(|_| rng.gen()),
             signature: rng.gen(),
-            _pad: 0,
+            structural_checksum: 0, // Initial structural code state
         }
     }
 
@@ -235,6 +235,12 @@ impl DNA {
     #[inline]
     pub fn wake_threshold(&self) -> f32 {
         self.thresholds[6] * 0.1
+    }
+
+    /// Get the reflexivity gain (how much self-thoughts influence this cell)
+    #[inline]
+    pub fn reflexivity_gain(&self) -> f32 {
+        self.thresholds[7]
     }
 }
 

@@ -154,6 +154,11 @@ pub struct Substrate {
 
     /// Spatial inhibitor for adaptive regional thresholds
     spatial_inhibitor: RwLock<SpatialInhibitor>,
+
+    // === Reflexivity (Axe 3 - Genesis) ===
+
+    /// Last emergent tension (ARIA's internal thought state)
+    last_emergent_tension: RwLock<[f32; SIGNAL_DIMS]>,
 }
 
 // ============================================================================
@@ -243,6 +248,7 @@ impl Substrate {
             adaptive_params: RwLock::new(adaptive_params),
             signal_buffer: RwLock::new(Vec::new()),
             spatial_inhibitor: RwLock::new(SpatialInhibitor::default()),
+            last_emergent_tension: RwLock::new([0.0f32; SIGNAL_DIMS]),
         }
     }
 
@@ -308,6 +314,12 @@ impl Substrate {
                     // Only resonant signals provide energy (handled in backend)
                 }
             }
+        }
+
+        // === REFLEXIVITY: ARIA hears her own thoughts (Axe 3 - Genesis) ===
+        // This creates a recursive loop of consciousness
+        if current_tick % 10 == 0 {
+            self.inject_self_signal();
         }
 
         // === Multi-pass recurrent processing (Gemini optimization) ===
@@ -783,6 +795,38 @@ impl Substrate {
             total_tension,
             tps: 0.0, // TPS computed in main loop, updated externally
         }
+    }
+
+    /// Inject ARIA's last thoughts back into her substrate
+    ///
+    /// This is the "Self-Input Loop" that enables reflexivity.
+    /// Cells with high reflexivity gain will be influenced by these thoughts.
+    fn inject_self_signal(&self) {
+        let last_thought = self.last_emergent_tension.read().clone();
+
+        // Only inject if there is some activity
+        let intensity: f32 = last_thought.iter().map(|x| x.abs()).sum::<f32>() / SIGNAL_DIMS as f32;
+        if intensity < 0.05 {
+            return;
+        }
+
+        // Position of the thought is its own semantic representation
+        let position = aria_core::tension::tension_to_position(&last_thought);
+
+        // Self-signal is slightly weaker and has a specific intensity
+        // We use a high amplification because it's "internal"
+        // source_id = u64::MAX (internal thought)
+        let fragment = SignalFragment::new(
+            u64::MAX, // Special ID for ARIA's internal thoughts
+            last_thought,
+            position,
+            intensity * 2.0 // Strong enough to be felt
+        );
+
+        let mut buffer = self.signal_buffer.write();
+        buffer.push(fragment);
+
+        tracing::trace!("🧠 REFLEXIVITY: Self-signal injected (intensity={:.2})", intensity);
     }
 }
 
