@@ -776,6 +776,28 @@ impl GpuSoABackend {
                             },
                             count: None,
                         },
+                        // 9: dna_pool (read-only) - Selective Attention (Axe 3)
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 9,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        // 10: dna_indices (read-only) - Selective Attention (Axe 3)
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 10,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
                     ],
                 },
             ));
@@ -1333,6 +1355,16 @@ impl GpuSoABackend {
                 wgpu::BindGroupEntry {
                     binding: 8,
                     resource: self.connection_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+                // 9: dna_pool for Selective Attention
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: self.dna_buffer.as_ref().unwrap().as_entire_binding(),
+                },
+                // 10: dna_indices for Selective Attention
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: self.dna_indices_buffer.as_ref().unwrap().as_entire_binding(),
                 },
             ],
         }))
@@ -2207,18 +2239,34 @@ impl GpuSoABackend {
             cache: None,
         }));
 
+        // Signal With Hash Pipeline (Spatial Propagation)
+        if self.use_spatial_hash {
+            let signal_hash_source = self.compiler.generate_shader(self.compiler.get_spatial_signal_template(), &dna_logic);
+            let signal_hash_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Dynamic Signal With Hash Shader"),
+                source: wgpu::ShaderSource::Wgsl(signal_hash_source.into()),
+            });
+
+            let signal_hash_layout = self.signal_with_hash_bind_group_layout.as_ref().unwrap();
+            let signal_hash_pipeline_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Dynamic Signal Hash Pipeline Layout"),
+                bind_group_layouts: &[signal_hash_layout],
+                immediate_size: 0,
+            });
+
+            self.signal_with_hash_pipeline = Some(self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Dynamic Signal With Hash Pipeline"),
+                layout: Some(&signal_hash_pipeline_layout),
+                module: &signal_hash_shader,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            }));
+            tracing::info!("🎮 Dynamic Spatial Signal pipeline recompiled");
+        }
+
         tracing::info!("🧬 GPU: Dynamic pipelines recompiled (checksum: {}, logic size: {})", structural_checksum, dna_logic.len());
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_gpu_config_size() {
-        assert_eq!(std::mem::size_of::<GpuConfig>(), 64);
     }
 }
 

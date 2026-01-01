@@ -17,35 +17,47 @@ impl ShaderCompiler {
     pub fn generate_dna_logic(&self, checksum: u64) -> String {
         let mut logic = String::new();
 
-        // Bit 0: Metabolic strategy
-        if (checksum & 1) != 0 {
-            // Logistic metabolism
-            logic.push_str("    cell_energy.energy += config.energy_gain * (1.0 - cell_energy.energy / config.energy_cap);\n");
-        } else {
-            // Linear metabolism (standard)
-            logic.push_str("    cell_energy.energy += config.energy_gain;\n");
+        // 1. Metabolic strategy (Bits 0-7)
+        let metabolism_type = checksum & 0x03;
+        let metabolism_gain_mod = ((checksum >> 2) & 0x0F) as f32 / 8.0; // Range: 0.0 to 1.875
+
+        match metabolism_type {
+            0 => { // Linear (standard)
+                logic.push_str(&format!("    cell_energy.energy += config.energy_gain * {:.4};\n", metabolism_gain_mod));
+            }
+            1 => { // Logistic (saturation)
+                logic.push_str(&format!("    cell_energy.energy += config.energy_gain * {:.4} * (1.0 - cell_energy.energy / config.energy_cap);\n", metabolism_gain_mod));
+            }
+            2 => { // Pulsed (oscillatory)
+                logic.push_str(&format!("    let pulse = 0.5 + 0.5 * sin(f32(config.tick) * 0.1);\n    cell_energy.energy += config.energy_gain * {:.4} * pulse;\n", metabolism_gain_mod));
+            }
+            _ => { // Tension-regulated
+                logic.push_str(&format!("    cell_energy.energy += config.energy_gain * {:.4} * (1.0 - cell_energy.tension);\n", metabolism_gain_mod));
+            }
         }
 
-        // Bit 1: Activity decay strategy
-        if (checksum & 2) != 0 {
-            // Sigmoidal decay (energy-dependent)
-            logic.push_str("    cell_energy.activity_level *= (0.8 + 0.15 * (cell_energy.energy / config.energy_cap));\n");
+        // 2. Activity decay strategy (Bits 8-15)
+        let decay_rate = 0.8 + ((checksum >> 8) & 0x0F) as f32 * 0.0125; // Range: 0.8 to 0.9875
+        let decay_nonlinear = (checksum >> 12) & 0x01;
+
+        if decay_nonlinear != 0 {
+             logic.push_str(&format!("    cell_energy.activity_level *= ({:.4} + 0.1 * (cell_energy.energy / config.energy_cap));\n", decay_rate - 0.1));
         } else {
-            // Constant decay (standard)
-            logic.push_str("    cell_energy.activity_level *= 0.9;\n");
+             logic.push_str(&format!("    cell_energy.activity_level *= {:.4};\n", decay_rate));
         }
 
-        // Bit 2: Signal processing - Reflexive boost
-        if (checksum & 4) != 0 {
-            // Nonlinear reflexive gain
-            logic.push_str("    let reflexive_boost = pow(reflexivity_gain, 1.5);\n");
-        } else {
-            // Linear reflexive gain
-            logic.push_str("    let reflexive_boost = reflexivity_gain;\n");
-        }
+        // 3. Reflexivity processing (Bits 16-23)
+        let reflex_pow = 0.5 + ((checksum >> 16) & 0x0F) as f32 * 0.125; // Range: 0.5 to 2.375
+        logic.push_str(&format!("    let reflexive_boost = pow(max(0.001, reflexivity_gain), {:.4});\n", reflex_pow));
+
+        // 4. Selective Attention (Axe 3 - Genesis)
+        logic.push_str("    let attention_boost = 0.5 + attention_focus * 1.5;\n");
+        logic.push_str("    let semantic_threshold = semantic_filter * 0.2;\n");
 
         logic
     }
+
+    pub fn get_spatial_signal_template(&self) -> &str { SPATIAL_SIGNAL_TEMPLATE }
 
     pub fn get_cell_update_template(&self) -> &str { CELL_UPDATE_TEMPLATE }
     pub fn get_signal_template(&self) -> &str { SIGNAL_TEMPLATE }
@@ -129,7 +141,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     cell_energy.energy -= config.cost_rest;
-    let reflexivity_gain = dna_pool[dna_base+4u].x;
+    let reflexivity_gain = dna_pool[dna_base+1u].w; // thresholds[7]
+    let attention_focus = dna_pool[dna_base+3u].z;  // reactions[6]
+    let semantic_filter = dna_pool[dna_base+3u].w;  // reactions[7]
 
     // [DYNAMIC_LOGIC]
     if cell_energy.activity_level < gene_sleep {
@@ -169,7 +183,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var cell_energy = energies[idx];
     let dna_idx = dna_indices[idx];
     let dna_base = dna_idx * 5u;
-    let reflexivity_gain = dna_pool[dna_base + 4u].x;
+    let reflexivity_gain = dna_pool[dna_base+1u].w; // thresholds[7]
+    let attention_focus = dna_pool[dna_base+3u].z;  // reactions[6]
+    let semantic_filter = dna_pool[dna_base+3u].w;  // reactions[7]
 
     // [DYNAMIC_LOGIC]
 
@@ -255,4 +271,108 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 const HEBBIAN_SHADER: &str = r#"
 @compute @workgroup_size(256)
 fn main() { /* Placeholder for future Hebbian implementation */ }
+"#;
+
+const SPATIAL_SIGNAL_TEMPLATE: &str = r#"
+struct CellEnergy { energy: f32, tension: f32, activity_level: f32, _pad: f32 }
+struct CellPosition { position: array<f32, 16> }
+struct SignalFragment { source_id_low: u32, source_id_high: u32, content: array<f32, 8>, position: array<f32, 8>, intensity: f32, _pad: array<f32, 3> }
+struct GridRegion { count: u32, cell_indices: array<u32, 64>, _pad: array<u32, 3> }
+struct SpatialConfig { grid_size: vec3<u32>, max_cells_per_region: u32, min_pos: vec3<f32>, region_size: f32, cell_count: u32, _pad: array<u32, 3> }
+struct Config { energy_cap: f32, reaction_amplification: f32, state_cap: f32, signal_radius: f32, cost_rest: f32, cost_signal: f32, cost_move: f32, cost_divide: f32, signal_energy_base: f32, signal_resonance_factor: f32, energy_gain: f32, tick: u32, cell_count: u32, workgroup_size: u32, _pad: vec2<u32> }
+struct CellConnections { targets: array<u32, 16>, strengths: array<f32, 16>, count: u32, _pad: array<u32, 3> }
+
+const FLAG_SLEEPING: u32 = 1u;
+const FLAG_DEAD: u32 = 32u;
+const NO_CONNECTION: u32 = 0xFFFFFFFFu;
+const CONNECTION_SIGNAL_FACTOR: f32 = 0.5;
+const HUB_INFLUENCE_FACTOR: f32 = 0.1;
+
+@group(0) @binding(0) var<storage, read_write> energies: array<CellEnergy>;
+@group(0) @binding(1) var<storage, read> positions: array<CellPosition>;
+@group(0) @binding(2) var<storage, read_write> states: array<vec4<f32>>;
+@group(0) @binding(3) var<storage, read_write> flags: array<u32>;
+@group(0) @binding(4) var<storage, read> signals: array<SignalFragment>;
+@group(0) @binding(5) var<storage, read> grid: array<GridRegion>;
+@group(0) @binding(6) var<uniform> config: Config;
+@group(0) @binding(7) var<uniform> spatial_config: SpatialConfig;
+@group(0) @binding(8) var<storage, read> connections: array<CellConnections>;
+@group(0) @binding(9) var<storage, read> dna_pool: array<vec4<f32>>;
+@group(0) @binding(10) var<storage, read> dna_indices: array<u32>;
+
+fn position_to_grid(pos: vec3<f32>) -> vec3<i32> {
+    let normalized = (pos - spatial_config.min_pos) / spatial_config.region_size;
+    return vec3<i32>(i32(normalized.x), i32(normalized.y), i32(normalized.z));
+}
+fn grid_index(coord: vec3<i32>) -> u32 {
+    let clamped = vec3<u32>(u32(clamp(coord.x, 0, i32(spatial_config.grid_size.x) - 1)), u32(clamp(coord.y, 0, i32(spatial_config.grid_size.y) - 1)), u32(clamp(coord.z, 0, i32(spatial_config.grid_size.z) - 1)));
+    return clamped.x + clamped.y * spatial_config.grid_size.x + clamped.z * spatial_config.grid_size.x * spatial_config.grid_size.y;
+}
+fn calculate_resonance(signal_content: array<f32, 8>, cell_state_0: vec4<f32>, cell_state_1: vec4<f32>) -> f32 {
+    var dot = 0.0; var norm_sig = 0.0; var norm_state = 0.0;
+    for (var i = 0u; i < 4u; i++) { dot += signal_content[i] * cell_state_0[i]; norm_sig += signal_content[i] * signal_content[i]; norm_state += cell_state_0[i] * cell_state_0[i]; }
+    for (var i = 0u; i < 4u; i++) { dot += signal_content[i+4u] * cell_state_1[i]; norm_sig += signal_content[i+4u] * signal_content[i+4u]; norm_state += cell_state_1[i] * cell_state_1[i]; }
+    let denom = sqrt(norm_sig * norm_state);
+    if denom > 0.001 { return (dot / denom + 1.0) * 0.5; }
+    return 0.5;
+}
+
+@compute @workgroup_size(1)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let signal_idx = id.x;
+    if signal_idx >= arrayLength(&signals) { return; }
+    let signal = signals[signal_idx];
+    if signal.intensity < 0.001 { return; }
+    let signal_pos = vec3<f32>(signal.content[0], signal.content[1], signal.content[2]);
+    let signal_grid = position_to_grid(signal_pos);
+    let grid_radius = i32(ceil(config.signal_radius / spatial_config.region_size));
+    for (var dx = -grid_radius; dx <= grid_radius; dx++) {
+        for (var dy = -grid_radius; dy <= grid_radius; dy++) {
+            for (var dz = -grid_radius; dz <= grid_radius; dz++) {
+                let neighbor_coord = signal_grid + vec3<i32>(dx, dy, dz);
+                if neighbor_coord.x < 0 || neighbor_coord.x >= i32(spatial_config.grid_size.x) || neighbor_coord.y < 0 || neighbor_coord.y >= i32(spatial_config.grid_size.y) || neighbor_coord.z < 0 || neighbor_coord.z >= i32(spatial_config.grid_size.z) { continue; }
+                let region_idx = grid_index(neighbor_coord);
+                let region = grid[region_idx];
+                for (var i = 0u; i < min(region.count, spatial_config.max_cells_per_region); i++) {
+                    let cell_idx = region.cell_indices[i];
+                    if cell_idx >= config.cell_count { continue; }
+                    var cell_energy = energies[cell_idx];
+                    var cell_flags = flags[cell_idx];
+                    if (cell_flags & FLAG_DEAD) != 0u { continue; }
+                    let cell_pos = positions[cell_idx];
+                    var dist_sq = 0.0;
+                    for (var d = 0u; d < 8u; d++) { let diff = cell_pos.position[d] - signal.position[d]; dist_sq += diff * diff; }
+                    let dist = sqrt(dist_sq);
+                    if dist >= config.signal_radius { continue; }
+                    let attenuation = 1.0 - (dist / config.signal_radius);
+                    let intensity = signal.intensity * attenuation * config.reaction_amplification;
+                    if (cell_flags & FLAG_SLEEPING) != 0u && intensity > 0.1 { cell_flags &= ~FLAG_SLEEPING; cell_energy.activity_level = 0.5; cell_energy.tension = 0.2; }
+                    if (cell_flags & FLAG_SLEEPING) == 0u {
+                        let dna_idx = dna_indices[cell_idx];
+                        let dna_base = dna_idx * 5u;
+                        let reflexivity_gain = dna_pool[dna_base+1u].w;
+                        let attention_focus = dna_pool[dna_base+3u].z;
+                        let semantic_filter = dna_pool[dna_base+3u].w;
+
+                        // [DYNAMIC_LOGIC]
+                        let dynamic_intensity = intensity * attention_boost;
+                        if (dynamic_intensity < semantic_threshold) { continue; }
+
+                        var state0 = states[cell_idx * 8u]; var state1 = states[cell_idx * 8u + 1u];
+                        for (var j = 0u; j < 4u; j++) { state0[j] += signal.content[j] * dynamic_intensity; }
+                        for (var j = 0u; j < 4u; j++) { state1[j] += signal.content[j+4u] * dynamic_intensity; }
+                        states[cell_idx * 8u] = state0; states[cell_idx * 8u + 1u] = state1;
+                        let resonance = calculate_resonance(signal.content, state0, state1);
+                        if resonance > 0.1 {
+                            let energy_gain = config.signal_energy_base * dynamic_intensity * ((resonance - 0.1) / 0.9) * (1.0 + resonance * config.signal_resonance_factor);
+                            cell_energy.energy = min(cell_energy.energy + energy_gain, config.energy_cap);
+                        }
+                        cell_energy.activity_level += dynamic_intensity;
+                    }
+                    energies[cell_idx] = cell_energy; flags[cell_idx] = cell_flags;
+                }
+            }
+        }
+    }
+}
 "#;

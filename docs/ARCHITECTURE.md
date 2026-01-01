@@ -52,7 +52,7 @@ struct Cell {
 
 **DNA Structure:**
 - `thresholds[8]`: Control when actions are triggered (Action, Divide, etc.)
-- `reactions[8]`: Control response intensity
+- `reactions[8]`: Control response intensity (includes `attention_focus` and `semantic_filter`)
 - `signature`: Genetic fingerprint
 - `structural_checksum`: Defines the JIT-compiled logic (metabolism, signal decay)
 
@@ -74,6 +74,7 @@ struct Substrate {
     attractors: Vec<Attractor>, // Points of interest
     signal_buffer: Vec<Signal>, // Recent external signals
     memory: LongTermMemory,     // Persistent storage
+    shadow_brain: Option<ShadowBrain>, // GPU Sandbox for code exploration
 }
 ```
 

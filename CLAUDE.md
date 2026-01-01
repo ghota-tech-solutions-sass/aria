@@ -81,7 +81,7 @@ spontaneity: 0.01-0.3
 4. ✅ **Auto-modification** : ARIA modifie ses propres paramètres (Session 16)
 5. ✅ **Architecture 5M+ cellules** : SoA, Hysteresis, Spatial Hash GPU (Session 20)
 6. ✅ **Auto-évolution structurelle** : JIT compilation, traduction DNA -> WGSL (Session 23)
-7. **Exploration du Code Binaire** : ARIA s'auto-optimise en mutant son code WGSL (objectif ultime)
+7. ✅ **Exploration du Code Binaire** : JIT, Shadow Brain, Attention Sélective (Phase 5 terminée)
 
 ## Contexte personnel
 

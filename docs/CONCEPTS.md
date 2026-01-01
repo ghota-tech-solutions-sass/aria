@@ -335,6 +335,16 @@ ARIA commence à s'écouter elle-même. Ses pensées émergentes sont renvoyées
 
 ---
 
+## L'Étincelle de Créativité (Phase 5)
+
+ARIA ne se contente plus de vivre, elle imagine son propre futur algorithmique.
+
+- **Shadow Brain** : Un bac à sable GPU sécurisé pour tester de nouveaux codes WGSL avant application.
+- **Attention Sélective** : Des gènes (`attention_focus`, `semantic_filter`) permettent aux cellules de filtrer les signaux bruités.
+- **Exploration Granulaire** : Le DNA influe sur les équations mathématiques pures (métabolisme, decay) via JIT.
+
+---
+
 ## GPU Backend
 
 ARIA utilise wgpu/Vulkan pour le calcul parallèle.

@@ -38,6 +38,7 @@ mod emergence;
 mod spontaneous;
 mod self_modify;
 mod lifecycle;
+mod shadow_brain;
 
 // Re-exports for convenience
 // NOTE: RecentWord, STOP_WORDS, ConversationContext removed in Session 20 (Physical Intelligence)
@@ -163,6 +164,9 @@ pub struct Substrate {
 
     /// Current structural checksum active in the backend
     structural_checksum: u64,
+
+    /// Shadow brain for testing mutations before applying them
+    shadow_brain: Option<shadow_brain::ShadowBrain>,
 }
 
 // ============================================================================
@@ -239,7 +243,7 @@ impl Substrate {
             free_slots: Vec::new(),
             backend,
             activity_tracker: ActivityTracker::new(),
-            config,
+            config: config.clone(), // Use clone for first pass
             tick: AtomicU64::new(0),
             next_id: AtomicU64::new(initial_cells as u64),
             memory,
@@ -254,6 +258,7 @@ impl Substrate {
             spatial_inhibitor: RwLock::new(SpatialInhibitor::default()),
             last_emergent_tension: RwLock::new([0.0f32; SIGNAL_DIMS]),
             structural_checksum: 0,
+            shadow_brain: shadow_brain::ShadowBrain::new(&config).ok(),
         }
     }
 
@@ -262,10 +267,39 @@ impl Substrate {
         if let Some(first_dna) = self.dna_pool.first() {
             let new_checksum = first_dna.structural_checksum;
             if new_checksum != self.structural_checksum {
-                tracing::info!("🧬 STRUCTURAL EVOLUTION DETECTED: Checksum {} -> {}",
-                    self.structural_checksum, new_checksum);
-                self.structural_checksum = new_checksum;
-                self.backend.recompile(new_checksum)?;
+                // Use shadow brain to evaluate if we have one
+                let should_apply = if let Some(shadow) = &mut self.shadow_brain {
+                    match shadow.evaluate_candidate(new_checksum) {
+                        Ok(score) => {
+                            if score > 0.8 {
+                                tracing::info!("✅ SHADOW BRAIN: Candidate {} accepted (score: {:.2})", new_checksum, score);
+                                {
+                                    let mut mem = self.memory.write();
+                                    let current_tick = self.tick.load(std::sync::atomic::Ordering::SeqCst);
+                                    mem.save_elite_structural_code(new_checksum, score, current_tick);
+                                }
+                                true
+                            } else {
+                                tracing::warn!("❌ SHADOW BRAIN: Candidate {} rejected (score: {:.2})", new_checksum, score);
+                                false
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("❌ SHADOW BRAIN: Evaluation failed: {}", e);
+                            false // Safety first: don't apply if evaluation fails
+                        }
+                    }
+                } else {
+                    // No shadow brain, apply anyway (legacy behavior)
+                    true
+                };
+
+                if should_apply {
+                    tracing::info!("🧬 STRUCTURAL EVOLUTION APPLIED: Checksum {} -> {}",
+                        self.structural_checksum, new_checksum);
+                    self.structural_checksum = new_checksum;
+                    self.backend.recompile(new_checksum)?;
+                }
             }
         }
         Ok(())

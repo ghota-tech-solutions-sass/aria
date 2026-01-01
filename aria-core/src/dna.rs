@@ -242,6 +242,18 @@ impl DNA {
     pub fn reflexivity_gain(&self) -> f32 {
         self.thresholds[7]
     }
+
+    /// Get attention focus (Axe 3 - Genesis)
+    #[inline]
+    pub fn attention_focus(&self) -> f32 {
+        self.reactions[6]
+    }
+
+    /// Get semantic filter intensity (Axe 3 - Genesis)
+    #[inline]
+    pub fn semantic_filter(&self) -> f32 {
+        self.reactions[7]
+    }
 }
 
 impl Default for DNA {

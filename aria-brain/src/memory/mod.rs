@@ -53,6 +53,13 @@ pub struct EliteDNA {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+pub struct EliteStructuralCode {
+    pub checksum: u64,
+    pub validation_score: f32,
+    pub discovered_at: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Pattern {
     /// The pattern itself (sequence of vectors)
     pub sequence: Vec<[f32; 8]>,
@@ -132,6 +139,10 @@ pub struct LongTermMemory {
 
     /// Important memories (high emotional moments)
     pub memories: Vec<Memory>,
+
+    /// Elite structural codes (validated by Shadow Brain)
+    #[serde(default)]
+    pub elite_structural_codes: Vec<EliteStructuralCode>,
 
     /// Global statistics
     pub stats: GlobalStats,
@@ -251,6 +262,7 @@ impl LongTermMemory {
             semantic_clusters: Vec::new(),
             episodes: Vec::new(),
             compressed_episodes: Vec::new(),
+            elite_structural_codes: Vec::new(),
             next_episode_id: 0,
             first_times: HashMap::new(),
             // Adaptive params
@@ -276,8 +288,28 @@ impl LongTermMemory {
     }
 
     // =========================================================================
-    // EXPLORATION METHODS
+    // STRUCTURAL EVOLUTION METHODS
     // =========================================================================
+
+    /// Save a structural code that has proven effective
+    pub fn save_elite_structural_code(&mut self, checksum: u64, score: f32, tick: u64) {
+        // Only keep if better than current ones or if we have space
+        let code = EliteStructuralCode {
+            checksum,
+            validation_score: score,
+            discovered_at: tick,
+        };
+
+        self.elite_structural_codes.push(code);
+
+        // Sort by score and keep top 10
+        self.elite_structural_codes.sort_by(|a, b| b.validation_score.partial_cmp(&a.validation_score).unwrap_or(std::cmp::Ordering::Equal));
+        if self.elite_structural_codes.len() > 10 {
+            self.elite_structural_codes.truncate(10);
+        }
+
+        tracing::info!("💾 Saved elite structural code: {} (score: {:.4})", checksum, score);
+    }
 
     /// Log an exploration attempt (ARIA tried a word combination)
     pub fn log_exploration(&mut self, combination: &str, tick: u64, intensity: f32) {
