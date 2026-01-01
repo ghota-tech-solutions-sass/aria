@@ -127,6 +127,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             energies[idx] = cell_energy; flags[idx] = cell_flags; return;
         }
     }
+
+    cell_energy.energy -= config.cost_rest;
+    let reflexivity_gain = dna_pool[dna_base+4u].x;
+
     // [DYNAMIC_LOGIC]
     if cell_energy.activity_level < gene_sleep {
         let counter = get_sleep_counter(cell_flags);
@@ -164,7 +168,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if (flags[idx] & (FLAG_SLEEPING | FLAG_DEAD)) != 0u { return; }
     var cell_energy = energies[idx];
     let dna_idx = dna_indices[idx];
-    let reflexivity_gain = dna_pool[dna_idx * 5u + 4u].x;
+    let dna_base = dna_idx * 5u;
+    let reflexivity_gain = dna_pool[dna_base + 4u].x;
 
     // [DYNAMIC_LOGIC]
 
