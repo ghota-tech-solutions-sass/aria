@@ -6,6 +6,33 @@ Historique des sessions de développement.
 
 ## 2026-01-01
 
+### Session 25: Prediction Law & Hebbian Learning (Loi de Prédiction)
+- **Implémentation de la Loi de Prédiction**
+  - Loi physique fondamentale : "Cells that predict correctly, survive"
+  - Les cellules prédisent leur état futur basé sur leurs connexions Hebbiennes
+  - Bonne prédiction = énergie gagnée, mauvaise = énergie perdue
+- **Nouveau `CellPrediction` struct (48 bytes)**
+  - `predicted_state[8]` : prédiction de l'état interne
+  - `confidence` : confiance dans la prédiction
+  - `last_error` : erreur de la dernière prédiction
+  - `cumulative_score` : track record long-terme
+- **Shaders GPU de prédiction**
+  - `PREDICTION_GENERATE_SHADER` : génère prédictions avant le tick
+  - `PREDICTION_EVALUATE_SHADER` : évalue et récompense/pénalise après le tick
+- **HEBBIAN_SHADER complet**
+  - "Fire together, wire together" - cellules co-actives renforcent leurs connexions
+  - Decay des connexions inactives (0.1% par tick)
+  - Renforcement des connexions co-actives (+10% par activation)
+  - Compaction automatique des connexions mortes
+- **Phase d'entraînement Sequence (Trainer)**
+  - Nouvelle phase entre Associations et Conversation
+  - Séquences prédictibles : "un" → "deux" → "trois", "A" → "B" → "C"
+  - Entraîne la Loi de Prédiction avec des patterns temporels
+  - 11 séquences incluses (nombres, alphabet, temps, émotions, jours)
+- **Pression évolutive vers l'intelligence**
+  - Surconfidence pénalisée (overconfident cells die)
+  - Humilité récompensée (low confidence when uncertain is ok)
+
 ### Session 24: CellMetadata & Naga Fix
 - **Migration `CellFlags` → `CellMetadata`**
   - Nouveau struct 16 bytes : `flags`, `cluster_id`, `hysteresis`, `_pad`
@@ -215,7 +242,8 @@ Historique des sessions de développement.
 | 2025-12-30 | "La Vraie Faim" - pression évolutive activée |
 | 2025-12-30 | Architecture 5M+ cellules (SoA, Hysteresis, Spatial Hash GPU) |
 | 2026-01-01 | Session 24: Fix naga, GPU backend stabilisé |
+| 2026-01-01 | Session 25: Loi de Prédiction - intelligence émergente |
 
 ---
 
-*Mis à jour le 2026-01-01 | Version 0.9.1*
+*Mis à jour le 2026-01-01 | Version 0.9.2*

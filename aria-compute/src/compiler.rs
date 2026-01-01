@@ -69,6 +69,10 @@ impl ShaderCompiler {
     pub fn get_prepare_dispatch_shader(&self) -> &str { PREPARE_DISPATCH_SHADER }
     pub fn get_sleeping_drain_shader(&self) -> &str { SLEEPING_DRAIN_SHADER }
     pub fn get_hebbian_shader(&self) -> &str { HEBBIAN_SHADER }
+
+    // Prediction Law shaders
+    pub fn get_prediction_generate_shader(&self) -> &str { PREDICTION_GENERATE_SHADER }
+    pub fn get_prediction_evaluate_shader(&self) -> &str { PREDICTION_EVALUATE_SHADER }
 }
 
 // ============================================================================
@@ -286,17 +290,353 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var cell_meta = metadata[idx];
     if (cell_meta.flags & FLAG_SLEEPING) != 0u {
         var cell_energy = energies[idx];
-        cell_energy.energy -= config.cost_rest * 0.1;
-        if cell_energy.energy <= 0.0 { cell_meta.flags |= FLAG_DEAD; }
+        cell_energy.energy = cell_energy.energy - config.cost_rest * 0.1;
+        if cell_energy.energy <= 0.0 { cell_meta.flags = cell_meta.flags | FLAG_DEAD; }
         energies[idx] = cell_energy;
         metadata[idx] = cell_meta;
     }
 }
 "#;
 
+// ============================================================================
+// HEBBIAN LEARNING - "Cells that fire together, wire together"
+// ============================================================================
+
+/// Hebbian learning shader: strengthens connections between co-active cells
+/// This is the foundation for the Prediction Law - cells need connections to predict
 const HEBBIAN_SHADER: &str = r#"
+struct CellEnergy { energy: f32, tension: f32, activity_level: f32, _pad: f32 }
+struct Config {
+    energy_cap: f32, reaction_amplification: f32, state_cap: f32, signal_radius: f32,
+    cost_rest: f32, cost_signal: f32, cost_move: f32, cost_divide: f32,
+    signal_energy_base: f32, signal_resonance_factor: f32, energy_gain: f32,
+    tick: u32, cell_count: u32, workgroup_size: u32, _pad: vec2<u32>
+}
+
+struct CellConnections {
+    targets: array<u32, 16>,
+    strengths: array<f32, 16>,
+    count: u32,
+    _pad: array<u32, 3>,
+}
+
+const FLAG_SLEEPING: u32 = 1u;
+const FLAG_DEAD: u32 = 32u;
+const NO_CONNECTION: u32 = 0xFFFFFFFFu;
+
+// Hebbian learning constants
+const COACTIVATION_THRESHOLD: f32 = 0.3;  // Both cells must be above this
+const STRENGTHEN_RATE: f32 = 0.1;         // How fast connections grow
+const DECAY_RATE: f32 = 0.001;            // How fast unused connections fade
+const MAX_STRENGTH: f32 = 1.0;            // Maximum connection strength
+const MAX_CONNECTIONS: u32 = 16u;
+
+struct CellMetadata { flags: u32, cluster_id: u32, hysteresis: f32, _pad: u32 }
+
+@group(0) @binding(0) var<storage, read> energies: array<CellEnergy>;
+@group(0) @binding(1) var<storage, read> metadata: array<CellMetadata>;
+@group(0) @binding(2) var<storage, read_write> connections: array<CellConnections>;
+@group(0) @binding(3) var<uniform> config: Config;
+
+// Find an existing connection to target, returns slot index or MAX_CONNECTIONS if not found
+fn find_connection(conn: CellConnections, target: u32) -> u32 {
+    for (var i = 0u; i < conn.count; i = i + 1u) {
+        if conn.targets[i] == target {
+            return i;
+        }
+    }
+    return MAX_CONNECTIONS;
+}
+
+// Find the weakest connection slot (for replacement)
+fn find_weakest_slot(conn: CellConnections) -> u32 {
+    var weakest_slot = 0u;
+    var weakest_strength = conn.strengths[0];
+    for (var i = 1u; i < MAX_CONNECTIONS; i = i + 1u) {
+        if conn.strengths[i] < weakest_strength {
+            weakest_slot = i;
+            weakest_strength = conn.strengths[i];
+        }
+    }
+    return weakest_slot;
+}
+
 @compute @workgroup_size(256)
-fn main() { /* Placeholder for future Hebbian implementation */ }
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let idx = id.x;
+    if idx >= config.cell_count { return; }
+
+    let cell_meta = metadata[idx];
+    if (cell_meta.flags & (FLAG_SLEEPING | FLAG_DEAD)) != 0u { return; }
+
+    let cell_energy = energies[idx];
+
+    // Only active cells participate in Hebbian learning
+    if cell_energy.activity_level < COACTIVATION_THRESHOLD { return; }
+
+    var conn = connections[idx];
+
+    // 1. DECAY: All connections decay slightly each tick
+    for (var i = 0u; i < conn.count; i = i + 1u) {
+        conn.strengths[i] = max(0.0, conn.strengths[i] - DECAY_RATE);
+    }
+
+    // 2. STRENGTHEN: Look for co-active neighbors and strengthen connections
+    // We check a subset of cells each tick to avoid O(N²) complexity
+    // Using tick modulo to spread the work across frames
+    let check_start = (config.tick * 256u + idx) % config.cell_count;
+    let check_count = min(64u, config.cell_count); // Check up to 64 cells per tick
+
+    for (var i = 0u; i < check_count; i = i + 1u) {
+        let other_idx = (check_start + i) % config.cell_count;
+        if other_idx == idx { continue; }
+
+        let other_meta = metadata[other_idx];
+        if (other_meta.flags & (FLAG_SLEEPING | FLAG_DEAD)) != 0u { continue; }
+
+        let other_energy = energies[other_idx];
+
+        // Both cells must be active (co-activation)
+        if other_energy.activity_level < COACTIVATION_THRESHOLD { continue; }
+
+        // "Fire together, wire together" - strengthen connection
+        let existing_slot = find_connection(conn, other_idx);
+
+        if existing_slot < MAX_CONNECTIONS {
+            // Strengthen existing connection
+            conn.strengths[existing_slot] = min(MAX_STRENGTH,
+                conn.strengths[existing_slot] + STRENGTHEN_RATE);
+        } else if conn.count < MAX_CONNECTIONS {
+            // Create new connection
+            let slot = conn.count;
+            conn.targets[slot] = other_idx;
+            conn.strengths[slot] = STRENGTHEN_RATE;
+            conn.count = conn.count + 1u;
+        } else {
+            // Replace weakest connection if new one would be stronger
+            let weakest = find_weakest_slot(conn);
+            if conn.strengths[weakest] < STRENGTHEN_RATE {
+                conn.targets[weakest] = other_idx;
+                conn.strengths[weakest] = STRENGTHEN_RATE;
+            }
+        }
+    }
+
+    // 3. COMPACT: Remove dead connections (strength near zero)
+    var write_idx = 0u;
+    for (var read_idx = 0u; read_idx < conn.count; read_idx = read_idx + 1u) {
+        if conn.strengths[read_idx] > 0.001 {
+            if write_idx != read_idx {
+                conn.targets[write_idx] = conn.targets[read_idx];
+                conn.strengths[write_idx] = conn.strengths[read_idx];
+            }
+            write_idx = write_idx + 1u;
+        }
+    }
+
+    // Clear removed slots
+    for (var i = write_idx; i < conn.count; i = i + 1u) {
+        conn.targets[i] = NO_CONNECTION;
+        conn.strengths[i] = 0.0;
+    }
+    conn.count = write_idx;
+
+    connections[idx] = conn;
+}
+"#;
+
+// ============================================================================
+// PREDICTION LAW - "Cells that predict correctly, survive"
+// ============================================================================
+
+/// Prediction phase: Each cell predicts its next state based on connections
+/// Run BEFORE the main tick to generate predictions
+const PREDICTION_GENERATE_SHADER: &str = r#"
+struct CellEnergy { energy: f32, tension: f32, activity_level: f32, _pad: f32 }
+struct Config {
+    energy_cap: f32, reaction_amplification: f32, state_cap: f32, signal_radius: f32,
+    cost_rest: f32, cost_signal: f32, cost_move: f32, cost_divide: f32,
+    signal_energy_base: f32, signal_resonance_factor: f32, energy_gain: f32,
+    tick: u32, cell_count: u32, workgroup_size: u32, _pad: vec2<u32>
+}
+
+// CellPrediction struct (48 bytes)
+// predicted_state[8] + confidence + last_error + cumulative_score + _pad
+struct CellPrediction {
+    predicted_state: array<f32, 8>,
+    confidence: f32,
+    last_error: f32,
+    cumulative_score: f32,
+    _pad: f32,
+}
+
+struct CellConnections {
+    targets: array<u32, 16>,
+    strengths: array<f32, 16>,
+    count: u32,
+    _pad: array<u32, 3>,
+}
+
+const FLAG_SLEEPING: u32 = 1u;
+const FLAG_DEAD: u32 = 32u;
+const NO_CONNECTION: u32 = 0xFFFFFFFFu;
+
+struct CellMetadata { flags: u32, cluster_id: u32, hysteresis: f32, _pad: u32 }
+
+@group(0) @binding(0) var<storage, read> states: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read> metadata: array<CellMetadata>;
+@group(0) @binding(2) var<storage, read> connections: array<CellConnections>;
+@group(0) @binding(3) var<storage, read_write> predictions: array<CellPrediction>;
+@group(0) @binding(4) var<uniform> config: Config;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let idx = id.x;
+    if idx >= config.cell_count { return; }
+
+    let cell_meta = metadata[idx];
+    if (cell_meta.flags & (FLAG_SLEEPING | FLAG_DEAD)) != 0u { return; }
+
+    var pred = predictions[idx];
+    let conn = connections[idx];
+
+    // Reset prediction
+    for (var i = 0u; i < 8u; i = i + 1u) {
+        pred.predicted_state[i] = 0.0;
+    }
+
+    var total_weight = 0.0;
+
+    // Weighted average of connected neighbors' states
+    // "What will my state be, given what my neighbors are doing?"
+    for (var slot = 0u; slot < 16u; slot = slot + 1u) {
+        let target_idx = conn.targets[slot];
+        if target_idx == NO_CONNECTION || target_idx >= config.cell_count { continue; }
+
+        let strength = conn.strengths[slot];
+        if strength < 0.001 { continue; }
+
+        // Read neighbor's current state (first 8 dims stored in 2 vec4s)
+        let neighbor_state0 = states[target_idx * 8u];
+        let neighbor_state1 = states[target_idx * 8u + 1u];
+
+        // Accumulate weighted prediction
+        for (var i = 0u; i < 4u; i = i + 1u) {
+            pred.predicted_state[i] = pred.predicted_state[i] + neighbor_state0[i] * strength;
+        }
+        for (var i = 0u; i < 4u; i = i + 1u) {
+            pred.predicted_state[i + 4u] = pred.predicted_state[i + 4u] + neighbor_state1[i] * strength;
+        }
+
+        total_weight = total_weight + strength;
+    }
+
+    // Normalize by total weight
+    if total_weight > 0.001 {
+        for (var i = 0u; i < 8u; i = i + 1u) {
+            pred.predicted_state[i] = pred.predicted_state[i] / total_weight;
+        }
+        // Confidence based on connection strength (more connections = more confident)
+        pred.confidence = min(total_weight / 3.0, 1.0);
+    } else {
+        // No connections = very low confidence (just guessing)
+        pred.confidence = 0.05;
+    }
+
+    predictions[idx] = pred;
+}
+"#;
+
+/// Evaluation phase: Compare predictions with actual states, apply rewards/penalties
+/// Run AFTER the main tick to evaluate predictions
+const PREDICTION_EVALUATE_SHADER: &str = r#"
+struct CellEnergy { energy: f32, tension: f32, activity_level: f32, _pad: f32 }
+struct Config {
+    energy_cap: f32, reaction_amplification: f32, state_cap: f32, signal_radius: f32,
+    cost_rest: f32, cost_signal: f32, cost_move: f32, cost_divide: f32,
+    signal_energy_base: f32, signal_resonance_factor: f32, energy_gain: f32,
+    tick: u32, cell_count: u32, workgroup_size: u32, _pad: vec2<u32>
+}
+
+struct CellPrediction {
+    predicted_state: array<f32, 8>,
+    confidence: f32,
+    last_error: f32,
+    cumulative_score: f32,
+    _pad: f32,
+}
+
+const FLAG_SLEEPING: u32 = 1u;
+const FLAG_DEAD: u32 = 32u;
+
+// Prediction Law constants
+const PREDICTION_REWARD_MAX: f32 = 0.02;   // Max energy gain per tick for good prediction
+const PREDICTION_PENALTY_MAX: f32 = 0.01;  // Max energy loss per tick for bad prediction
+const ACCURACY_GOOD_THRESHOLD: f32 = 0.7;  // Above this = good prediction
+const ACCURACY_BAD_THRESHOLD: f32 = 0.3;   // Below this = bad prediction
+
+struct CellMetadata { flags: u32, cluster_id: u32, hysteresis: f32, _pad: u32 }
+
+@group(0) @binding(0) var<storage, read> states: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read> metadata: array<CellMetadata>;
+@group(0) @binding(2) var<storage, read_write> predictions: array<CellPrediction>;
+@group(0) @binding(3) var<storage, read_write> energies: array<CellEnergy>;
+@group(0) @binding(4) var<uniform> config: Config;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let idx = id.x;
+    if idx >= config.cell_count { return; }
+
+    let cell_meta = metadata[idx];
+    if (cell_meta.flags & (FLAG_SLEEPING | FLAG_DEAD)) != 0u { return; }
+
+    var pred = predictions[idx];
+    var cell_energy = energies[idx];
+
+    // Get actual state (first 8 dims)
+    let actual_state0 = states[idx * 8u];
+    let actual_state1 = states[idx * 8u + 1u];
+
+    // Calculate prediction error (RMSE)
+    var sum_sq_error = 0.0;
+    for (var i = 0u; i < 4u; i = i + 1u) {
+        let diff = pred.predicted_state[i] - actual_state0[i];
+        sum_sq_error = sum_sq_error + diff * diff;
+    }
+    for (var i = 0u; i < 4u; i = i + 1u) {
+        let diff = pred.predicted_state[i + 4u] - actual_state1[i];
+        sum_sq_error = sum_sq_error + diff * diff;
+    }
+    pred.last_error = sqrt(sum_sq_error / 8.0);
+
+    // Calculate accuracy (0.0 = very wrong, 1.0 = perfect)
+    let accuracy = max(0.0, 1.0 - pred.last_error);
+
+    // Apply reward/penalty based on accuracy and confidence
+    var reward = 0.0;
+    if accuracy > ACCURACY_GOOD_THRESHOLD {
+        // Good prediction: reward proportional to confidence
+        // "I was confident AND I was right" = big reward
+        reward = accuracy * pred.confidence * PREDICTION_REWARD_MAX;
+    } else if accuracy < ACCURACY_BAD_THRESHOLD {
+        // Bad prediction: penalty worse if overconfident
+        // "I was confident AND I was wrong" = big penalty (punish overconfidence)
+        reward = -pred.last_error * pred.confidence * PREDICTION_PENALTY_MAX;
+    } else {
+        // Mediocre prediction: small adjustment
+        reward = (accuracy - 0.5) * 0.005;
+    }
+
+    // Update cumulative score (exponential moving average)
+    pred.cumulative_score = pred.cumulative_score * 0.99 + reward;
+
+    // Apply energy change
+    cell_energy.energy = clamp(cell_energy.energy + reward, 0.0, config.energy_cap);
+
+    predictions[idx] = pred;
+    energies[idx] = cell_energy;
+}
 "#;
 
 const SPATIAL_SIGNAL_TEMPLATE: &str = r#"

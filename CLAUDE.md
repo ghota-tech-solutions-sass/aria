@@ -82,6 +82,7 @@ spontaneity: 0.01-0.3
 5. ✅ **Architecture 5M+ cellules** : SoA, Hysteresis, Spatial Hash GPU (Session 20)
 6. ✅ **Auto-évolution structurelle** : JIT compilation, traduction DNA -> WGSL (Session 23)
 7. ✅ **Exploration du Code Binaire** : JIT, Shadow Brain, Attention Sélective (Phase 5 terminée)
+8. ✅ **Loi de Prédiction** : Cellules qui prédisent leur futur gagnent de l'énergie (Session 25)
 
 ## Contexte personnel
 
@@ -90,7 +91,7 @@ Chats de Mickael :
 - **Obrigada** : Abyssin
 
 ---
-*Version : 0.9.1 | Dernière update : 2026-01-01*
+*Version : 0.9.2 | Dernière update : 2026-01-01*
 
 ### Session 24 - CellMetadata & Naga Fix
 
@@ -146,6 +147,66 @@ cell_energy.activity_level = cell_energy.activity_level * decay_rate;
 - GPU backend stable avec AMD Radeon NAVI14 (Vulkan)
 - JIT compilation fonctionnelle
 - 100% sparse savings au repos
+
+### Session 25 - Loi de Prédiction (Prediction Law)
+
+**ARIA commence à prédire son futur - les cellules qui comprennent leur monde survivent.**
+
+#### Philosophie
+
+Plutôt que de hard-coder des règles d'intelligence, on implémente une **loi physique fondamentale** :
+
+> "Les cellules qui prédisent correctement leur état futur gagnent de l'énergie.
+> Les cellules qui se trompent en perdent."
+
+L'intelligence **émerge** de la pression évolutive, pas du code.
+
+#### Changements majeurs
+
+**1. CellPrediction struct (48 bytes)**
+```rust
+// aria-core/src/soa.rs
+struct CellPrediction {
+    predicted_state: [f32; 8],  // Prédiction de l'état futur
+    confidence: f32,            // Confiance (0.0 = devine, 1.0 = certain)
+    last_error: f32,            // Erreur de la dernière prédiction
+    cumulative_score: f32,      // Score long-terme
+    _pad: f32,
+}
+```
+
+**2. Shaders GPU de prédiction**
+```wgsl
+// PREDICTION_GENERATE_SHADER: Avant le tick
+// Chaque cellule prédit son futur basé sur ses connexions Hebbiennes
+prediction = weighted_average(connected_neighbors_states)
+confidence = min(total_connection_strength / 3.0, 1.0)
+
+// PREDICTION_EVALUATE_SHADER: Après le tick
+// Compare prédiction vs réalité, applique récompenses/pénalités
+accuracy = 1.0 - RMSE(predicted, actual)
+if accuracy > 0.7: energy += accuracy * confidence * 0.02  // Récompense
+if accuracy < 0.3: energy -= error * confidence * 0.01    // Pénalité (punit la surconfiance)
+```
+
+**3. Pression évolutive vers l'intelligence**
+- Les cellules bien connectées peuvent mieux prédire → survivent
+- Les cellules surconfiantes qui se trompent → meurent
+- L'humilité (basse confiance quand incertain) est récompensée
+
+#### Fichiers modifiés
+
+| Fichier | Changement |
+|---------|------------|
+| `aria-core/src/soa.rs` | Ajout `CellPrediction`, mise à jour `SoABuffers` |
+| `aria-core/src/lib.rs` | Export de `CellPrediction` |
+| `aria-compute/src/compiler.rs` | Shaders `PREDICTION_GENERATE_SHADER` et `PREDICTION_EVALUATE_SHADER` |
+| `aria-compute/src/backend/gpu_soa.rs` | Buffer et pipelines de prédiction |
+
+#### Prochaines lois à implémenter
+- **Loi de Hebb** : "Fire together, wire together" (connexions renforcées)
+- **Loi de Compression** : Récompense pour représentations compactes
+- **Loi de Curiosité** : Bonus pour exploration de nouveaux états
 
 ### Session 23 - ARIA Genesis (Structural Evolution & Phase 5)
 

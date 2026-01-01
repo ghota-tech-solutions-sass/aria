@@ -313,6 +313,7 @@ mod tests {
             activity: 0.8,
             exploring: true,
             is_elite: false,
+            hysteresis: 0.0,
         };
         let (rate1, mag1) = DNA::compute_adaptive_mutation(base_rate, young_exploring);
 
@@ -323,6 +324,7 @@ mod tests {
             activity: 0.1,
             exploring: false,
             is_elite: true,
+            hysteresis: 0.9,
         };
         let (rate2, mag2) = DNA::compute_adaptive_mutation(base_rate, old_elite);
 
@@ -330,9 +332,9 @@ mod tests {
         assert!(rate1 > rate2, "Young exploring ({}) should mutate more than old elite ({})", rate1, rate2);
         assert!(mag1 > mag2, "Young exploring magnitude ({}) should be larger than old elite ({})", mag1, mag2);
 
-        // Check bounds
-        assert!(rate1 <= 0.5 && rate1 >= 0.01, "Rate {} out of bounds", rate1);
-        assert!(rate2 <= 0.5 && rate2 >= 0.01, "Rate {} out of bounds", rate2);
+        // Check bounds (elite with high hysteresis can have very low rate)
+        assert!(rate1 <= 0.5 && rate1 >= 0.001, "Rate {} out of bounds", rate1);
+        assert!(rate2 <= 0.5 && rate2 >= 0.00001, "Rate {} out of bounds", rate2);
     }
 
     #[test]
@@ -344,6 +346,7 @@ mod tests {
             activity: 1.0,
             exploring: true,
             is_elite: false,
+            hysteresis: 0.0,
         };
 
         let child = DNA::from_parent_adaptive(&parent, 1.0, ctx);

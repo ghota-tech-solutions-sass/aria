@@ -25,6 +25,7 @@ use aria_core::error::{AriaError, AriaResult};
 use aria_core::signal::{Signal, SignalFragment};
 use aria_core::soa::{
     CellConnections, CellEnergy, CellMetadata, CellInternalState, CellPosition, IndirectDispatchArgs,
+    CellPrediction,
 };
 use aria_core::traits::{BackendStats, ComputeBackend};
 use bytemuck::{Pod, Zeroable};
@@ -113,6 +114,9 @@ pub struct GpuSoABackend {
     // Hebbian learning buffer
     connection_buffer: Option<wgpu::Buffer>,
 
+    // Prediction Law buffer
+    prediction_buffer: Option<wgpu::Buffer>,
+
     // Staging buffers for readback
     energy_staging: Option<wgpu::Buffer>,
     metadata_staging: Option<wgpu::Buffer>,
@@ -130,6 +134,10 @@ pub struct GpuSoABackend {
     hebbian_pipeline: Option<wgpu::ComputePipeline>,
     sleeping_drain_pipeline: Option<wgpu::ComputePipeline>,
 
+    // Prediction Law pipelines
+    prediction_generate_pipeline: Option<wgpu::ComputePipeline>,
+    prediction_evaluate_pipeline: Option<wgpu::ComputePipeline>,
+
     // Bind group layouts
     main_bind_group_layout: Option<wgpu::BindGroupLayout>,
     sparse_cell_bind_group_layout: Option<wgpu::BindGroupLayout>,
@@ -138,6 +146,10 @@ pub struct GpuSoABackend {
     grid_bind_group_layout: Option<wgpu::BindGroupLayout>,
     hebbian_bind_group_layout: Option<wgpu::BindGroupLayout>,
     sleeping_drain_bind_group_layout: Option<wgpu::BindGroupLayout>,
+
+    // Prediction Law bind group layouts
+    prediction_generate_bind_group_layout: Option<wgpu::BindGroupLayout>,
+    prediction_evaluate_bind_group_layout: Option<wgpu::BindGroupLayout>,
 
     // Sparse dispatch state
     use_indirect_dispatch: bool,
@@ -234,6 +246,8 @@ impl GpuSoABackend {
             build_grid_pipeline: None,
             hebbian_pipeline: None,
             sleeping_drain_pipeline: None,
+            prediction_generate_pipeline: None,
+            prediction_evaluate_pipeline: None,
             main_bind_group_layout: None,
             sparse_cell_bind_group_layout: None,
             signal_with_hash_bind_group_layout: None,
@@ -241,7 +255,10 @@ impl GpuSoABackend {
             grid_bind_group_layout: None,
             hebbian_bind_group_layout: None,
             sleeping_drain_bind_group_layout: None,
+            prediction_generate_bind_group_layout: None,
+            prediction_evaluate_bind_group_layout: None,
             connection_buffer: None,
+            prediction_buffer: None,
             use_indirect_dispatch,
             last_active_count: 0,
             cell_count: 0,
@@ -453,6 +470,32 @@ impl GpuSoABackend {
             self.connection_buffer.as_ref().unwrap(),
             0,
             bytemuck::cast_slice(&empty_connections),
+        );
+
+        // Prediction Law buffer
+        // 48 bytes per cell (predicted_state[8] + confidence + last_error + cumulative_score + _pad)
+        let prediction_bytes = std::mem::size_of::<CellPrediction>() * cell_count_with_headroom;
+        tracing::info!(
+            "🔮 Prediction Law: Allocating {} MB for {} cell predictions",
+            prediction_bytes / 1024 / 1024,
+            cell_count
+        );
+
+        self.prediction_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Cell Predictions"),
+            size: prediction_bytes as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        }));
+
+        // Initialize predictions to default
+        let empty_predictions = vec![CellPrediction::default(); cell_count_with_headroom];
+        self.queue.write_buffer(
+            self.prediction_buffer.as_ref().unwrap(),
+            0,
+            bytemuck::cast_slice(&empty_predictions),
         );
 
         self.create_bind_group_layouts()?;
@@ -900,12 +943,13 @@ impl GpuSoABackend {
             ));
         }
 
-        // Hebbian bind group layout (uses spatial hash for neighbor lookup)
+        // Hebbian bind group layout (for "fire together, wire together")
+        // Uses: energies, metadata, connections, config
         self.hebbian_bind_group_layout = Some(self.device.create_bind_group_layout(
             &wgpu::BindGroupLayoutDescriptor {
                 label: Some("Hebbian Bind Group Layout"),
                 entries: &[
-                    // 0: Energies (read)
+                    // 0: Energies (read) - to check activity_level
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -916,7 +960,7 @@ impl GpuSoABackend {
                         },
                         count: None,
                     },
-                    // 1: Positions (read)
+                    // 1: Metadata (read) - to check sleeping flag
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -927,7 +971,7 @@ impl GpuSoABackend {
                         },
                         count: None,
                     },
-                    // 2: Connections (read-write)
+                    // 2: Connections (read-write) - Hebbian learning happens here
                     wgpu::BindGroupLayoutEntry {
                         binding: 2,
                         visibility: wgpu::ShaderStages::COMPUTE,
@@ -938,31 +982,9 @@ impl GpuSoABackend {
                         },
                         count: None,
                     },
-                    // 3: Grid (read)
+                    // 3: Config (uniform)
                     wgpu::BindGroupLayoutEntry {
                         binding: 3,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    // 4: Config (uniform)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 4,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    // 5: Spatial config (uniform)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 5,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
@@ -1005,6 +1027,136 @@ impl GpuSoABackend {
                     // 2: Config (uniform)
                     wgpu::BindGroupLayoutEntry {
                         binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            },
+        ));
+
+        // Prediction Generate bind group layout
+        // Used to generate predictions based on connections
+        self.prediction_generate_bind_group_layout = Some(self.device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("Prediction Generate Bind Group Layout"),
+                entries: &[
+                    // 0: States (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 1: Metadata (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 2: Connections (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 3: Predictions (read-write)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 4: Config (uniform)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            },
+        ));
+
+        // Prediction Evaluate bind group layout
+        // Used to evaluate predictions and apply energy rewards/penalties
+        self.prediction_evaluate_bind_group_layout = Some(self.device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("Prediction Evaluate Bind Group Layout"),
+                entries: &[
+                    // 0: States (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 1: Metadata (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 2: Predictions (read-write)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 3: Energies (read-write)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 4: Config (uniform)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
                         visibility: wgpu::ShaderStages::COMPUTE,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
@@ -1225,6 +1377,63 @@ impl GpuSoABackend {
             );
 
             tracing::info!("💤 Sleeping drain pipeline created");
+        }
+
+        // Prediction Law pipelines (always created)
+        if let Some(pred_gen_layout) = self.prediction_generate_bind_group_layout.as_ref() {
+            let pred_gen_pipeline_layout = self
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("Prediction Generate Pipeline Layout"),
+                    bind_group_layouts: &[pred_gen_layout],
+                    immediate_size: 0,
+                });
+
+            let pred_gen_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Prediction Generate Shader"),
+                source: wgpu::ShaderSource::Wgsl(self.compiler.get_prediction_generate_shader().into()),
+            });
+
+            self.prediction_generate_pipeline = Some(
+                self.device
+                    .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some("Prediction Generate Pipeline"),
+                        layout: Some(&pred_gen_pipeline_layout),
+                        module: &pred_gen_shader,
+                        entry_point: Some("main"),
+                        compilation_options: Default::default(),
+                        cache: None,
+                    }),
+            );
+        }
+
+        if let Some(pred_eval_layout) = self.prediction_evaluate_bind_group_layout.as_ref() {
+            let pred_eval_pipeline_layout = self
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("Prediction Evaluate Pipeline Layout"),
+                    bind_group_layouts: &[pred_eval_layout],
+                    immediate_size: 0,
+                });
+
+            let pred_eval_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Prediction Evaluate Shader"),
+                source: wgpu::ShaderSource::Wgsl(self.compiler.get_prediction_evaluate_shader().into()),
+            });
+
+            self.prediction_evaluate_pipeline = Some(
+                self.device
+                    .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some("Prediction Evaluate Pipeline"),
+                        layout: Some(&pred_eval_pipeline_layout),
+                        module: &pred_eval_shader,
+                        entry_point: Some("main"),
+                        compilation_options: Default::default(),
+                        cache: None,
+                    }),
+            );
+
+            tracing::info!("🔮 Prediction Law pipelines created");
         }
 
         tracing::debug!("🎮 GPU SoA pipelines created");
@@ -1489,18 +1698,13 @@ impl GpuSoABackend {
     }
 
     /// Create bind group for Hebbian learning
+    /// "Fire together, wire together" - co-active cells strengthen connections
     fn create_hebbian_bind_group(&self) -> Option<wgpu::BindGroup> {
-        if !self.use_spatial_hash {
-            return None; // Hebbian requires spatial hash for neighbor lookup
-        }
-
         let layout = self.hebbian_bind_group_layout.as_ref()?;
         let energy_buffer = self.energy_buffer.as_ref()?;
-        let position_buffer = self.position_buffer.as_ref()?;
+        let metadata_buffer = self.metadata_buffer.as_ref()?;
         let connection_buffer = self.connection_buffer.as_ref()?;
-        let grid_buffer = self.grid_buffer.as_ref()?;
         let config_buffer = self.config_buffer.as_ref()?;
-        let spatial_config_buffer = self.spatial_config_buffer.as_ref()?;
 
         Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Hebbian Bind Group"),
@@ -1512,7 +1716,7 @@ impl GpuSoABackend {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: position_buffer.as_entire_binding(),
+                    resource: metadata_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -1520,15 +1724,7 @@ impl GpuSoABackend {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: grid_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
                     resource: config_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: spatial_config_buffer.as_entire_binding(),
                 },
             ],
         }))

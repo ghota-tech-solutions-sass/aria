@@ -184,6 +184,148 @@ impl Default for CellMetadata {
 }
 
 // ============================================================================
+// PREDICTION LAW
+// ============================================================================
+
+/// Cell prediction for the Prediction Law
+///
+/// "Cells that predict correctly, survive"
+///
+/// Each cell predicts what its next internal state will be based on:
+/// - Its current connections (Hebbian weights)
+/// - The activity of connected cells
+///
+/// After each tick:
+/// - Compare prediction vs reality
+/// - Low error → energy bonus (cell "understands" its world)
+/// - High error → energy loss (cell is confused)
+///
+/// This creates evolutionary pressure toward intelligence:
+/// Cells that model their environment survive.
+///
+/// Buffer: CellPrediction[] - one per cell
+/// Size: 48 bytes per cell
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+#[repr(C)]
+pub struct CellPrediction {
+    /// Predicted next internal state (first 8 dims of 32D state)
+    /// Why 8? The first 8 dimensions encode the most salient features
+    pub predicted_state: [f32; 8],
+
+    /// Confidence in prediction (0.0 = guessing, 1.0 = certain)
+    /// High confidence + correct = big reward
+    /// High confidence + wrong = big penalty (overconfidence punished)
+    pub confidence: f32,
+
+    /// Error from last prediction (0.0 = perfect, 1.0+ = very wrong)
+    pub last_error: f32,
+
+    /// Cumulative prediction score (long-term track record)
+    pub cumulative_score: f32,
+
+    /// Padding for 16-byte alignment
+    pub _pad: f32,
+}
+
+impl CellPrediction {
+    pub fn new() -> Self {
+        Self {
+            predicted_state: [0.0; 8],
+            confidence: 0.1, // Start with low confidence
+            last_error: 0.0,
+            cumulative_score: 0.0,
+            _pad: 0.0,
+        }
+    }
+
+    /// Calculate prediction error (MSE between predicted and actual)
+    #[inline]
+    pub fn calculate_error(&self, actual_state: &[f32; 8]) -> f32 {
+        let mut sum = 0.0;
+        for i in 0..8 {
+            let diff = self.predicted_state[i] - actual_state[i];
+            sum += diff * diff;
+        }
+        (sum / 8.0).sqrt() // RMSE
+    }
+
+    /// Update prediction based on connections and neighbor states
+    /// This is the "thinking" part - predicting the future
+    pub fn predict_from_connections(
+        &mut self,
+        connections: &CellConnections,
+        neighbor_states: &[[f32; 8]],
+        neighbor_indices: &[usize],
+    ) {
+        // Reset prediction
+        self.predicted_state = [0.0; 8];
+        let mut total_weight = 0.0;
+
+        // Weighted average of connected neighbors' states
+        for (slot, &target) in connections.targets.iter().enumerate() {
+            if target == CellConnections::NO_CONNECTION {
+                continue;
+            }
+
+            // Find this target in our neighbor list
+            if let Some(pos) = neighbor_indices.iter().position(|&idx| idx == target as usize) {
+                let strength = connections.strengths[slot];
+                for i in 0..8 {
+                    self.predicted_state[i] += neighbor_states[pos][i] * strength;
+                }
+                total_weight += strength;
+            }
+        }
+
+        // Normalize by total weight
+        if total_weight > 0.001 {
+            for p in &mut self.predicted_state {
+                *p /= total_weight;
+            }
+            // Confidence based on connection strength (more connections = more confident)
+            self.confidence = (total_weight / 3.0).min(1.0);
+        } else {
+            // No connections = very low confidence
+            self.confidence = 0.05;
+        }
+    }
+
+    /// Evaluate prediction and return energy delta
+    /// Called after the actual tick to see how well we predicted
+    pub fn evaluate(&mut self, actual_state: &[f32; 8]) -> f32 {
+        self.last_error = self.calculate_error(actual_state);
+
+        // Prediction reward/penalty calculation
+        // Good prediction (low error) + high confidence = big reward
+        // Bad prediction (high error) + high confidence = big penalty
+        // Bad prediction + low confidence = small penalty (honest uncertainty)
+
+        let accuracy = 1.0 - self.last_error.min(1.0);
+        let reward = if accuracy > 0.7 {
+            // Good prediction: reward proportional to confidence
+            accuracy * self.confidence * 0.02 // Max +0.02 energy per tick
+        } else if accuracy < 0.3 {
+            // Bad prediction: penalty worse if overconfident
+            -self.last_error * self.confidence * 0.01 // Max -0.01 energy per tick
+        } else {
+            // Mediocre prediction: small adjustment
+            (accuracy - 0.5) * 0.005
+        };
+
+        // Update cumulative score
+        self.cumulative_score = self.cumulative_score * 0.99 + reward;
+
+        reward
+    }
+}
+
+impl Default for CellPrediction {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ============================================================================
 // HEBBIAN CONNECTIONS
 // ============================================================================
 
@@ -350,6 +492,8 @@ pub struct SoABuffers {
     pub positions: Vec<CellPosition>,
     pub states: Vec<CellInternalState>,
     pub metadata: Vec<CellMetadata>,
+    pub predictions: Vec<CellPrediction>,
+    pub connections: Vec<CellConnections>,
 }
 
 impl SoABuffers {
@@ -367,11 +511,14 @@ impl SoABuffers {
                 .map(|_| CellInternalState::new())
                 .collect(),
             metadata: (0..cell_count).map(|_| CellMetadata::new()).collect(),
+            predictions: (0..cell_count).map(|_| CellPrediction::new()).collect(),
+            connections: (0..cell_count).map(|_| CellConnections::new()).collect(),
         }
     }
 
     /// Convert from legacy CellState slice
     pub fn from_cell_states(states: &[crate::cell::CellState]) -> Self {
+        let count = states.len();
         Self {
             energies: states
                 .iter()
@@ -398,6 +545,9 @@ impl SoABuffers {
                 hysteresis: s.hysteresis,
                 _pad: 0,
             }).collect(),
+            // Predictions and connections start fresh (not stored in legacy CellState)
+            predictions: (0..count).map(|_| CellPrediction::new()).collect(),
+            connections: (0..count).map(|_| CellConnections::new()).collect(),
         }
     }
 
@@ -457,20 +607,45 @@ mod tests {
     }
 
     #[test]
-    fn test_flags_hysteresis() {
-        let mut flags = CellFlags::new();
-        assert_eq!(flags.sleep_counter(), 0);
+    fn test_metadata_hysteresis() {
+        let mut meta = CellMetadata::new();
+        assert_eq!(meta.sleep_counter(), 0);
 
-        flags.increment_sleep_counter();
-        assert_eq!(flags.sleep_counter(), 1);
+        meta.increment_sleep_counter();
+        assert_eq!(meta.sleep_counter(), 1);
 
-        flags.increment_sleep_counter();
-        flags.increment_sleep_counter();
-        flags.increment_sleep_counter(); // Should cap at 3
-        assert_eq!(flags.sleep_counter(), 3);
+        meta.increment_sleep_counter();
+        meta.increment_sleep_counter();
+        meta.increment_sleep_counter(); // Should cap at 3
+        assert_eq!(meta.sleep_counter(), 3);
 
-        flags.reset_sleep_counter();
-        assert_eq!(flags.sleep_counter(), 0);
+        meta.reset_sleep_counter();
+        assert_eq!(meta.sleep_counter(), 0);
+    }
+
+    #[test]
+    fn test_cell_prediction_size() {
+        // 8 floats (32) + 4 floats (16) = 48 bytes
+        assert_eq!(std::mem::size_of::<CellPrediction>(), 48);
+    }
+
+    #[test]
+    fn test_cell_prediction_evaluate() {
+        let mut pred = CellPrediction::new();
+        pred.predicted_state = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        pred.confidence = 0.8;
+
+        // Perfect prediction
+        let actual_perfect = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let reward = pred.evaluate(&actual_perfect);
+        assert!(reward > 0.0, "Good prediction should give positive reward");
+
+        // Bad prediction with high confidence = penalty
+        pred.predicted_state = [1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+        pred.confidence = 0.9;
+        let actual_bad = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let penalty = pred.evaluate(&actual_bad);
+        assert!(penalty < 0.0, "Bad prediction with high confidence should give penalty");
     }
 
     #[test]

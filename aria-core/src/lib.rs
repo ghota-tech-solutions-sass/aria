@@ -46,6 +46,8 @@ pub use soa::{
     // Hebbian learning
     CellConnections, MAX_CONNECTIONS,
     HEBBIAN_COACTIVATION_THRESHOLD, HEBBIAN_STRENGTHEN_RATE, HEBBIAN_DECAY_RATE, HEBBIAN_MAX_STRENGTH,
+    // Prediction Law
+    CellPrediction,
 };
 
 /// Current version of ARIA's genome format
