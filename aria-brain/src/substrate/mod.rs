@@ -375,8 +375,9 @@ impl Substrate {
         }
 
         // === REFLEXIVITY: ARIA hears her own thoughts (Axe 3 - Genesis) ===
-        // This creates a recursive loop of consciousness
-        if current_tick % 10 == 0 {
+        // REDUCED: Was every 10 ticks, now every 100 ticks
+        // Too much reflexivity = self-feeding loop that prevents starvation
+        if current_tick % 100 == 0 {
             self.inject_self_signal();
         }
 
@@ -907,14 +908,13 @@ impl Substrate {
         // Position of the thought is its own semantic representation
         let position = aria_core::tension::tension_to_position(&last_thought);
 
-        // Self-signal is slightly weaker and has a specific intensity
-        // We use a high amplification because it's "internal"
-        // source_id = u64::MAX (internal thought)
+        // Self-signal is WEAK to prevent self-feeding loop
+        // Reduced from 2.0 to 0.3 - ARIA needs external input to thrive
         let fragment = SignalFragment::new(
             u64::MAX, // Special ID for ARIA's internal thoughts
             last_thought,
             position,
-            intensity * 2.0 // Strong enough to be felt
+            intensity * 0.3 // Weak - prevents self-sustaining loop
         );
 
         let mut buffer = self.signal_buffer.write();

@@ -39,6 +39,16 @@ tasks:
     cmds:
       - cargo run --release
 
+  brain-dev:
+    desc: Start the brain in DEV mode (fast compile, GPU, 100k cells)
+    dir: aria-brain
+    env:
+      ARIA_PORT: '{{.BRAIN_PORT}}'
+      ARIA_CELLS: '100000'
+      ARIA_BACKEND: 'gpu'
+    cmds:
+      - cargo run
+
   brain-100k:
     desc: Start the brain with 100k cells
     dir: aria-brain
@@ -65,6 +75,14 @@ tasks:
       ARIA_BRAIN_URL: '{{.BRAIN_URL}}'
     cmds:
       - cargo run --release
+
+  body-dev:
+    desc: Start the body in DEV mode (fast compile)
+    dir: aria-body
+    env:
+      ARIA_BRAIN_URL: '{{.BRAIN_URL}}'
+    cmds:
+      - cargo run
 
   body-visual:
     desc: Start the body in visual TUI mode
