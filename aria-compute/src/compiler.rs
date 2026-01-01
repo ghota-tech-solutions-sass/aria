@@ -13,6 +13,40 @@ impl ShaderCompiler {
         template.replace("// [DYNAMIC_LOGIC]", dna_logic)
     }
 
+    /// Translates structural DNA (checksum) into WGSL logic snippets
+    pub fn generate_dna_logic(&self, checksum: u64) -> String {
+        let mut logic = String::new();
+
+        // Bit 0: Metabolic strategy
+        if (checksum & 1) != 0 {
+            // Logistic metabolism
+            logic.push_str("    cell_energy.energy += config.energy_gain * (1.0 - cell_energy.energy / config.energy_cap);\n");
+        } else {
+            // Linear metabolism (standard)
+            logic.push_str("    cell_energy.energy += config.energy_gain;\n");
+        }
+
+        // Bit 1: Activity decay strategy
+        if (checksum & 2) != 0 {
+            // Sigmoidal decay (energy-dependent)
+            logic.push_str("    cell_energy.activity_level *= (0.8 + 0.15 * (cell_energy.energy / config.energy_cap));\n");
+        } else {
+            // Constant decay (standard)
+            logic.push_str("    cell_energy.activity_level *= 0.9;\n");
+        }
+
+        // Bit 2: Signal processing - Reflexive boost
+        if (checksum & 4) != 0 {
+            // Nonlinear reflexive gain
+            logic.push_str("    let reflexive_boost = pow(reflexivity_gain, 1.5);\n");
+        } else {
+            // Linear reflexive gain
+            logic.push_str("    let reflexive_boost = reflexivity_gain;\n");
+        }
+
+        logic
+    }
+
     pub fn get_cell_update_template(&self) -> &str { CELL_UPDATE_TEMPLATE }
     pub fn get_signal_template(&self) -> &str { SIGNAL_TEMPLATE }
     pub fn get_compact_shader(&self) -> &str { COMPACT_SHADER }
@@ -93,15 +127,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             energies[idx] = cell_energy; flags[idx] = cell_flags; return;
         }
     }
-    cell_energy.energy -= config.cost_rest;
-    cell_energy.energy += config.energy_gain;
-    if cell_energy.energy <= 0.0 { cell_flags |= FLAG_DEAD; energies[idx] = cell_energy; flags[idx] = cell_flags; return; }
-
     // [DYNAMIC_LOGIC]
-
-    cell_energy.tension += 0.01;
-    if cell_energy.tension > 1.0 { cell_energy.tension = 0.0; }
-    cell_energy.activity_level *= 0.9;
     if cell_energy.activity_level < gene_sleep {
         let counter = get_sleep_counter(cell_flags);
         if counter >= SLEEP_COUNTER_MAX { cell_flags |= FLAG_SLEEPING; set_sleep_counter(&cell_flags, 0u); }
@@ -143,7 +169,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // [DYNAMIC_LOGIC]
 
     if cell_energy.tension > 0.8 {
-        cell_energy.activity_level += 0.5;
+        cell_energy.activity_level += 0.5 * reflexive_boost;
         cell_energy.energy -= config.cost_signal;
     }
     energies[idx] = cell_energy;

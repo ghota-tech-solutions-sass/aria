@@ -999,8 +999,8 @@ impl GpuSoABackend {
     }
 
     fn create_pipelines(&mut self) -> AriaResult<()> {
-        // Initial compilation of dynamic pipelines
-        self.recompile_dynamic_pipelines(None)?;
+        // Initial compilation of dynamic pipelines (using default checksum 0)
+        self.recompile_dynamic_pipelines(0)?;
 
         let sparse_layout = self
             .sparse_bind_group_layout
@@ -2042,6 +2042,10 @@ impl ComputeBackend for GpuSoABackend {
         Ok(())
     }
 
+    fn recompile(&mut self, structural_checksum: u64) -> AriaResult<()> {
+        self.recompile_dynamic_pipelines(structural_checksum)
+    }
+
     fn name(&self) -> &'static str {
         "GPU SoA (wgpu)"
     }
@@ -2135,11 +2139,11 @@ impl GpuSoABackend {
     }
 
     /// Recompile dynamic pipelines with new logic from DNA
-    pub fn recompile_dynamic_pipelines(&mut self, dna_logic: Option<&str>) -> AriaResult<()> {
-        let logic = dna_logic.unwrap_or("");
+    pub fn recompile_dynamic_pipelines(&mut self, structural_checksum: u64) -> AriaResult<()> {
+        let dna_logic = self.compiler.generate_dna_logic(structural_checksum);
 
-        let cell_update_source = self.compiler.generate_shader(self.compiler.get_cell_update_template(), logic);
-        let signal_source = self.compiler.generate_shader(self.compiler.get_signal_template(), logic);
+        let cell_update_source = self.compiler.generate_shader(self.compiler.get_cell_update_template(), &dna_logic);
+        let signal_source = self.compiler.generate_shader(self.compiler.get_signal_template(), &dna_logic);
 
         let main_layout = self
             .main_bind_group_layout
@@ -2203,7 +2207,7 @@ impl GpuSoABackend {
             cache: None,
         }));
 
-        tracing::info!("🧬 GPU: Dynamic pipelines recompiled (logic size: {})", logic.len());
+        tracing::info!("🧬 GPU: Dynamic pipelines recompiled (checksum: {}, logic size: {})", structural_checksum, dna_logic.len());
         Ok(())
     }
 }

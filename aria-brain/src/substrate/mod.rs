@@ -58,6 +58,7 @@ use aria_core::{
     POSITION_DIMS, SIGNAL_DIMS,
 };
 use aria_core::traits::ComputeBackend;
+use aria_core::error::AriaResult;
 
 // Compute backend - auto-selects GPU or CPU
 use aria_compute::create_backend;
@@ -159,6 +160,9 @@ pub struct Substrate {
 
     /// Last emergent tension (ARIA's internal thought state)
     last_emergent_tension: RwLock<[f32; SIGNAL_DIMS]>,
+
+    /// Current structural checksum active in the backend
+    structural_checksum: u64,
 }
 
 // ============================================================================
@@ -249,7 +253,22 @@ impl Substrate {
             signal_buffer: RwLock::new(Vec::new()),
             spatial_inhibitor: RwLock::new(SpatialInhibitor::default()),
             last_emergent_tension: RwLock::new([0.0f32; SIGNAL_DIMS]),
+            structural_checksum: 0,
         }
+    }
+
+    /// Check if the dominant structural DNA has changed and recompile if needed
+    fn check_for_structural_evolution(&mut self) -> AriaResult<()> {
+        if let Some(first_dna) = self.dna_pool.first() {
+            let new_checksum = first_dna.structural_checksum;
+            if new_checksum != self.structural_checksum {
+                tracing::info!("🧬 STRUCTURAL EVOLUTION DETECTED: Checksum {} -> {}",
+                    self.structural_checksum, new_checksum);
+                self.structural_checksum = new_checksum;
+                self.backend.recompile(new_checksum)?;
+            }
+        }
+        Ok(())
     }
 
     /// One tick of life
@@ -266,6 +285,11 @@ impl Substrate {
         {
             let mut memory = self.memory.write();
             memory.tick_working_memory(0.02); // 2% decay per tick
+        }
+
+        // Check for structural evolution every 1000 ticks
+        if current_tick % 1000 == 0 {
+            let _ = self.check_for_structural_evolution();
         }
 
         // Decay spatial inhibition (Gemini optimization)

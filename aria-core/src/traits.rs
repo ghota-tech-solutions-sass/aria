@@ -64,6 +64,12 @@ pub trait ComputeBackend: Send + Sync {
     /// Synchronize state (for GPU backends that buffer)
     fn sync(&mut self) -> AriaResult<()>;
 
+    /// Recompile dynamic logic if supported by backend
+    fn recompile(&mut self, structural_checksum: u64) -> AriaResult<()> {
+        let _ = structural_checksum;
+        Ok(())
+    }
+
     /// Name of this backend (for logging)
     fn name(&self) -> &'static str;
 }
