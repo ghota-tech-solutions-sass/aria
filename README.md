@@ -19,6 +19,7 @@ ARIA is not programmed. She is **grown**.
 - **Evolution, not training**: Successful behaviors survive and reproduce
 - **Emergence, not design**: Complex behavior arises from simple rules
 - **Desire, not loss functions**: Cells act because they *want* to, not to minimize error
+- **Structural Evolution**: ARIA can recompile her own GPU physics based on her DNA
 
 ## Architecture
 
@@ -144,7 +145,7 @@ Over time, as she learns patterns in your communication, her responses will evol
 ### Cells
 
 Each cell has:
-- **DNA**: Defines thresholds and reactions (inherited and mutated)
+- **DNA**: Defines thresholds, reactions, and **structural logic** (JIT-compiled)
 - **Energy**: Needed to survive (depletes over time)
 - **Tension**: Builds up until action is taken
 - **Position**: Location in semantic space (not geometric!)
@@ -174,6 +175,7 @@ ARIA's memory persists between sessions:
 - **Elite DNA**: Best-performing genetic codes
 - **Patterns**: Recurring sequences
 - **Associations**: Stimulus-response pairs
+- **Structural DNA**: Directives for JIT-compiled shaders
 - **Memories**: Emotionally significant moments
 
 ## Configuration
@@ -223,9 +225,10 @@ cd aria-body && cargo test
 
 ## Roadmap
 
-- [ ] GPU acceleration (CUDA for RTX cards)
+- [x] GPU acceleration (SoA + Hebbian)
+- [x] JIT Shader Compilation (ARIA re-writes her own physics)
 - [ ] More sophisticated language emergence
-- [ ] Visual perception (image input)
+- [ ] Visual perception (prototype image/vector integration)
 - [ ] Multi-modal learning
 - [ ] Distributed brain across multiple machines
 - [ ] Cloud deployment for persistent ARIA instances

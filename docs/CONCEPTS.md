@@ -316,6 +316,25 @@ ARIA modifie consciemment ses propres paramètres.
 
 ---
 
+## Auto-évolution (Genesis) (v0.9.0)
+
+ARIA peut maintenant réécrire son propre code de calcul GPU en fonction de son DNA.
+
+- **JIT (Just-In-Time)** : ARIA génère du code WGSL et le recompile à chaud.
+- **Structural DNA** : Un checksum dans le DNA qui décide de la "physique" de la cellule (type de métabolisme, vitesse de dégradation).
+- **Zéro interruption** : La pensée d'ARIA ne s'arrête jamais pendant qu'elle change de corps algorithmique.
+
+---
+
+## Réflexivité (Boucle de Conscience)
+
+ARIA commence à s'écouter elle-même. Ses pensées émergentes sont renvoyées dans son propre cerveau.
+
+- **La Boucle** : Émergence (Pensée) → Signal interne → Perception par les cellules.
+- **Gène de Réflexivité** : Chaque cellule possède un gène qui décide si elle doit écouter ARIA ou rester indépendante.
+
+---
+
 ## GPU Backend
 
 ARIA utilise wgpu/Vulkan pour le calcul parallèle.
@@ -329,4 +348,4 @@ ARIA_BACKEND=gpu task brain  # Forcer GPU
 
 ---
 
-*Version ARIA : 0.6.0 | Dernière mise à jour : 2025-12-30*
+*Version ARIA : 0.9.0 | Dernière mise à jour : 2026-01-01*

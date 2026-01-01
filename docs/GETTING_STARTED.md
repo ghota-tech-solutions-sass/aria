@@ -95,7 +95,7 @@ You should see:
 ║    ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═╝                            ║
 ║                                                           ║
 ║    Autonomous Recursive Intelligence Architecture        ║
-║    Brain v0.1.0                                           ║
+║    Brain v0.9.0 (Genesis)                                 ║
 ║                                                           ║
 ╚═══════════════════════════════════════════════════════════╝
 
@@ -217,6 +217,7 @@ Returns:
 ### Slow performance
 
 - Use `--release` flag for both builds
+- **GPU backend**: If you have an NVIDIA/AMD GPU, use `ARIA_BACKEND=gpu` to enable JIT compilation and 10x performance.
 - Consider reducing initial cell count in code
 
 ## Next Steps

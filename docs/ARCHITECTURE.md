@@ -51,9 +51,10 @@ struct Cell {
 ```
 
 **DNA Structure:**
-- `thresholds[8]`: Control when actions are triggered
+- `thresholds[8]`: Control when actions are triggered (Action, Divide, etc.)
 - `reactions[8]`: Control response intensity
-- `connectivity[4]`: Control connection preferences
+- `signature`: Genetic fingerprint
+- `structural_checksum`: Defines the JIT-compiled logic (metabolism, signal decay)
 
 **Cell Actions:**
 - `Rest`: Do nothing
@@ -322,6 +323,8 @@ ARIA_BACKEND=gpu task brain
 ```
 
 **Features:**
+- JIT Compilation: Runtime shader generation via `compiler.rs`
+- Hot-reloading: Replaces pipelines on-the-fly when structural DNA mutates
 - Sparse dispatch: Only active cells are processed (80%+ savings)
 - AtomicCounter for GPU-side active cell counting
 - Activated automatically for populations > 100k cells
@@ -364,6 +367,13 @@ Cells must struggle to survive. No free energy.
 
 **Result:** Natural selection favors cells that communicate usefully.
 
+### Reflexivity (Axe 3 - Genesis)
+
+ARIA's emergent thoughts are réinjected into her substrate as internal sensory input.
+
+- **Loop**: `emergence.rs` (Capture) → `mod.rs` (Injection) → `compiler.rs` (Response)
+- **Gene**: `reflexivity_gain` (DNA[7]) controls the sensitivity of each cell to ARIA's global thoughts.
+
 ## HTTP Endpoints
 
 | Endpoint | Description |
@@ -381,4 +391,4 @@ Cells must struggle to survive. No free energy.
 
 ---
 
-*Version 0.6.0 | Updated 2025-12-30*
+*Version 0.7.0 | Updated 2026-01-01*

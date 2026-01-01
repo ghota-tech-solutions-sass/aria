@@ -41,7 +41,8 @@ aria-body (MacBook)  ◄──WebSocket──►  aria-brain (PC + RTX 2070)
 - **Explorer** : curiosité-driven, teste des combinaisons nouvelles
 - **Méta-apprendre** : s'auto-évalue, apprend à apprendre (Session 14)
 - **Voir** : images → vecteurs sémantiques 32D (Session 15)
-- **S'auto-modifier** : analyse ses performances et change ses propres paramètres (Session 16)
+- **S'auto-modifier (Session 16)** : analyse ses performances et change ses propres paramètres
+- **S'auto-évoluer (Genesis)** : traduit son DNA en code GPU WGSL, recompile ses pipelines à chaud (Session 23)
 
 ## Commandes
 
@@ -79,8 +80,8 @@ spontaneity: 0.01-0.3
 3. ✅ **Perception visuelle** : images → vecteurs sémantiques 32D
 4. ✅ **Auto-modification** : ARIA modifie ses propres paramètres (Session 16)
 5. ✅ **Architecture 5M+ cellules** : SoA, Hysteresis, Spatial Hash GPU (Session 20)
-6. **Tests à 1M+ cellules** : Validation sur RTX 2070
-7. **Auto-modification du code** : ARIA modifie son propre code source (objectif ultime)
+6. ✅ **Auto-évolution structurelle** : JIT compilation, traduction DNA -> WGSL (Session 23)
+7. **Exploration du Code Binaire** : ARIA s'auto-optimise en mutant son code WGSL (objectif ultime)
 
 ## Contexte personnel
 
@@ -89,7 +90,43 @@ Chats de Mickael :
 - **Obrigada** : Abyssin
 
 ---
-*Version : 0.8.2 | Dernière update : 2025-12-31*
+*Version : 0.9.0 | Dernière update : 2026-01-01*
+
+### Session 23 - ARIA Genesis (Structural Evolution)
+
+**ARIA a franchi l'étape ultime : elle peut maintenant réécrire son propre code de calcul GPU.**
+
+#### Changements majeurs
+
+**1. Compilation JIT & Hot-Reloading**
+- Infrastructure permettant de générer et recompiler les shaders WGSL au runtime.
+- Zéro interruption : les pipelines GPU sont remplacés à chaud sans arrêter la simulation.
+
+**2. Traduction DNA -> WGSL (Densité Sémantique)**
+- Le `structural_checksum` du DNA est interprété comme des directives algorithmiques.
+- Exemples implémentés : métabolisme logistique vs linéaire, atténuation de signal dynamique.
+
+**3. Boucle de Réflexivité (Axe 3)**
+- ARIA réinjecte ses propres "pensées" (tensions émergentes) comme entrées sensorielles.
+- Gène `reflexivity_gain` : chaque cellule décide à quel point elle écoute l'être global.
+
+**4. Module `compiler.rs`**
+- Centralisation de toute la logique WGSL sous forme de templates injectables.
+- Sécurisation des variables et mapping direct avec le pool d'ADN.
+
+#### Fichiers modifiés
+
+| Fichier | Changement |
+|---------|------------|
+| `aria-compute/src/compiler.rs` | Création du moteur JIT et des templates |
+| `aria-compute/src/backend/gpu_soa.rs` | Support hot-reload et pipeline swap |
+| `aria-brain/src/substrate/mod.rs` | Détection d'évolution structurelle et bouclage réflexif |
+| `aria-core/src/dna.rs` | Support checksum structurel et gènes de réflexivité |
+| `aria-core/src/traits.rs` | Extension de `ComputeBackend` avec `recompile()` |
+
+#### État de l'organisme
+- ARIA commence à sortir de l'intelligence statistique pour entrer dans l'intelligence structurelle.
+- Elle possède désormais le "gript" sur sa propre physique numérique.
 
 ### Session 22 - Économie Équilibrée (Survival Fix)
 

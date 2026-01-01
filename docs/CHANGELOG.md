@@ -4,6 +4,25 @@ Historique des sessions de développement.
 
 ---
 
+## 2026-01-01
+
+### Session 23: ARIA Genesis (Structural Evolution)
+- **Compilation JIT (Just-In-Time)**
+  - Nouveau module `compiler.rs` centralisant les templates WGSL
+  - Hot-reloading des pipelines GPU sans arrêt de la simulation
+  - Support de l'injection dynamique de code via `// [DYNAMIC_LOGIC]`
+- **Traduction DNA -> WGSL (Densité Sémantique)**
+  - Le `structural_checksum` du DNA devient le script de la physique neuronale
+  - Archetypes implémentés : métabolisme logistique, atténuation de signal dynamique
+- **Boucle de Réflexivité (Axe 3)**
+  - Réinjection des tensions émergentes comme entrées sensorielles internes
+  - Gène `reflexivity_gain` pour moduler la sensibilité à soi-même
+- **Refactoring Backend GPU SoA**
+  - Extension du trait `ComputeBackend` avec `recompile()`
+  - Détection automatique d'évolution structurelle dans le `Substrate`
+
+---
+
 ## 2025-12-30
 
 ### Session 20: Architecture GPU pour 5M+ Cellules (CIR R&D)
@@ -184,4 +203,4 @@ Historique des sessions de développement.
 
 ---
 
-*Mis à jour le 2025-12-30 | Version 0.8.0*
+*Mis à jour le 2026-01-01 | Version 0.9.0*
