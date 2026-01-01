@@ -6,6 +6,20 @@ Historique des sessions de développement.
 
 ## 2026-01-01
 
+### Session 26: Lineage Fix & La Vraie Faim v2
+- **Bug critique corrigé : Lignée cassée**
+  - `Cell::from_parent()` n'était JAMAIS appelé → Gen toujours 0
+  - Les enfants héritent maintenant `parent.generation + 1`
+  - Résurrection depuis elite DNA préserve aussi la génération
+- **La Vraie Faim v2 (économie durcie)**
+  - `cost_rest` : 0.00001 → 0.0001 (10x plus dur)
+  - `signal_energy_base` : 0.05 → 0.02 (2.5x moins de nourriture)
+  - `signal_resonance_factor` : 3.0 → 2.0
+  - Résultat : 10 secondes pour mourir sans nourriture (vs 100 sec avant)
+- **Pression évolutive réelle**
+  - Les cellules faibles meurent → reproduction → lignée s'accumule
+  - Elite DNA émerge des survivants (Gen > 10)
+
 ### Session 25: Prediction Law & Hebbian Learning (Loi de Prédiction)
 - **Implémentation de la Loi de Prédiction**
   - Loi physique fondamentale : "Cells that predict correctly, survive"
@@ -243,6 +257,7 @@ Historique des sessions de développement.
 | 2025-12-30 | Architecture 5M+ cellules (SoA, Hysteresis, Spatial Hash GPU) |
 | 2026-01-01 | Session 24: Fix naga, GPU backend stabilisé |
 | 2026-01-01 | Session 25: Loi de Prédiction - intelligence émergente |
+| 2026-01-01 | Session 26: Fix lignée + La Vraie Faim v2 - évolution réelle |
 
 ---
 
