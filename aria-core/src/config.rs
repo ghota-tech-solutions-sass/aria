@@ -136,19 +136,19 @@ impl Default for MetabolismConfig {
             reproduction_threshold: 0.8, // Higher threshold - must be strong to divide
             child_energy: 0.5,           // Was 0.3 - give children a fighting chance
 
-            // Action costs - "La Vraie Faim v2" (HARSH - creates evolutionary pressure)
-            cost_signal: 0.002,  // Speaking costs more energy
-            cost_divide: 0.4,    // Creating life is exhausting
-            cost_move: 0.001,    // Moving costs energy
-            // Active cells: 1.0 / 0.0001 = 10,000 ticks to death without food
-            // At 1000 TPS = 10 seconds to death (HARSH!)
-            // Cells MUST resonate with signals to survive
-            cost_rest: 0.0001,   // 10x harder than before
+            // Action costs - "La Vraie Faim v3" (BRUTAL - real evolutionary pressure)
+            cost_signal: 0.005,  // Speaking is EXPENSIVE
+            cost_divide: 0.5,    // Creating life is exhausting
+            cost_move: 0.002,    // Moving costs energy
+            // Active cells: 1.0 / 0.001 = 1,000 ticks to death without food
+            // At 1000 TPS = 1 SECOND to death (BRUTAL!)
+            // Cells MUST constantly resonate to survive
+            cost_rest: 0.001,    // 100x harder than original!
 
-            // Signal energy - REDUCED to create scarcity
-            // Only cells with good resonance survive
-            signal_energy_base: 0.02,       // 2.5x less than before
-            signal_resonance_factor: 2.0,   // Resonant signals give 2x (was 3x)
+            // Signal energy - MINIMAL to create real scarcity
+            // Only the BEST resonators survive
+            signal_energy_base: 0.01,       // 5x less than original
+            signal_resonance_factor: 1.5,   // Small bonus for resonance
         }
     }
 }
