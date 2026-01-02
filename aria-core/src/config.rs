@@ -133,22 +133,23 @@ impl Default for MetabolismConfig {
             energy_consumption: 0.0,    // Replaced by action costs
             energy_gain: 0.0,           // NO PASSIVE GAIN - ARIA must earn energy through resonance!
             energy_cap: 1.5,
-            reproduction_threshold: 0.8, // Higher threshold - must be strong to divide
-            child_energy: 0.5,           // Was 0.3 - give children a fighting chance
+            reproduction_threshold: 0.90, // 60% of energy_cap - allow more reproduction for evolution
+            child_energy: 0.85,          // Below threshold (0.90) - children must EARN reproduction rights
 
             // Action costs - "La Vraie Faim v3" (BRUTAL - real evolutionary pressure)
             cost_signal: 0.005,  // Speaking is EXPENSIVE
             cost_divide: 0.5,    // Creating life is exhausting
             cost_move: 0.002,    // Moving costs energy
-            // Active cells: 1.0 / 0.001 = 1,000 ticks to death without food
-            // At 1000 TPS = 1 SECOND to death (BRUTAL!)
-            // Cells MUST constantly resonate to survive
-            cost_rest: 0.001,    // 100x harder than original!
+            // Active cells: 1.0 / 0.0003 = 3,333 ticks to death without food
+            // At 500 TPS = ~6.7 seconds to death - children can survive trainer interval
+            // Still harsh but allows multi-generational evolution
+            cost_rest: 0.0003,   // Balanced for ~5 second survival
 
-            // Signal energy - MINIMAL to create real scarcity
-            // Only the BEST resonators survive
-            signal_energy_base: 0.01,       // 5x less than original
-            signal_resonance_factor: 1.5,   // Small bonus for resonance
+            // Signal energy - must exceed cost_rest for NET POSITIVE growth
+            // At 150 TPS, 5 sec interval: loss = 0.0003 * 150 * 5 = 0.225
+            // With resonance 2.0: gain = 0.10 * 3 = 0.30 > 0.225 ✓
+            signal_energy_base: 0.10,       // Children can now GROW
+            signal_resonance_factor: 2.0,   // Good resonance = 0.10 * 3 = 0.30 gain
         }
     }
 }

@@ -44,8 +44,8 @@ tasks:
     dir: aria-brain
     env:
       ARIA_PORT: '{{.BRAIN_PORT}}'
-      ARIA_CELLS: '100000'
       ARIA_BACKEND: 'gpu'
+      ARIA_CELLS: '{{.ARIA_CELLS | default "100000"}}'
     cmds:
       - cargo run
 
@@ -82,7 +82,7 @@ tasks:
     env:
       ARIA_BRAIN_URL: '{{.BRAIN_URL}}'
     cmds:
-      - cargo run
+      - cargo run -- --visual
 
   body-visual:
     desc: Start the body in visual TUI mode

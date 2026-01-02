@@ -102,15 +102,92 @@ impl Substrate {
     ///
     /// OPTIMIZED: Uses partial sort (select_nth_unstable) instead of full sort.
     /// O(n) instead of O(n log n) - critical for 100k+ cells.
+    ///
+    /// CONTINUOUS REPRODUCTION (Session 27):
+    /// Cells with energy > reproduction_threshold can divide regardless of population.
+    /// This creates real lineage evolution without waiting for extinction.
     pub(super) fn natural_selection(&mut self) {
         let target = self.config.population.target_population as usize;
         let buffer = self.config.population.population_buffer as usize;
         let min_pop = self.config.population.min_population as usize;
+        let reproduction_threshold = self.config.metabolism.reproduction_threshold;
+        let child_energy = self.config.metabolism.child_energy;
+        let divide_cost = self.config.metabolism.cost_divide;
+
         let alive_count = self.cells.iter()
             .zip(self.states.iter())
             .filter(|(_, s)| !s.is_dead())
             .count();
 
+        // === CONTINUOUS REPRODUCTION (Law of Expansion) ===
+        // Life expands to fill available energy.
+        // We only cap at a high "Physics Limit" to prevent OOM/crash.
+        // Otherwise, if cells have energy to reproduce, they should.
+        let safety_cap = target * 2; // Hard limit for system stability
+
+        if alive_count < safety_cap {
+            // Find cells ready to divide (energy > threshold)
+            let ready_to_divide: Vec<(usize, u32, u32)> = self.cells.iter()
+                .zip(self.states.iter())
+                .enumerate()
+                .filter(|(_, (_, s))| !s.is_dead() && s.energy > reproduction_threshold)
+                .map(|(i, (c, _))| (i, c.dna_index, c.generation))
+                .collect();
+
+            // Limit births per tick to avoid explosion (still biological pacing)
+            // But allow significantly more than before if energy is abundant.
+            let room = safety_cap.saturating_sub(alive_count);
+            let max_births = room.min(ready_to_divide.len()).min(500); // Increased cap from 100
+
+            if max_births > 0 {
+                tracing::debug!("🧬 EXPANSION: {} cells ready, {} dividing (pop: {})",
+                    ready_to_divide.len(), max_births, alive_count);
+
+                for (parent_idx, parent_dna_idx, parent_generation) in ready_to_divide.into_iter().take(max_births) {
+                    // Parent pays the cost
+                    self.states[parent_idx].energy -= divide_cost;
+
+                    // Create child with mutation
+                    let new_id = self.next_id.fetch_add(1, Ordering::SeqCst);
+                    let parent_dna = &self.dna_pool[parent_dna_idx as usize];
+
+                    let mutation_ctx = MutationContext {
+                        age: 0,
+                        fitness: self.states[parent_idx].energy / self.config.metabolism.energy_cap,
+                        activity: self.states[parent_idx].activity_level,
+                        exploring: false,
+                        is_elite: parent_generation > 5,
+                        hysteresis: 0.0,
+                    };
+
+                    let child_dna = DNA::from_parent_adaptive(
+                        parent_dna,
+                        self.config.population.mutation_rate,
+                        mutation_ctx,
+                    );
+                    let dna_index = self.dna_pool.len() as u32;
+                    self.dna_pool.push(child_dna);
+
+                    // LINEAGE: Child = parent.generation + 1
+                    let mut cell = Cell::new(new_id, dna_index);
+                    cell.generation = parent_generation + 1;
+
+                    let mut state = CellState::new();
+                    state.energy = child_energy;
+
+                    // Use free slot or append
+                    if let Some(idx) = self.free_slots.pop() {
+                        self.cells[idx] = cell;
+                        self.states[idx] = state;
+                    } else {
+                        self.cells.push(cell);
+                        self.states.push(state);
+                    }
+                }
+            }
+        }
+
+        // === POPULATION CONTROL ===
         if alive_count > target + buffer {
             // Too many cells - remove weakest using PARTIAL SORT
             let mut indices: Vec<(usize, f32)> = self.states.iter()
