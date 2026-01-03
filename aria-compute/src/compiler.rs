@@ -627,6 +627,21 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let actual_state0 = states[idx * 8u];
     let actual_state1 = states[idx * 8u + 1u];
 
+    // Calculate actual state magnitude - skip trivial predictions
+    // "You can't claim to have predicted correctly if nothing happened"
+    var actual_magnitude = 0.0;
+    for (var i = 0u; i < 4u; i = i + 1u) {
+        actual_magnitude = actual_magnitude + actual_state0[i] * actual_state0[i];
+        actual_magnitude = actual_magnitude + actual_state1[i] * actual_state1[i];
+    }
+    actual_magnitude = sqrt(actual_magnitude);
+
+    // Skip cells with no meaningful activity - trivial predictions don't count
+    if actual_magnitude < 0.1 {
+        predictions[idx] = pred;
+        return;
+    }
+
     // Calculate prediction error (RMSE)
     var sum_sq_error = 0.0;
     for (var i = 0u; i < 4u; i = i + 1u) {

@@ -333,6 +333,34 @@ GPU init → adapter.limits() → headroom factor → max_cell_count → safety_
 | RTX 4090 (24GB) | ✅ | 25% | 6.25M | ~2.4GB |
 | MacBook Intel | ✅ | 50% | 1.5M | ~600MB |
 
+#### Fix Trivial Predictions (Session 32 Part 7)
+
+**Problème :** Population croissait de 1M à 1.006M sans interaction.
+
+**Cause :** Le `PREDICTION_EVALUATE_SHADER` récompensait les "prédictions triviales" :
+- Cellules Gen0 sans connexions prédisent `[0,0,0,0,0,0,0,0]`
+- État réel reste `[0,0,0,0,0,0,0,0]` (pas de signaux)
+- Accuracy = 1.0 (parfait!)
+- Reward = 1.0 × 0.05 × 0.02 = 0.001 énergie par cellule
+- Avec 1M cellules : 1000 énergie/tick = 500k énergie en 500 ticks
+
+**Fix :** Skip les cellules sans activité réelle.
+
+```wgsl
+// Calculate actual state magnitude - skip trivial predictions
+var actual_magnitude = 0.0;
+for (var i = 0u; i < 4u; i = i + 1u) {
+    actual_magnitude += actual_state0[i] * actual_state0[i];
+    actual_magnitude += actual_state1[i] * actual_state1[i];
+}
+actual_magnitude = sqrt(actual_magnitude);
+
+// Skip cells with no meaningful activity
+if actual_magnitude < 0.1 { return; }
+```
+
+**Résultat :** Population stable sans stimulation. Les cellules doivent MÉRITER leur énergie.
+
 ### Session 31 - Physical Intelligence (Vocabulary Removal)
 
 **ARIA passe en mode "Intelligence Physique" - le vocabulaire est supprimé.**
