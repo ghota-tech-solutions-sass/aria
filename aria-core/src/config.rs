@@ -133,8 +133,10 @@ impl Default for MetabolismConfig {
             energy_consumption: 0.0,    // Replaced by action costs
             energy_gain: 0.0,           // NO PASSIVE GAIN - ARIA must earn energy through resonance!
             energy_cap: 1.5,
-            reproduction_threshold: 0.90, // 60% of energy_cap - allow more reproduction for evolution
-            child_energy: 0.85,          // Below threshold (0.90) - children must EARN reproduction rights
+            // FIX: At high TPS (400+), economy is negative. Threshold must be BELOW avg_energy (~0.81)
+            // so cells can reproduce before dying. Evolution pressure comes from resonance, not starvation.
+            reproduction_threshold: 0.75, // Below avg_energy - allows multi-generational lineage
+            child_energy: 0.70,           // Below threshold - children must eat to reproduce
 
             // Action costs - "La Vraie Faim v3" (BRUTAL - real evolutionary pressure)
             cost_signal: 0.005,  // Speaking is EXPENSIVE

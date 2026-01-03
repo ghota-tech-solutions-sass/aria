@@ -153,8 +153,13 @@ impl Substrate {
                 tracing::info!("🧬 LINEAGE: 0 cells ready (threshold={:.2}, max_energy={:.2}, avg={:.2}, above_thresh={}, pop={})",
                     reproduction_threshold, max_energy, avg_energy, above_threshold, alive_count);
             } else if max_births > 0 {
-                tracing::info!("🧬 EXPANSION: {} cells ready, {} dividing (pop: {})",
-                    ready_to_divide.len(), max_births, alive_count);
+                // DEBUG: Count generations of cells ready to divide
+                let gen0_ready = ready_to_divide.iter().filter(|(_, _, g)| *g == 0).count();
+                let gen1_ready = ready_to_divide.iter().filter(|(_, _, g)| *g == 1).count();
+                let gen2plus_ready = ready_to_divide.iter().filter(|(_, _, g)| *g >= 2).count();
+
+                tracing::info!("🧬 EXPANSION: {} cells ready (Gen0:{}, Gen1:{}, Gen2+:{}), {} dividing (pop: {})",
+                    ready_to_divide.len(), gen0_ready, gen1_ready, gen2plus_ready, max_births, alive_count);
 
                 for (parent_idx, parent_dna_idx, parent_generation) in ready_to_divide.into_iter().take(max_births) {
                     // Parent pays the cost
