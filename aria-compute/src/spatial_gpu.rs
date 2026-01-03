@@ -175,6 +175,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 /// WGSL shader for clearing the grid (run before build)
 pub const CLEAR_GRID_SHADER: &str = r#"
 // Clear spatial hash grid
+// NOTE: Must match grid_bind_group_layout bindings (0=positions, 1=grid, 2=config)
 
 struct GridRegion {
     count: atomic<u32>,
@@ -182,7 +183,25 @@ struct GridRegion {
     _pad: array<u32, 3>,
 }
 
-@group(0) @binding(0) var<storage, read_write> grid: array<GridRegion>;
+struct CellPosition {
+    position: array<f32, 16>,
+}
+
+struct SpatialConfig {
+    grid_size: vec3<u32>,
+    max_cells_per_region: u32,
+    min_pos: vec3<f32>,
+    region_size: f32,
+    cell_count: u32,
+    _pad1: u32,
+    _pad2: u32,
+    _pad3: u32,
+}
+
+// Bindings must match the layout even if unused
+@group(0) @binding(0) var<storage, read> positions: array<CellPosition>;
+@group(0) @binding(1) var<storage, read_write> grid: array<GridRegion>;
+@group(0) @binding(2) var<uniform> config: SpatialConfig;
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
