@@ -450,8 +450,7 @@ async fn run_visual_mode() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Fetch learning stats periodically
-    let words_url = format!("{}/words", http_url);
-    let assoc_url = format!("{}/associations", http_url);
+    // NOTE: words and associations removed in Session 31 (Physical Intelligence)
     let episodes_url = format!("{}/episodes", http_url);
     let meta_url = format!("{}/meta", http_url);
 
@@ -459,29 +458,6 @@ async fn run_visual_mode() -> Result<(), Box<dyn std::error::Error>> {
         let client = reqwest::Client::new();
         loop {
             let mut stats = visualizer::LearningStats::default();
-
-            // Get word count
-            if let Ok(resp) = client.get(&words_url).send().await {
-                if let Ok(json) = resp.json::<serde_json::Value>().await {
-                    if let Some(arr) = json.as_array() {
-                        stats.word_count = arr.len();
-                        // Get recent words (first 5)
-                        stats.recent_words = arr.iter()
-                            .take(5)
-                            .filter_map(|w| w.get("word").and_then(|v| v.as_str()).map(|s| s.to_string()))
-                            .collect();
-                    }
-                }
-            }
-
-            // Get association count
-            if let Ok(resp) = client.get(&assoc_url).send().await {
-                if let Ok(json) = resp.json::<serde_json::Value>().await {
-                    if let Some(arr) = json.as_array() {
-                        stats.association_count = arr.len();
-                    }
-                }
-            }
 
             // Get episode count
             if let Ok(resp) = client.get(&episodes_url).send().await {

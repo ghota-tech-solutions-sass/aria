@@ -179,10 +179,19 @@ impl Substrate {
     pub(super) fn conceptualize(&self, current_tick: u64) {
         if current_tick % 100 != 0 { return; }
 
-        // Statistical sampling of clusters
+        // === GPU-FRIENDLY SAMPLING (Session 31) ===
+        // Instead of O(n) full scan, sample up to 5000 cells randomly.
+        // This gives statistically significant cluster data while reducing CPU load.
+        // At 1M cells, this is 200x faster than full scan.
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+
+        let sample_size = 5000.min(self.states.len());
         let mut cluster_data: HashMap<u32, (Vec<f32>, f32, usize)> = HashMap::new();
 
-        for state in &self.states {
+        for _ in 0..sample_size {
+            let idx = rng.gen_range(0..self.states.len());
+            let state = &self.states[idx];
             if state.cluster_id > 0 && !state.is_dead() {
                 let entry = cluster_data.entry(state.cluster_id).or_insert((vec![0.0f32; SIGNAL_DIMS], 0.0f32, 0));
                 for (j, &val) in state.state.iter().take(SIGNAL_DIMS).enumerate() {
@@ -209,7 +218,6 @@ impl Substrate {
                 name: format!("Concept-{}", cid),
                 signature,
                 stability: avg_h,
-                related_words: Vec::new(),
                 emerged_at: current_tick,
             });
 

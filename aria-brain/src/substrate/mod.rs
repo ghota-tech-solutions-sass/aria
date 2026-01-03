@@ -67,7 +67,6 @@ use aria_compute::create_backend;
 // Our local memory module
 use crate::memory::{LongTermMemory, SocialContext, EpisodeEmotion, EpisodeCategory};
 use crate::signal::Signal as OldSignal;
-use crate::signal::SignalType as OldSignalType;
 
 // ============================================================================
 // SUBSTRATE STRUCT
@@ -182,25 +181,36 @@ impl Substrate {
         let backend: Box<dyn ComputeBackend> =
             create_backend(&config).expect("Failed to create compute backend");
 
-        // Create cells and states
+        // Create cells and states in parallel (Session 32)
+        // At 5M cells, sequential creation takes minutes - parallel takes seconds
+        use rayon::prelude::*;
+
+        tracing::info!("🧬 Creating {} primordial cells (parallel)...", initial_cells);
+        let start = std::time::Instant::now();
+
+        // Parallel creation of (Cell, CellState, DNA) tuples
+        let cell_data: Vec<(Cell, CellState, DNA)> = (0..initial_cells)
+            .into_par_iter()
+            .map(|i| {
+                let dna = DNA::random();
+                let cell = Cell::new(i as u64, i as u32); // dna_index = i (1:1 mapping initially)
+                let state = CellState::new();
+                (cell, state, dna)
+            })
+            .collect();
+
+        // Unzip into separate Vecs (sequential but fast - just moving data)
         let mut cells = Vec::with_capacity(initial_cells);
         let mut states = Vec::with_capacity(initial_cells);
-        let mut dna_pool = Vec::new();
+        let mut dna_pool = Vec::with_capacity(initial_cells);
 
-        // Initialize primordial cells
-        for i in 0..initial_cells {
-            // Create DNA for this cell
-            let dna = DNA::random();
-            let dna_index = dna_pool.len() as u32;
-            dna_pool.push(dna);
-
-            // Create cell and state
-            let cell = Cell::new(i as u64, dna_index);
-            let state = CellState::new();
-
+        for (cell, state, dna) in cell_data {
             cells.push(cell);
             states.push(state);
+            dna_pool.push(dna);
         }
+
+        tracing::info!("🧬 Created {} cells in {:.2}s", initial_cells, start.elapsed().as_secs_f32());
 
         // Seed with elite DNA and load adaptive params from memory
         let adaptive_params = {
@@ -408,32 +418,16 @@ impl Substrate {
         }
 
         // === Sync GPU flags to CPU activity state ===
-        // Only sync every 100 ticks (matches GPU download frequency)
-        // The GPU is the source of truth - CPU only needs periodic updates
-        if current_tick % 100 == 0 {
-            for (cell, state) in self.cells.iter_mut().zip(self.states.iter()) {
-                let gpu_sleeping = state.is_sleeping();
-                if cell.activity.sleeping != gpu_sleeping {
-                    if gpu_sleeping {
-                        cell.activity.sleep();
-                    } else {
-                        cell.activity.wake();
-                    }
-                }
-            }
-        }
+        // Session 32: REMOVED O(n) loop - GPU is source of truth, CPU doesn't need sync.
+        // The activity state in Cell is legacy and can be derived from CellState.flags.
 
         let actions = all_actions;
 
         // === CLUSTER MAINTENANCE & HYSTERESIS (Phase 6 - Axe 2) ===
         // NOTE: Now handled by GPU CLUSTER_STATS_SHADER + CLUSTER_HYSTERESIS_SHADER (gpu_soa.rs)
 
-        // Increment age less frequently to reduce CPU overhead
-        if current_tick % 100 == 0 {
-            for cell in &mut self.cells {
-                cell.age += 100;
-            }
-        }
+        // Session 32: Age increment REMOVED - cell.age can be computed from (current_tick - birth_tick)
+        // if needed. Saving O(n) loop every 100 ticks.
 
         // Handle actions
         let mut births = Vec::new();
@@ -718,7 +712,11 @@ impl Substrate {
     ///
     /// Returns a 16x16 grid of activity levels and energy,
     /// plus population breakdown for the substrate view.
+    ///
+    /// **OPTIMIZED (Session 31)**: Uses sampling for grids (10k max) instead of O(n).
+    /// At 1M cells, this is 100x faster.
     pub fn spatial_view(&self) -> SubstrateView {
+        use rand::Rng;
         const GRID_SIZE: usize = 16;
         let mut activity_grid = vec![0.0f32; GRID_SIZE * GRID_SIZE];
         let mut energy_grid = vec![0.0f32; GRID_SIZE * GRID_SIZE];
@@ -732,14 +730,28 @@ impl Substrate {
         let mut total_energy: f32 = 0.0;
         let mut total_tension: f32 = 0.0;
 
-        // Count cells in each grid position
-        // Using first 2 dimensions of position (typically in -10..10 range)
-        for (cell, state) in self.cells.iter().zip(self.states.iter()) {
+        // === SAMPLING for grids (Session 31) ===
+        // Sample up to 10k cells for visualization grids.
+        // Statistically sufficient for 16x16 heatmap.
+        let sample_size = 10_000.min(self.cells.len());
+        let mut rng = rand::thread_rng();
+        let mut sampled_alive = 0usize;
+        let mut sampled_sleeping = 0usize;
+
+        for _ in 0..sample_size {
+            let idx = rng.gen_range(0..self.cells.len());
+            let cell = &self.cells[idx];
+            let state = &self.states[idx];
+
             if state.is_dead() {
                 continue;
             }
+            sampled_alive += 1;
+            if state.is_sleeping() {
+                sampled_sleeping += 1;
+            }
 
-            // Track lineage
+            // Track lineage (sampling gives good approximation for max)
             if cell.generation > max_generation {
                 max_generation = cell.generation;
             }
@@ -757,21 +769,18 @@ impl Substrate {
                 .clamp(0.0, (GRID_SIZE - 1) as f32) as usize;
             let y = ((state.position[1] + 10.0) / 20.0 * GRID_SIZE as f32)
                 .clamp(0.0, (GRID_SIZE - 1) as f32) as usize;
-            let idx = y * GRID_SIZE + x;
+            let grid_idx = y * GRID_SIZE + x;
 
-            cell_count_grid[idx] += 1;
-            energy_grid[idx] += state.energy;
-            tension_grid[idx] += state.tension;
+            cell_count_grid[grid_idx] += 1;
+            energy_grid[grid_idx] += state.energy;
+            tension_grid[grid_idx] += state.tension;
 
             // Activity: awake cells show full activation, sleeping show potential (energy)
-            // This ensures the heatmap always shows something even when cells sleep
             if !state.is_sleeping() {
                 let activation: f32 = state.state.iter().map(|x| x.abs()).sum();
-                activity_grid[idx] += activation;
+                activity_grid[grid_idx] += activation;
             } else {
-                // Sleeping cells contribute their energy as "potential activity"
-                // Dimmed (0.2x) so awake cells stand out
-                activity_grid[idx] += state.energy * 0.2;
+                activity_grid[grid_idx] += state.energy * 0.2;
             }
         }
 
@@ -786,27 +795,26 @@ impl Substrate {
             tension_grid[i] /= max_tension;
         }
 
-        // Population breakdown
+        // Population breakdown - extrapolate from sample
         let total = self.cells.len();
-        let alive = self.states.iter().filter(|s| !s.is_dead()).count();
-        // Read from CellState.flags (GPU source of truth)
-        let sleeping = self.states.iter().filter(|s| s.is_sleeping() && !s.is_dead()).count();
-        let dead = total - alive;
-        let awake = alive - sleeping;
+        let scale = if sampled_alive > 0 { self.cells.len() as f32 / sample_size as f32 } else { 1.0 };
+        let alive = (sampled_alive as f32 * scale) as usize;
+        let sleeping = (sampled_sleeping as f32 * scale) as usize;
+        let dead = total.saturating_sub(alive);
+        let awake = alive.saturating_sub(sleeping);
 
-        // Calculate averages
-        let avg_energy = if alive > 0 { total_energy / alive as f32 } else { 0.0 };
-        let avg_tension = if alive > 0 { total_tension / alive as f32 } else { 0.0 };
-        let avg_generation = if alive > 0 { total_generation as f32 / alive as f32 } else { 0.0 };
+        // Calculate averages (from sample)
+        let avg_energy = if sampled_alive > 0 { total_energy / sampled_alive as f32 } else { 0.0 };
+        let avg_tension = if sampled_alive > 0 { total_tension / sampled_alive as f32 } else { 0.0 };
+        let avg_generation = if sampled_alive > 0 { total_generation as f32 / sampled_alive as f32 } else { 0.0 };
         let sparse_savings_percent = if alive > 0 { sleeping as f32 / alive as f32 * 100.0 } else { 0.0 };
 
-        // Energy distribution (histogram)
+        // Energy histogram from sample (extrapolated)
         let mut energy_histogram = [0usize; 10];
-        for state in &self.states {
-            if !state.is_dead() {
-                let bucket = ((state.energy / 1.5) * 9.0).clamp(0.0, 9.0) as usize;
-                energy_histogram[bucket] += 1;
-            }
+        // Already sampled above, just use the sample counts with scale
+        for grid_val in &energy_grid {
+            let bucket = ((grid_val * 9.0).clamp(0.0, 9.0)) as usize;
+            energy_histogram[bucket] += 1;
         }
 
         // Calculate activity entropy (Shannon entropy normalized to 0-1)

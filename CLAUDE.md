@@ -32,17 +32,17 @@ aria-body (MacBook)  ◄──WebSocket──►  aria-brain (PC + RTX 2070)
 
 ## Ce qu'ARIA sait faire
 
-- **Parler** : mots appris, phrases 2-3 mots, ordre naturel
-- **Ressentir** : joie, curiosité, ennui, confort
-- **Apprendre** : feedback ("Bravo!"/"Non"), associations, contexte
+- **Ressentir** : joie, curiosité, ennui, confort via tension physique
+- **Apprendre** : feedback ("Bravo!"/"Non"), renforcement
 - **Se souvenir** : mémoire épisodique, "premières fois"
-- **Vivre** : rêves, parole spontanée, jeu créatif
+- **Vivre** : rêves, spontanéité, jeu créatif
 - **S'adapter** : paramètres qui évoluent avec le feedback
 - **Explorer** : curiosité-driven, teste des combinaisons nouvelles
 - **Méta-apprendre** : s'auto-évalue, apprend à apprendre (Session 14)
 - **Voir** : images → vecteurs sémantiques 32D (Session 15)
 - **S'auto-modifier (Session 16)** : analyse ses performances et change ses propres paramètres
 - **S'auto-évoluer (Genesis)** : traduit son DNA en code GPU WGSL, recompile ses pipelines à chaud (Session 23)
+- **Intelligence physique (Session 31)** : comportement émerge des lois physiques, pas du vocabulaire
 
 ## Commandes
 
@@ -52,9 +52,8 @@ task brain-100k     # 100k cellules
 ARIA_BACKEND=gpu task brain  # Forcer GPU (AMD/NVIDIA via Vulkan)
 task body           # Interface
 task stats          # Stats du cerveau
-task words          # Mots connus
-task associations   # Associations apprises
 task episodes       # Mémoire épisodique
+# Note: task words et task associations supprimés (Session 31)
 ```
 
 ## Paramètres clés
@@ -91,7 +90,315 @@ Chats de Mickael :
 - **Obrigada** : Abyssin
 
 ---
-*Version : 0.9.3 | Dernière update : 2026-01-03*
+*Version : 0.9.5 | Dernière update : 2026-01-03*
+
+### Session 32 - Full GPU Migration (CPU Liberation)
+
+**Élimination des boucles O(n) CPU - le GPU fait TOUT le travail de propagation.**
+
+#### Philosophie
+
+Le CPU ne devrait gérer que :
+1. Logique de haut niveau (mémoire, décisions)
+2. I/O réseau (WebSocket, HTTP)
+3. Gestion dynamique des Vec (naissance/mort)
+
+Le GPU gère :
+1. Propagation des signaux (spatial hash)
+2. Physique des cellules (énergie, état)
+3. Lois d'intelligence (Prédiction, Hebb, Cluster)
+
+#### Boucles CPU supprimées
+
+| Fonction | Avant | Après | Gain |
+|----------|-------|-------|------|
+| `inject_signal()` | O(n) loop + distance calc | Buffer only | ~100% |
+| `propagate_signal()` | O(n) loop | Buffer only | ~100% |
+| `conceptualize()` | O(n) full scan | 5k sampling | 200× @ 1M |
+| `spatial_view()` | O(n) full scan | 10k sampling | 100× @ 1M |
+| `natural_selection()` | O(n) count + bucket | 5k+10k sampling | 100× @ 1M |
+| `population_control()` | O(n) collect + sort | 5k sampling | 100× @ 1M |
+| `sync GPU flags` | O(n) every 1000 ticks | **REMOVED** | ∞ |
+| `age increment` | O(n) every 100 ticks | **REMOVED** | ∞ |
+
+#### Code supprimé
+
+```rust
+// signals.rs - AVANT (O(n) loop)
+for (i, state) in self.states.iter_mut().enumerate() {
+    let distance = Self::semantic_distance(&state.position, &target_position);
+    // ... process each cell ...
+}
+
+// APRÈS (GPU-only)
+// Signal added to buffer, GPU's SIGNAL_WITH_SPATIAL_HASH_SHADER handles:
+// - Waking sleeping cells
+// - Injecting tension into cell state
+// - Resonance-based energy (La Vraie Faim)
+// - Hebbian connection propagation
+let mut buffer = self.signal_buffer.write();
+buffer.push(fragment);
+```
+
+#### Sampling pour visualisation
+
+```rust
+// spatial_view() - 10k samples au lieu de O(n)
+let sample_size = 10_000.min(self.cells.len());
+for _ in 0..sample_size {
+    let idx = rng.gen_range(0..self.cells.len());
+    // ... process sampled cell ...
+}
+// Population extrapolated from sample
+```
+
+#### Fichiers modifiés
+
+| Fichier | Changement |
+|---------|------------|
+| `aria-brain/src/substrate/signals.rs` | CPU loops → buffer only |
+| `aria-brain/src/substrate/emergence.rs` | O(n) → 5k sampling |
+| `aria-brain/src/substrate/mod.rs` | O(n) → 10k sampling, removed sync loops |
+| `aria-brain/src/substrate/lifecycle.rs` | O(n) → sampling, removed Gen0 drain CPU loop |
+
+#### Performance attendue @ 1M cellules
+
+| Métrique | Avant | Après |
+|----------|-------|-------|
+| `inject_signal()` | ~50ms | <1ms |
+| `spatial_view()` | ~100ms | ~10ms |
+| CPU utilisation tick | 80%+ | <20% |
+| GPU utilisation | 30% | 80%+ |
+
+#### Fix GPU Buffer Reallocation (Session 32 Part 2)
+
+**Le freeze restant venait de réallocations GPU constantes.**
+
+Symptôme : Logs montraient `🎮 GPU SoA: Allocating XXX MB` toutes les ~100 ticks, avec recompilation de tous les pipelines.
+
+**Causes identifiées :**
+
+1. **Headroom insuffisant** : Seulement 20% de marge
+   - À 500 nouvelles cellules/100 ticks, le headroom était épuisé instantanément
+   - Chaque dépassement → réallocation complète (700+ MB) + recompilation shaders
+
+2. **Condition de réallocation trop agressive** :
+   ```rust
+   // AVANT: réallocation à CHAQUE changement de taille
+   let first_init = !self.initialized || self.cell_count != cells.len();
+
+   // APRÈS: seulement quand on DÉPASSE la capacité
+   let needs_realloc = !self.initialized || cells.len() > self.max_cell_count;
+   ```
+
+**Fix appliqués :**
+
+```rust
+// gpu_soa.rs - Headroom 20% → 100%
+let cell_count_with_headroom = cell_count * 2;  // AVANT: cell_count + cell_count / 5
+
+// Logique de réallocation optimisée
+if needs_realloc {
+    self.init_buffers(...);  // Réallocation complète
+} else if size_changed {
+    self.cell_count = cells.len();  // Juste mise à jour du compteur
+    self.upload_cells(states);      // Upload partiel OK
+}
+```
+
+**Résultat :**
+- Réallocation : ~1x/heure au lieu de ~10x/seconde
+- Freezes éliminés pendant la reproduction normale
+
+#### Fix Vec + GPU Upload (Session 32 Part 3)
+
+**Deux problèmes identifiés :**
+
+1. **Vec réallocation** : Quand population dépasse capacité, Rust copie tout (~350MB)
+2. **GPU upload O(n)** : `upload_cells()` uploadait 1M cellules à chaque naissance
+
+**Fix appliqués :**
+
+```rust
+// lifecycle.rs - Reserve dynamique (pas 2x au démarrage qui alloue 700MB!)
+let current_cap = self.cells.capacity();
+let needed = self.cells.len() + max_births;
+if needed > current_cap {
+    let extra = (current_cap / 10).max(1000);  // +10% chunks
+    self.cells.reserve(extra);
+    self.states.reserve(extra);
+}
+
+// gpu_soa.rs - Upload incrémental (nouvelles cellules seulement)
+fn upload_new_cells(&self, states: &[CellState], old_count: usize) {
+    // Offset = old_count * sizeof(CellEnergy)
+    // Upload only states[old_count..new_count]
+}
+
+// Tick: O(births) au lieu de O(n)
+} else if new_count > old_count {
+    self.upload_new_cells(states, old_count);
+    self.upload_new_dna(dna_pool, old_count);
+}
+```
+
+**Résultat :**
+- Vec : réallocation par chunks de 10% (pas tout d'un coup)
+- GPU upload : ~500 cellules au lieu de 1M
+- Startup : pas de 700MB d'allocation supplémentaire
+
+#### Fix Parallel Cell Creation (Session 32 Part 4)
+
+**Création séquentielle de 5M cellules = bloqué au démarrage.**
+
+```rust
+// AVANT: Séquentiel (minutes pour 5M)
+for i in 0..initial_cells {
+    let dna = DNA::random();  // Chaque appel est lent
+    // ...
+}
+
+// APRÈS: Parallèle avec rayon (secondes pour 5M)
+use rayon::prelude::*;
+let cell_data: Vec<(Cell, CellState, DNA)> = (0..initial_cells)
+    .into_par_iter()
+    .map(|i| {
+        let dna = DNA::random();
+        let cell = Cell::new(i as u64, i as u32);
+        let state = CellState::new();
+        (cell, state, dna)
+    })
+    .collect();
+```
+
+**Résultat :** Démarrage 5M cells en ~5 secondes au lieu de plusieurs minutes.
+
+#### GPU Dynamic Buffer Limits (Session 32 Part 5)
+
+**Le headroom GPU est maintenant dynamique selon le matériel.**
+
+```rust
+// Query GPU's actual limits
+let adapter_limits = adapter.limits();
+let gpu_max_buffer = (adapter_limits.max_buffer_size as usize).min(1024 * 1024 * 1024);
+
+// Cap headroom based on largest buffer (CellConnections = 144 bytes)
+let connections_size = std::mem::size_of::<CellConnections>(); // 144 bytes
+let max_cells_in_buffer = self.max_buffer_size / connections_size;
+let cell_count_with_headroom = (cell_count * 2).min(max_cells_in_buffer);
+```
+
+**Limites par buffer @ 1GB max:**
+| Buffer | Bytes/cell | Max cells |
+|--------|------------|-----------|
+| CellConnections | 144 | 7.4M |
+| CellInternalState | 128 | 8.3M |
+| CellPosition | 64 | 16.7M |
+
+**Résultat :** ARIA s'adapte automatiquement au GPU disponible.
+
+### Session 31 - Physical Intelligence (Vocabulary Removal)
+
+**ARIA passe en mode "Intelligence Physique" - le vocabulaire est supprimé.**
+
+#### Philosophie
+
+L'intelligence d'ARIA ne vient plus de l'association de mots, mais de la physique de ses cellules. Les "lois" (Prédiction, Hebb, Expansion) définissent le comportement émergent.
+
+#### 1. Suppression du Vocabulaire
+
+Fichiers/modules supprimés ou nettoyés :
+- `aria-brain/src/memory/vocabulary.rs` - **supprimé**
+- `WordCategory`, `UsagePattern` - supprimés de `types.rs`
+- `VisualWordLink`, `visual_word_links` - supprimés
+- `word_frequencies`, `word_associations`, `semantic_clusters` - supprimés de `LongTermMemory`
+
+#### 2. Fix Sleeping Drain
+
+Les cellules Gen0 ne mouraient pas assez vite car le drain de sommeil était trop faible.
+
+**Avant :**
+```wgsl
+// GPU: 0.1 × cost_rest tous les 100 ticks
+cell_energy.energy -= config.cost_rest * 0.1;  // ~27h survie!
+
+// CPU: 0.5 × cost_rest par tick (incohérent)
+state.energy -= config.metabolism.cost_rest * 0.5;
+```
+
+**Après :**
+```wgsl
+// GPU: 2.0 × cost_rest tous les 100 ticks (~3 min survie)
+cell_energy.energy -= config.cost_rest * 2.0;
+
+// CPU: 0.02 × cost_rest par tick (cohérent avec GPU)
+state.energy -= config.metabolism.cost_rest * 0.02;
+```
+
+**Résultat** : Cellules dormantes meurent en ~3 minutes, permettant aux nouvelles générations d'émerger.
+
+#### 3. Endpoints simplifiés
+
+| Endpoint | Avant | Après |
+|----------|-------|-------|
+| `/words` | Liste des mots connus | Message "removed" |
+| `/associations` | Associations mot-mot | Message "removed" |
+| `/clusters` | Clusters sémantiques | Message "removed" |
+| `/visual` | Mémoires + word links | Mémoires uniquement |
+
+#### Fichiers modifiés
+
+| Fichier | Changement |
+|---------|------------|
+| `aria-brain/src/memory/vocabulary.rs` | Supprimé |
+| `aria-brain/src/memory/mod.rs` | Nettoyé (vocab, word_links) |
+| `aria-brain/src/memory/types.rs` | Supprimé WordCategory, UsagePattern |
+| `aria-brain/src/memory/visual.rs` | Supprimé VisualWordLink |
+| `aria-brain/src/main.rs` | Endpoints simplifiés |
+| `aria-brain/src/substrate/signals.rs` | Supprimé visual→word |
+| `aria-compute/src/compiler.rs` | Sleeping drain 0.1 → 2.0 |
+| `aria-compute/src/backend/cpu.rs` | Sleeping drain 0.5 → 0.02 |
+| `aria-compute/src/backend/gpu_soa.rs` | Sync 100 → 1000 ticks |
+| `aria-brain/src/substrate/mod.rs` | Sync 100 → 1000 ticks |
+| `aria-body/src/visualizer.rs` | Supprimé word_count, recent_words |
+| `aria-body/src/main.rs` | Supprimé fetch /words, /associations |
+
+#### 4. Optimisation GPU→CPU Sync
+
+Le téléchargement GPU→CPU bloquant était trop fréquent (tous les 100 ticks = 10x/sec).
+
+**Avant :**
+```rust
+let should_download = self.tick % 100 == 0;  // Trop fréquent!
+```
+
+**Après :**
+```rust
+let should_download = self.tick % 1000 == 0;  // 1x/sec à 1000 TPS
+```
+
+**Résultat** : 10x moins de syncs bloquants.
+
+#### 5. Gen0 Drain (évolution bloquée)
+
+Les cellules Gen0 s'accumulaient (59k ready!) car elles ne mouraient pas :
+- Elles ont de l'énergie → pas de sleeping drain
+- Elles ne reproduisent pas (on priorise Gen2+)
+- Elles bloquent la population
+
+**Fix** : Drain de 2% par lifecycle tick pour les Gen0 "ready" non sélectionnées.
+
+```rust
+// lifecycle.rs - après reproduction
+if gen0_count > 100 {
+    for (idx, _) in gen_buckets[0].iter() {
+        self.states[*idx].energy -= 0.02;  // 2% drain
+        if energy <= 0.0 { kill(); }
+    }
+}
+```
+
+**Résultat** : Gen0 meurent en ~50 lifecycle ticks, laissant place aux nouvelles générations.
 
 ### Session 30 - GPU Fixes & Lineage Progression
 

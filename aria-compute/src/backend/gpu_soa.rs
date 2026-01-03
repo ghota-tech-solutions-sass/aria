@@ -179,6 +179,7 @@ pub struct GpuSoABackend {
 
     cell_count: usize,
     max_cell_count: usize,
+    max_buffer_size: usize, // GPU's actual buffer limit (queried at init)
     initialized: bool,
     use_spatial_hash: bool,
     compiler: crate::compiler::ShaderCompiler,
@@ -207,15 +208,21 @@ impl GpuSoABackend {
             info.backend
         );
 
+        // Query the adapter's actual limits
+        let adapter_limits = adapter.limits();
+        // Cap at 1GB to avoid u32 overflow issues with max_storage_buffer_binding_size
+        let gpu_max_buffer = (adapter_limits.max_buffer_size as usize).min(1024 * 1024 * 1024);
+        tracing::info!("🎮 GPU max buffer size: {} MB", gpu_max_buffer / 1024 / 1024);
+
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("ARIA GPU SoA"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits {
-                    max_storage_buffer_binding_size: 1024 * 1024 * 1024,
-                    max_buffer_size: 1024 * 1024 * 1024,
+                    max_storage_buffer_binding_size: gpu_max_buffer as u32,
+                    max_buffer_size: gpu_max_buffer as u64,
                     // Request actual hardware limits for storage buffers (fixes crash on limited hardware)
-                    max_storage_buffers_per_shader_stage: adapter.limits().max_storage_buffers_per_shader_stage,
+                    max_storage_buffers_per_shader_stage: adapter_limits.max_storage_buffers_per_shader_stage,
                     ..Default::default()
                 },
                 memory_hints: wgpu::MemoryHints::Performance,
@@ -295,6 +302,7 @@ impl GpuSoABackend {
             last_active_count: 0,
             cell_count: 0,
             max_cell_count: 0,
+            max_buffer_size: gpu_max_buffer,
             initialized: false,
             use_spatial_hash,
             compiler: crate::compiler::ShaderCompiler::new(),
@@ -303,9 +311,22 @@ impl GpuSoABackend {
 
     /// Initialize GPU buffers with SoA layout
     fn init_buffers(&mut self, cell_count: usize, dna_count: usize) -> AriaResult<()> {
-        // Add 20% headroom
-        let cell_count_with_headroom = cell_count + cell_count / 5;
-        let dna_count_with_headroom = dna_count + dna_count / 5;
+        // Use GPU's actual max buffer size (queried at init)
+        // CellConnections is the LARGEST buffer at 144 bytes/cell
+        // (16 targets × u32 + 16 strengths × f32 + count + padding)
+        let connections_size = std::mem::size_of::<CellConnections>(); // 144 bytes
+        let max_cells_in_buffer = self.max_buffer_size / connections_size;
+
+        // Calculate headroom: aim for 100% but cap at GPU limit
+        let desired_headroom = cell_count * 2;
+        let cell_count_with_headroom = desired_headroom.min(max_cells_in_buffer);
+        let dna_count_with_headroom = (dna_count * 2).min(max_cells_in_buffer);
+
+        if cell_count_with_headroom < desired_headroom {
+            tracing::warn!("⚠️ GPU buffer limit: headroom reduced from {}M to {}M cells",
+                desired_headroom / 1_000_000, cell_count_with_headroom / 1_000_000);
+        }
+
         self.max_cell_count = cell_count_with_headroom;
 
         // Calculate buffer sizes
@@ -1894,6 +1915,94 @@ impl GpuSoABackend {
         }
     }
 
+    /// Upload only NEW cells (from old_count to current len) - Session 32
+    /// This avoids O(n) upload when only a few cells were added
+    fn upload_new_cells(&self, states: &[CellState], old_count: usize) {
+        let new_count = states.len().min(self.max_cell_count);
+        if old_count >= new_count {
+            return; // Nothing new to upload
+        }
+
+        let new_states = &states[old_count..new_count];
+        let offset_bytes = |size: usize| (old_count * size) as u64;
+
+        // Convert new cells to SoA
+        let energies: Vec<CellEnergy> = new_states
+            .iter()
+            .map(|s| CellEnergy {
+                energy: s.energy,
+                tension: s.tension,
+                activity_level: s.activity_level,
+                _pad: 0.0,
+            })
+            .collect();
+
+        let positions: Vec<CellPosition> = new_states
+            .iter()
+            .map(|s| CellPosition { position: s.position })
+            .collect();
+
+        let internal_states: Vec<CellInternalState> = new_states
+            .iter()
+            .map(|s| CellInternalState { state: s.state })
+            .collect();
+
+        let metadata: Vec<CellMetadata> = new_states
+            .iter()
+            .map(|s| CellMetadata {
+                flags: s.flags,
+                cluster_id: s.cluster_id,
+                hysteresis: s.hysteresis,
+                _pad: 0,
+            })
+            .collect();
+
+        if let Some(buf) = &self.energy_buffer {
+            self.queue.write_buffer(
+                buf,
+                offset_bytes(std::mem::size_of::<CellEnergy>()),
+                bytemuck::cast_slice(&energies),
+            );
+        }
+        if let Some(buf) = &self.position_buffer {
+            self.queue.write_buffer(
+                buf,
+                offset_bytes(std::mem::size_of::<CellPosition>()),
+                bytemuck::cast_slice(&positions),
+            );
+        }
+        if let Some(buf) = &self.state_buffer {
+            self.queue.write_buffer(
+                buf,
+                offset_bytes(std::mem::size_of::<CellInternalState>()),
+                bytemuck::cast_slice(&internal_states),
+            );
+        }
+        if let Some(buf) = &self.metadata_buffer {
+            self.queue.write_buffer(
+                buf,
+                offset_bytes(std::mem::size_of::<CellMetadata>()),
+                bytemuck::cast_slice(&metadata),
+            );
+        }
+    }
+
+    /// Upload only NEW DNA entries - Session 32
+    fn upload_new_dna(&self, dna_pool: &[DNA], old_count: usize) {
+        if let Some(buffer) = &self.dna_buffer {
+            let new_count = dna_pool.len().min(self.max_cell_count);
+            if old_count >= new_count {
+                return;
+            }
+            let offset = (old_count * std::mem::size_of::<DNA>()) as u64;
+            self.queue.write_buffer(
+                buffer,
+                offset,
+                bytemuck::cast_slice(&dna_pool[old_count..new_count]),
+            );
+        }
+    }
+
     fn upload_dna(&self, dna_pool: &[DNA]) {
         if let Some(buffer) = &self.dna_buffer {
             let safe_count = dna_pool.len().min(self.max_cell_count);
@@ -2505,12 +2614,27 @@ impl ComputeBackend for GpuSoABackend {
     ) -> AriaResult<Vec<(u64, CellAction)>> {
         self.tick += 1;
 
-        // Initialize on first call or size change
-        let first_init = !self.initialized || self.cell_count != cells.len();
-        if first_init {
-            self.init_buffers(cells.len(), dna_pool.len())?;
+        // Initialize on first call or when exceeding buffer capacity (Session 32)
+        // Previously: reallocated on ANY size change (very expensive)
+        // Now: only reallocate when cells.len() > max_cell_count
+        let needs_realloc = !self.initialized || cells.len() > self.max_cell_count;
+        let old_count = self.cell_count;
+        let new_count = cells.len();
+
+        if needs_realloc {
+            self.init_buffers(new_count, dna_pool.len())?;
             self.upload_cells(states);
             self.upload_dna(dna_pool);
+        } else if new_count > old_count {
+            // Session 32: Only upload the NEW cells, not all 1M
+            // This reduces upload from O(n) to O(births) = ~500 cells
+            self.cell_count = new_count;
+            self.upload_new_cells(states, old_count);
+            self.upload_new_dna(dna_pool, old_count);
+        } else if new_count != old_count {
+            // Population decreased (deaths) - just update count
+            // GPU will handle dead cells via flags
+            self.cell_count = new_count;
         }
 
         self.upload_signals(signals);
@@ -2564,7 +2688,7 @@ impl ComputeBackend for GpuSoABackend {
         self.queue.submit(Some(encoder.finish()));
 
         // Only read active count periodically to avoid GPU→CPU sync every tick
-        let should_read_stats = self.tick % 100 == 0 || first_init;
+        let should_read_stats = self.tick % 100 == 0 || needs_realloc;
         let (active_count, sleeping_count) = if should_read_stats {
             let count = self.read_active_count()? as usize;
             self.last_active_count = count as u32;
@@ -2882,7 +3006,8 @@ impl ComputeBackend for GpuSoABackend {
         self.stats.signals_propagated = signals.len() as u64;
 
         // Periodic download for CPU sync
-        let should_download = self.tick % 100 == 0 || first_init;
+        // Session 31: Reduced from 100 to 1000 ticks for better performance
+        let should_download = self.tick % 1000 == 0 || needs_realloc;
         let mut actions = Vec::new();
 
         if should_download {
@@ -2897,7 +3022,7 @@ impl ComputeBackend for GpuSoABackend {
             }
         }
 
-        if self.tick % 100 == 0 {
+        if self.tick % 1000 == 0 {
             let gpu_percent = if self.cell_count > 0 {
                 (sleeping_count as f32 / self.cell_count as f32 * 100.0) as u32
             } else {

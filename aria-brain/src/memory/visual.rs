@@ -66,17 +66,4 @@ impl VisualMemory {
     }
 }
 
-/// Visual-word link - connects visual features to words
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct VisualWordLink {
-    /// The word being linked
-    pub word: String,
-    /// Visual prototype (average of all images associated with this word)
-    pub visual_prototype: [f32; 32],
-    /// Number of associations (how confident is this link)
-    pub association_count: u64,
-    /// Average similarity of associations
-    pub avg_similarity: f32,
-    /// Last time this link was reinforced
-    pub last_reinforced: u64,
-}
+// NOTE: VisualWordLink removed in Session 31 (Physical Intelligence)

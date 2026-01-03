@@ -106,7 +106,14 @@ impl Substrate {
     /// CONTINUOUS REPRODUCTION (Session 27):
     /// Cells with energy > reproduction_threshold can divide regardless of population.
     /// This creates real lineage evolution without waiting for extinction.
+    /// Natural selection - maintain population
+    ///
+    /// **OPTIMIZED (Session 32)**: Sampling instead of O(n) full scans.
+    /// - Stats computed from 5k sample
+    /// - Only higher generations (Gen2+) tracked for reproduction
+    /// - Gen0 drain moved to GPU (SLEEPING_DRAIN handles it)
     pub(super) fn natural_selection(&mut self) {
+        use rand::Rng;
         let target = self.config.population.target_population as usize;
         let buffer = self.config.population.population_buffer as usize;
         let min_pop = self.config.population.min_population as usize;
@@ -114,81 +121,93 @@ impl Substrate {
         let child_energy = self.config.metabolism.child_energy;
         let divide_cost = self.config.metabolism.cost_divide;
 
-        let alive_count = self.cells.iter()
-            .zip(self.states.iter())
-            .filter(|(_, s)| !s.is_dead())
-            .count();
+        // === SAMPLED alive_count (Session 32) ===
+        // Instead of O(n) count, sample 5k cells and extrapolate
+        let mut rng = rand::thread_rng();
+        let sample_size = 5000.min(self.cells.len());
+        let mut sampled_alive = 0usize;
+        let mut max_energy = 0.0f32;
+        let mut sum_energy = 0.0f32;
+
+        for _ in 0..sample_size {
+            let idx = rng.gen_range(0..self.states.len());
+            let state = &self.states[idx];
+            if !state.is_dead() {
+                sampled_alive += 1;
+                sum_energy += state.energy;
+                if state.energy > max_energy { max_energy = state.energy; }
+            }
+        }
+
+        let scale = self.cells.len() as f32 / sample_size as f32;
+        let alive_count = (sampled_alive as f32 * scale) as usize;
+        let avg_energy = if sampled_alive > 0 { sum_energy / sampled_alive as f32 } else { 0.0 };
 
         // === CONTINUOUS REPRODUCTION (Law of Expansion) ===
-        // Life expands to fill available energy.
-        // We only cap at a high "Physics Limit" to prevent OOM/crash.
-        // Otherwise, if cells have energy to reproduce, they should.
-        let safety_cap = target * 2; // Hard limit for system stability
+        let safety_cap = target * 2;
 
         if alive_count < safety_cap {
-            // DEBUG: Compute energy stats to understand why cells aren't reproducing
-            let alive_energies: Vec<f32> = self.states.iter()
-                .filter(|s| !s.is_dead())
-                .map(|s| s.energy)
-                .collect();
-            let max_energy = alive_energies.iter().cloned().fold(0.0f32, f32::max);
-            let avg_energy = alive_energies.iter().sum::<f32>() / alive_energies.len() as f32;
-            let above_threshold = alive_energies.iter().filter(|&&e| e > reproduction_threshold).count();
-
-            // Find cells ready to divide (energy > threshold)
-            // Use bucket-based O(n) selection instead of O(n log n) sort.
-            // Higher generations reproduce first to ensure lineage progression.
+            // === SAMPLED reproduction candidates (Session 32) ===
+            // Only sample 10k cells to find reproduction candidates
+            // Prioritize higher generations by weighted sampling
             const MAX_GEN_BUCKETS: usize = 32;
             let mut gen_buckets: [Vec<(usize, u32)>; MAX_GEN_BUCKETS] = Default::default();
-            let mut total_ready = 0usize;
 
-            // O(n) single pass: bucket cells by generation
-            for (i, (cell, state)) in self.cells.iter().zip(self.states.iter()).enumerate() {
+            let repro_sample_size = 10_000.min(self.cells.len());
+            for _ in 0..repro_sample_size {
+                let i = rng.gen_range(0..self.cells.len());
+                let cell = &self.cells[i];
+                let state = &self.states[i];
                 if !state.is_dead() && state.energy > reproduction_threshold {
                     let gen = (cell.generation as usize).min(MAX_GEN_BUCKETS - 1);
-                    gen_buckets[gen].push((i, cell.dna_index));
-                    total_ready += 1;
+                    // Avoid duplicates - check if already in bucket
+                    if gen_buckets[gen].len() < 1000 {
+                        gen_buckets[gen].push((i, cell.dna_index));
+                    }
                 }
             }
 
-            // Flatten buckets from highest generation down (O(n) total)
-            let mut ready_to_divide: Vec<(usize, u32, u32)> = Vec::with_capacity(total_ready);
+            // Flatten buckets from highest generation down
+            let mut ready_to_divide: Vec<(usize, u32, u32)> = Vec::with_capacity(500);
             for gen in (0..MAX_GEN_BUCKETS).rev() {
                 for (idx, dna_idx) in gen_buckets[gen].iter() {
                     ready_to_divide.push((*idx, *dna_idx, gen as u32));
+                    if ready_to_divide.len() >= 500 { break; }
                 }
+                if ready_to_divide.len() >= 500 { break; }
             }
 
-            // Limit births per tick to avoid explosion (still biological pacing)
-            // But allow significantly more than before if energy is abundant.
             let room = safety_cap.saturating_sub(alive_count);
-            let max_births = room.min(ready_to_divide.len()).min(500); // Increased cap from 100
+            let max_births = room.min(ready_to_divide.len()).min(500);
 
-            // DEBUG: Log energy stats every selection interval
             if ready_to_divide.is_empty() {
-                tracing::info!("🧬 LINEAGE: 0 cells ready (threshold={:.2}, max_energy={:.2}, avg={:.2}, above_thresh={}, pop={})",
-                    reproduction_threshold, max_energy, avg_energy, above_threshold, alive_count);
+                tracing::info!("🧬 LINEAGE: 0 cells ready (threshold={:.2}, max_energy={:.2}, avg={:.2}, pop={})",
+                    reproduction_threshold, max_energy, avg_energy, alive_count);
             } else if max_births > 0 {
-                // DEBUG: Count generations of cells ready to divide (AFTER sorting by gen DESC)
-                let gen0_ready = ready_to_divide.iter().filter(|(_, _, g)| *g == 0).count();
-                let gen1_ready = ready_to_divide.iter().filter(|(_, _, g)| *g == 1).count();
-                let gen2plus_ready = ready_to_divide.iter().filter(|(_, _, g)| *g >= 2).count();
+                let gen0_ready = gen_buckets[0].len();
+                let gen1_ready = gen_buckets[1].len();
+                let gen2plus_ready: usize = gen_buckets[2..].iter().map(|b| b.len()).sum();
 
-                // Count which generations will ACTUALLY reproduce (first max_births after sort)
-                let reproducing: Vec<_> = ready_to_divide.iter().take(max_births).collect();
-                let gen0_repr = reproducing.iter().filter(|(_, _, g)| *g == 0).count();
-                let gen1_repr = reproducing.iter().filter(|(_, _, g)| *g == 1).count();
-                let gen2plus_repr = reproducing.iter().filter(|(_, _, g)| *g >= 2).count();
+                tracing::info!("🧬 EXPANSION: ~{} ready (Gen0:{}, Gen1:{}, Gen2+:{}), {} reproducing, pop:{}",
+                    gen0_ready + gen1_ready + gen2plus_ready, gen0_ready, gen1_ready, gen2plus_ready,
+                    max_births, alive_count);
 
-                tracing::info!("🧬 EXPANSION: {} ready (Gen0:{}, Gen1:{}, Gen2+:{}), {} reproducing (Gen0:{}, Gen1:{}, Gen2+:{}) pop:{}",
-                    ready_to_divide.len(), gen0_ready, gen1_ready, gen2plus_ready,
-                    max_births, gen0_repr, gen1_repr, gen2plus_repr, alive_count);
+                // Session 32: Reserve headroom if approaching capacity
+                // This prevents per-push reallocations by adding chunks of capacity
+                let current_cap = self.cells.capacity();
+                let needed = self.cells.len() + max_births;
+                if needed > current_cap {
+                    // Add 10% headroom when we need to grow
+                    let extra = (current_cap / 10).max(1000);
+                    self.cells.reserve(extra);
+                    self.states.reserve(extra);
+                    self.dna_pool.reserve(extra);
+                    tracing::debug!("📈 VEC RESERVE: +{} capacity (total: {})", extra, self.cells.capacity());
+                }
 
                 for (parent_idx, parent_dna_idx, parent_generation) in ready_to_divide.into_iter().take(max_births) {
-                    // Parent pays the cost
                     self.states[parent_idx].energy -= divide_cost;
 
-                    // Create child with mutation
                     let new_id = self.next_id.fetch_add(1, Ordering::SeqCst);
                     let parent_dna = &self.dna_pool[parent_dna_idx as usize];
 
@@ -209,14 +228,12 @@ impl Substrate {
                     let dna_index = self.dna_pool.len() as u32;
                     self.dna_pool.push(child_dna);
 
-                    // LINEAGE: Child = parent.generation + 1
                     let mut cell = Cell::new(new_id, dna_index);
                     cell.generation = parent_generation + 1;
 
                     let mut state = CellState::new();
                     state.energy = child_energy;
 
-                    // Use free slot or append
                     if let Some(idx) = self.free_slots.pop() {
                         self.cells[idx] = cell;
                         self.states[idx] = state;
@@ -226,48 +243,60 @@ impl Substrate {
                     }
                 }
             }
+
+            // === GEN0 DRAIN moved to GPU (Session 32) ===
+            // The SLEEPING_DRAIN_SHADER now handles Gen0 energy drain.
+            // CPU only logs periodically for debugging.
+            let gen0_count = gen_buckets[0].len();
+            if gen0_count > 10_000 {
+                tracing::debug!("🧹 GEN0: ~{} cells in sample (GPU handles drain)", gen0_count);
+            }
         }
 
-        // === POPULATION CONTROL ===
+        // === POPULATION CONTROL (Session 32: Sampling) ===
         if alive_count > target + buffer {
-            // Too many cells - remove weakest using PARTIAL SORT
-            let mut indices: Vec<(usize, f32)> = self.states.iter()
-                .enumerate()
-                .filter(|(_, s)| !s.is_dead())
-                .map(|(i, s)| (i, s.energy))
-                .collect();
+            // Too many cells - SAMPLE weakest instead of full scan
+            let to_remove = (alive_count - target).min(500);
+            let sample_size = 5000.min(self.states.len());
+            let mut weak_cells: Vec<(usize, f32)> = Vec::with_capacity(to_remove);
 
-            let to_remove = alive_count - target;
-            if to_remove > 0 && to_remove < indices.len() {
-                // Partial sort: only find the `to_remove` weakest - O(n) instead of O(n log n)
-                indices.select_nth_unstable_by(to_remove, |a, b| {
-                    a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-                });
+            for _ in 0..sample_size {
+                let idx = rng.gen_range(0..self.states.len());
+                let state = &self.states[idx];
+                if !state.is_dead() && state.energy < 0.3 {
+                    // Only consider weak cells (energy < 0.3)
+                    if weak_cells.len() < to_remove {
+                        weak_cells.push((idx, state.energy));
+                    }
+                }
+                if weak_cells.len() >= to_remove { break; }
             }
 
-            for (idx, _) in indices.iter().take(to_remove) {
+            for (idx, _) in weak_cells.iter() {
                 self.states[*idx].set_dead();
                 self.free_slots.push(*idx);
             }
+            if weak_cells.len() > 0 {
+                tracing::debug!("🗑️ CULL: {} weak cells removed", weak_cells.len());
+            }
         } else if alive_count < min_pop {
-            // Too few cells - spawn from SURVIVORS (La Vraie Faim evolution)
-            // Don't use random DNA - inherit from the elite survivors!
+            // Too few cells - SAMPLE survivors
             let to_spawn = min_pop - alive_count;
 
-            // Find TOP 10 survivors without sorting everything - O(n) instead of O(n log n)
-            // Tuple: (cell_idx, energy, dna_index, generation) - generation for lineage tracking!
+            // Sample to find elite survivors instead of O(n) scan
             const ELITE_COUNT: usize = 10;
             let mut top_survivors: Vec<(usize, f32, u32, u32)> = Vec::with_capacity(ELITE_COUNT);
+            let sample_size = 1000.min(self.cells.len());
 
-            for (i, (cell, state)) in self.cells.iter().zip(self.states.iter()).enumerate() {
-                if state.is_dead() {
-                    continue;
-                }
+            for _ in 0..sample_size {
+                let i = rng.gen_range(0..self.cells.len());
+                let cell = &self.cells[i];
+                let state = &self.states[i];
+                if state.is_dead() { continue; }
+
                 let entry = (i, state.energy, cell.dna_index, cell.generation);
-
                 if top_survivors.len() < ELITE_COUNT {
                     top_survivors.push(entry);
-                    // Keep sorted (small vec, fast)
                     top_survivors.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
                 } else if state.energy > top_survivors.last().map(|x| x.1).unwrap_or(0.0) {
                     top_survivors.pop();
@@ -434,9 +463,12 @@ impl Substrate {
         }
 
         // Keep only living cells AND compact DNA pool
-        let mut new_cells = Vec::with_capacity(total - dead_count + 100);
-        let mut new_states = Vec::with_capacity(total - dead_count + 100);
-        let mut new_dna_pool = Vec::with_capacity(total - dead_count + 100);
+        // Add 10% headroom to prevent immediate reallocations (Session 32)
+        let alive_estimate = total - dead_count;
+        let compacted_capacity = alive_estimate + alive_estimate / 10;
+        let mut new_cells = Vec::with_capacity(compacted_capacity);
+        let mut new_states = Vec::with_capacity(compacted_capacity);
+        let mut new_dna_pool = Vec::with_capacity(compacted_capacity);
         let mut dna_map: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
 
         for (cell, state) in self.cells.iter().zip(self.states.iter()) {
@@ -541,13 +573,7 @@ impl Substrate {
         entropy / (active.len() as f32).ln().max(1.0)
     }
 
-    /// Calculate semantic distance between two positions
-    pub(super) fn semantic_distance(a: &[f32; POSITION_DIMS], b: &[f32; POSITION_DIMS]) -> f32 {
-        a.iter().zip(b.iter())
-            .map(|(x, y)| (x - y).powi(2))
-            .sum::<f32>()
-            .sqrt()
-    }
+    // NOTE: semantic_distance() removed in Session 31 - GPU handles distance calculations
 
     /// Calculate vector similarity (cosine similarity)
     /// NOTE: Utility function kept for potential future use

@@ -94,29 +94,17 @@ async fn main() {
         loop {
             interval.tick().await;
 
-            // Rebuild semantic clusters before saving
-            {
-                let mut mem = memory_save.write();
-                mem.rebuild_clusters();
-            }
-
+            // NOTE: Vocabulary removed in Session 31 (Physical Intelligence)
             let mem = memory_save.read();
             if let Err(e) = mem.save(std::path::Path::new("data/aria.memory")) {
                 warn!("Failed to save memory: {}", e);
             } else {
-                let familiar_words: Vec<_> = mem.get_familiar_words(0.5)
-                    .iter()
-                    .map(|(w, f)| format!("{}({})", w, f.count))
-                    .collect();
-                info!("Memory saved ({} memories, {} patterns, {} words known, {} clusters)",
+                info!("Memory saved ({} memories, {} patterns, {} episodes, {} visual)",
                     mem.memories.len(),
                     mem.learned_patterns.len(),
-                    mem.word_frequencies.len(),
-                    mem.semantic_clusters.len()
+                    mem.episodes.len(),
+                    mem.visual_memories.len()
                 );
-                if !familiar_words.is_empty() {
-                    info!("Familiar words: {}", familiar_words.join(", "));
-                }
             }
         }
     });
@@ -148,51 +136,23 @@ async fn main() {
             warp::reply::json(&s)
         });
 
-    // Words endpoint - show known words
-    let memory_words = memory.clone();
+    // Words endpoint - NOTE: Vocabulary removed in Session 31 (Physical Intelligence)
     let words = warp::path("words")
         .map(move || {
-            let mem = memory_words.read();
-            let words_info: Vec<serde_json::Value> = mem.word_frequencies
-                .iter()
-                .map(|(word, freq)| {
-                    serde_json::json!({
-                        "word": word,
-                        "count": freq.count,
-                        "familiarity": freq.familiarity_boost,
-                        "emotional_valence": freq.emotional_valence
-                    })
-                })
-                .collect();
             warp::reply::json(&serde_json::json!({
-                "total_words": mem.word_frequencies.len(),
-                "words": words_info
+                "message": "Vocabulary removed in Session 31 (Physical Intelligence)",
+                "total_words": 0,
+                "words": []
             }))
         });
 
-    // Associations endpoint - show semantic word associations
-    let memory_assoc = memory.clone();
+    // Associations endpoint - NOTE: Vocabulary removed in Session 31 (Physical Intelligence)
     let associations = warp::path("associations")
         .map(move || {
-            let mem = memory_assoc.read();
-            let assoc_info: Vec<serde_json::Value> = mem.word_associations
-                .iter()
-                .filter(|(_, a)| a.strength >= 0.4)  // Only show meaningful associations
-                .map(|(key, assoc)| {
-                    let parts: Vec<&str> = key.split(':').collect();
-                    serde_json::json!({
-                        "word1": parts.get(0).unwrap_or(&""),
-                        "word2": parts.get(1).unwrap_or(&""),
-                        "strength": assoc.strength,
-                        "co_occurrences": assoc.co_occurrences,
-                        "emotional_valence": assoc.emotional_valence
-                    })
-                })
-                .collect();
             warp::reply::json(&serde_json::json!({
-                "total_associations": mem.word_associations.len(),
-                "strong_associations": assoc_info.len(),
-                "associations": assoc_info
+                "message": "Word associations removed in Session 31 (Physical Intelligence)",
+                "total_associations": 0,
+                "associations": []
             }))
         });
 
@@ -245,35 +205,13 @@ async fn main() {
             }))
         });
 
-    // Clusters endpoint - show semantic word clusters
-    let memory_clusters = memory.clone();
+    // Clusters endpoint - NOTE: Semantic clusters removed in Session 31 (Physical Intelligence)
     let clusters = warp::path("clusters")
         .map(move || {
-            let mem = memory_clusters.read();
-            let clusters_info: Vec<serde_json::Value> = mem.semantic_clusters
-                .iter()
-                .map(|cluster| {
-                    let words: Vec<serde_json::Value> = cluster.words.iter()
-                        .map(|(word, strength)| {
-                            serde_json::json!({
-                                "word": word,
-                                "strength": strength
-                            })
-                        })
-                        .collect();
-                    serde_json::json!({
-                        "id": cluster.id,
-                        "label": cluster.label,
-                        "words": words,
-                        "word_count": cluster.words.len(),
-                        "emotional_valence": cluster.emotional_valence,
-                        "dominant_category": format!("{:?}", cluster.dominant_category)
-                    })
-                })
-                .collect();
             warp::reply::json(&serde_json::json!({
-                "total_clusters": mem.semantic_clusters.len(),
-                "clusters": clusters_info
+                "message": "Semantic clusters removed in Session 31 (Physical Intelligence)",
+                "total_clusters": 0,
+                "clusters": []
             }))
         });
 
@@ -348,8 +286,8 @@ async fn main() {
                 .unwrap_or("upload")
                 .to_string();
 
-            // Optional labels to associate with this image (for teaching)
-            let labels: Vec<String> = body.get("labels")
+            // NOTE: Labels removed in Session 31 (Physical Intelligence)
+            let _labels: Vec<String> = body.get("labels")
                 .and_then(|v| v.as_array())
                 .map(|arr| arr.iter()
                     .filter_map(|v| v.as_str())
@@ -390,25 +328,8 @@ async fn main() {
                         )
                     };
 
-                    // If labels provided, link them to this visual
-                    if !labels.is_empty() {
-                        let mut mem = memory_vision.write();
-                        for label in &labels {
-                            mem.link_vision_to_word(&signature, label, current_tick);
-                        }
-                    }
-
-                    // Ask memory what words this image evokes
-                    let suggested_words: Vec<serde_json::Value> = {
-                        let mem = memory_vision.read();
-                        mem.visual_to_words(&signature)
-                            .into_iter()
-                            .map(|(word, score)| serde_json::json!({
-                                "word": word,
-                                "confidence": score
-                            }))
-                            .collect()
-                    };
+                    // NOTE: Visual-word linking removed in Session 31 (Physical Intelligence)
+                    // Labels are ignored - ARIA learns through physical intelligence, not words
 
                     // Convert to internal signal and send to substrate
                     let signal = Signal {
@@ -433,10 +354,8 @@ async fn main() {
                         "memory": {
                             "id": memory_id,
                             "is_new": is_new,
-                            "recognition": recognition,
-                            "labels_learned": labels
+                            "recognition": recognition
                         },
-                        "suggested_words": suggested_words,
                         "features": {
                             "brightness": features.brightness,
                             "warmth": features.warmth,
@@ -461,7 +380,7 @@ async fn main() {
     let visual_stats_endpoint = warp::path("visual")
         .map(move || {
             let mem = memory_visual_stats.read();
-            let (total_memories, total_links, top_words) = mem.visual_stats();
+            let total_memories = mem.visual_stats();
 
             // Get recent memories
             let recent_memories: Vec<serde_json::Value> = mem.visual_memories
@@ -471,24 +390,15 @@ async fn main() {
                 .map(|m| serde_json::json!({
                     "id": m.id,
                     "description": m.description,
-                    "labels": m.labels,
                     "times_seen": m.times_seen,
                     "source": m.source
                 }))
                 .collect();
 
-            let top_links: Vec<serde_json::Value> = top_words.iter()
-                .map(|(word, count)| serde_json::json!({
-                    "word": word,
-                    "associations": count
-                }))
-                .collect();
-
+            // NOTE: word_links removed in Session 31 (Physical Intelligence)
             warp::reply::json(&serde_json::json!({
                 "total_visual_memories": total_memories,
-                "total_word_links": total_links,
-                "recent_memories": recent_memories,
-                "top_word_links": top_links
+                "recent_memories": recent_memories
             }))
         });
 

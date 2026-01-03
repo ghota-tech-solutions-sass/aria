@@ -146,12 +146,10 @@ pub struct SubstrateView {
 }
 
 /// Learning progress stats
+/// NOTE: word_count and recent_words removed in Session 31 (Physical Intelligence)
 #[derive(Default, Clone)]
 pub struct LearningStats {
-    pub word_count: usize,
-    pub association_count: usize,
     pub episode_count: usize,
-    pub recent_words: Vec<String>,
     pub strategy: String,
 }
 
@@ -554,10 +552,8 @@ impl AriaVisualizer {
             ]),
             Line::from(vec![
                 Span::styled(" 📚 ", Style::default()),
-                Span::styled(format!("{}", learn.word_count), Style::default().fg(Color::Cyan)),
-                Span::styled(" words ", Style::default().fg(Color::DarkGray)),
-                Span::styled(format!("{}", learn.association_count), Style::default().fg(Color::Green)),
-                Span::styled(" links", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{}", learn.episode_count), Style::default().fg(Color::Cyan)),
+                Span::styled(" episodes", Style::default().fg(Color::DarkGray)),
             ]),
         ])
         .block(Block::default()

@@ -74,9 +74,10 @@ impl CpuBackend {
     ) -> Option<CellAction> {
         // Skip sleeping cells unless they receive a signal
         if cell.activity.sleeping {
-            // Sleeping cells consume significant energy (hibernation still costs!)
-            // "La Vraie Faim" - even sleep isn't free
-            state.energy -= config.metabolism.cost_rest * 0.5;
+            // Sleeping cells consume energy (hibernation still costs!)
+            // Session 31: Changed from 0.5 to 0.02 to match GPU behavior (~3 min survival)
+            // GPU drains cost_rest * 2.0 every 100 ticks = cost_rest * 0.02 per tick
+            state.energy -= config.metabolism.cost_rest * 0.02;
 
             // Check if any signal should wake this cell
             let max_stimulus: f32 = signals
