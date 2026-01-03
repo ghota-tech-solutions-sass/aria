@@ -126,6 +126,15 @@ impl Substrate {
         let safety_cap = target * 2; // Hard limit for system stability
 
         if alive_count < safety_cap {
+            // DEBUG: Compute energy stats to understand why cells aren't reproducing
+            let alive_energies: Vec<f32> = self.states.iter()
+                .filter(|s| !s.is_dead())
+                .map(|s| s.energy)
+                .collect();
+            let max_energy = alive_energies.iter().cloned().fold(0.0f32, f32::max);
+            let avg_energy = alive_energies.iter().sum::<f32>() / alive_energies.len() as f32;
+            let above_threshold = alive_energies.iter().filter(|&&e| e > reproduction_threshold).count();
+
             // Find cells ready to divide (energy > threshold)
             let ready_to_divide: Vec<(usize, u32, u32)> = self.cells.iter()
                 .zip(self.states.iter())
@@ -139,8 +148,12 @@ impl Substrate {
             let room = safety_cap.saturating_sub(alive_count);
             let max_births = room.min(ready_to_divide.len()).min(500); // Increased cap from 100
 
-            if max_births > 0 {
-                tracing::debug!("🧬 EXPANSION: {} cells ready, {} dividing (pop: {})",
+            // DEBUG: Log energy stats every selection interval
+            if ready_to_divide.is_empty() {
+                tracing::info!("🧬 LINEAGE: 0 cells ready (threshold={:.2}, max_energy={:.2}, avg={:.2}, above_thresh={}, pop={})",
+                    reproduction_threshold, max_energy, avg_energy, above_threshold, alive_count);
+            } else if max_births > 0 {
+                tracing::info!("🧬 EXPANSION: {} cells ready, {} dividing (pop: {})",
                     ready_to_divide.len(), max_births, alive_count);
 
                 for (parent_idx, parent_dna_idx, parent_generation) in ready_to_divide.into_iter().take(max_births) {

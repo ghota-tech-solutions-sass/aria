@@ -148,6 +148,35 @@ cell_energy.activity_level = cell_energy.activity_level * decay_rate;
 - JIT compilation fonctionnelle
 - 100% sparse savings au repos
 
+### Session 28 - Loi de Compression (Predictive Physics)
+
+**L'énergie est récompensée par la précision de la prédiction.**
+
+- **Concept** : "Surprise costs energy."
+- **Implémentation** : Chaque cellule a un `predicted_state`.
+- **Physique** :
+  - Erreur faible (< 0.1) → Gain d'énergie (Récompense)
+  - Erreur forte (Surprise) → Perte d'énergie (Coût métabolique)
+- **But** : Forcer le cerveau à internaliser les modèles du monde pour minimiser le coût énergétique.
+
+### Session 27 - Loi d'Association (Hebb's Law)
+
+**"Fire together, move together." (Plasticité Spatiale)**
+
+- **Concept** : Remplacer les connexions synaptiques coûteuses (O(N²)) par une attraction spatiale (O(N)).
+- **Mécanisme** : Les cellules actives calculent leur "Centre de Gravité" (Centroid) et se déplacent physiquement vers lui.
+- **Résultat** : Les concepts liés s'agglutinent spatialement (Clustering sémantique).
+
+### Session 26 - Loi d'Expansion (Lineage Fix)
+
+**La vie s'étend pour remplir l'énergie disponible.**
+
+- **Fix Critique** : Suppression du cap artificiel `target_population`.
+- **Dynamique** : La reproduction est maintenant limitée par :
+  1. L'énergie disponible (Seuil de reproduction)
+  2. Une limite physique de sécurité (OOM protection uniquement)
+- **Résultat** : Compteur de génération débloqué, vagues de population naturelles.
+
 ### Session 25 - Loi de Prédiction (Prediction Law)
 
 **ARIA commence à prédire son futur - les cellules qui comprennent leur monde survivent.**

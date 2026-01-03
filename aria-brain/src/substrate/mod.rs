@@ -56,7 +56,7 @@ use aria_core::{
     Cell, CellState, CellAction, DNA, MutationContext,
     SignalFragment,
     AriaConfig, ActivityTracker,
-    POSITION_DIMS, SIGNAL_DIMS,
+    POSITION_DIMS, SIGNAL_DIMS, STATE_DIMS,
 };
 use aria_core::traits::ComputeBackend;
 use aria_core::error::AriaResult;
@@ -609,7 +609,122 @@ impl Substrate {
         // SELF-MODIFICATION: ARIA consciously decides to change herself (Session 16)
         self.maybe_self_modify(current_tick);
 
+        // === LAW OF ASSOCIATION (Hebb's Law) ===
+        // "Fire together, wire together" implemented as spatial attraction.
+        // Active cells move towards their shared center of gravity.
+        if current_tick % 5 == 0 {
+             self.apply_hebbian_physics();
+        }
+
+        // === LAW OF COMPRESSION (Predictive Physics) ===
+        // "Surprise costs energy."
+        // Cells bet on their future state.
+        self.apply_predictive_physics();
+
         emergent
+    }
+
+    /// Apply Predictive Physics (Law of Compression)
+    ///
+    /// 1. Compare actual state vs predicted state from last tick.
+    /// 2. Calculate error (surprise).
+    /// 3. Reward low error (prediction) / Punish high error (surprise).
+    /// 4. Update predicted_state for next tick.
+    fn apply_predictive_physics(&mut self) {
+        let prediction_reward = 0.001; // Small incentive to predict
+        let surprise_cost = 0.005;     // Cost of being wrong
+
+        for state in &mut self.states {
+            if state.is_dead() || state.is_sleeping() {
+                continue;
+            }
+
+            // 1. Calculate prediction error (Euclidean distance)
+            let mut error_sq = 0.0f32;
+            for i in 0..STATE_DIMS {
+                let diff = state.state[i] - state.predicted_state[i];
+                error_sq += diff * diff;
+            }
+            let error = error_sq.sqrt();
+            state.prediction_error = error;
+
+            // 2. Apply Consequences
+            if error < 0.1 {
+                // Good prediction! (Low entropy)
+                state.energy = (state.energy + prediction_reward).min(self.config.metabolism.energy_cap);
+            } else {
+                // Surprise! (High entropy cost)
+                state.energy -= surprise_cost * error.min(1.0);
+            }
+
+            // 3. Make new prediction for NEXT tick
+            // TODO: In Phase 7, this will be DNA-driven (neural network prediction)
+            // For now (Law of Compression v1), we use NAIVE inertia:
+            // "I predict I will stay the same."
+            // This rewards stability (compression) and punishes chaos.
+            state.predicted_state = state.state;
+        }
+    }
+
+    /// Apply Hebbian Physics (Law of Association)
+    ///
+    /// "Cells that fire together, move together."
+    ///
+    /// This calculates the "Center of Thought" - the weighted spatial center
+    /// of all currently active cells. Active cells are physically pulled
+    /// towards this center, creating semantic clusters over time.
+    fn apply_hebbian_physics(&mut self) {
+        let mut centroid = [0.0f32; POSITION_DIMS];
+        let mut total_activity = 0.0f32;
+        let mut active_indices = Vec::with_capacity(100);
+
+        // 1. Calculate Activity Centroid
+        for (i, state) in self.states.iter().enumerate() {
+            if state.is_dead() || state.is_sleeping() {
+                continue;
+            }
+
+            // Use energy * activity_level as the "mass" of the thought
+            let activity = state.activity_level * state.energy;
+
+            if activity > 0.1 {
+                for dim in 0..POSITION_DIMS {
+                    centroid[dim] += state.position[dim] * activity;
+                }
+                total_activity += activity;
+                active_indices.push((i, activity));
+            }
+        }
+
+        // If no significant activity, no thought gravity
+        if total_activity < 1.0 {
+            return;
+        }
+
+        // Normalize centroid
+        for dim in 0..POSITION_DIMS {
+            centroid[dim] /= total_activity;
+        }
+
+        // 2. Apply Attraction Force
+        // Get plasticity rate (learning rate) from adaptive params
+        let plasticity = {
+            self.adaptive_params.read().learning_rate * 0.01 // Gentle force
+        };
+
+        for (idx, activity) in active_indices {
+            let state = &mut self.states[idx];
+
+            // Move towards centroid
+            for dim in 0..POSITION_DIMS {
+                let dist = centroid[dim] - state.position[dim];
+                // Force proportional to distance AND activity AND plasticity
+                let move_amount = dist * activity * plasticity;
+
+                // Apply movement (clamped to world bounds)
+                state.position[dim] = (state.position[dim] + move_amount).clamp(-10.0, 10.0);
+            }
+        }
     }
 
     /// Generate internal signals for recurrent processing (Gemini multi-pass)

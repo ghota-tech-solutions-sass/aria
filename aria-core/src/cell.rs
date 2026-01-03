@@ -79,6 +79,12 @@ pub struct CellState {
     /// 0.0 = fully mutable, 1.0 = structurally locked
     pub hysteresis: f32,
 
+    /// Predicted state for next tick (Law of Compression)
+    pub predicted_state: [f32; STATE_DIMS],
+
+    /// Prediction error from last tick (Surprise)
+    pub prediction_error: f32,
+
     /// Reserved for alignment and future use (Total struct size = 256 bytes)
     _reserved: [f32; 10],
 }
@@ -104,6 +110,8 @@ impl CellState {
             flags: 0,
             cluster_id: 0,
             hysteresis: 0.0,
+            predicted_state: [0.0; STATE_DIMS],
+            prediction_error: 0.0,
             _reserved: [0.0; 10],
         }
     }
