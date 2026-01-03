@@ -8,8 +8,9 @@ Runs ARIA with different parameter combinations and measures:
 - Time to extinction (should be > 5 minutes without food)
 
 Usage:
-    python scripts/tune_economy.py         # Quick test (4 configs, ~8 min)
-    python scripts/tune_economy.py --full  # Full grid search (~1 hour)
+    python scripts/tune_economy.py              # Quick test WITHOUT trainer
+    python scripts/tune_economy.py --trainer    # Quick test WITH trainer
+    python scripts/tune_economy.py --full       # Full grid search
 
 The script will output the best configuration found.
 """
@@ -19,12 +20,85 @@ import json
 import time
 import requests
 import sys
+import threading
+import random
 from dataclasses import dataclass
 from typing import Optional
 import os
 
+# Try to import websocket (optional, for trainer mode)
+try:
+    import websocket
+    HAS_WEBSOCKET = True
+except ImportError:
+    HAS_WEBSOCKET = False
+
 # ARIA server URL
 ARIA_URL = "http://localhost:8765"
+ARIA_WS = "ws://localhost:8765/aria"
+
+# Training vocabulary (same as Rust trainer)
+TRAINING_WORDS = [
+    "bonjour", "salut", "oui", "non", "merci",
+    "moka", "chat", "bien", "content", "là",
+    "eau", "soleil", "jouer", "manger", "dormir",
+    "joli chat", "petit moka", "bon matin", "bonne nuit",
+]
+
+
+class SimpleTrainer:
+    """Sends periodic training signals via WebSocket"""
+
+    def __init__(self, interval: float = 2.0):
+        self.interval = interval
+        self.running = False
+        self.thread = None
+        self.ws = None
+        self.messages_sent = 0
+
+    def start(self):
+        """Start the trainer in a background thread"""
+        if not HAS_WEBSOCKET:
+            print("  WARNING: websocket-client not installed, trainer disabled")
+            print("  Install with: pip install websocket-client")
+            return
+
+        self.running = True
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        """Stop the trainer"""
+        self.running = False
+        if self.ws:
+            try:
+                self.ws.close()
+            except:
+                pass
+        if self.thread:
+            self.thread.join(timeout=2)
+
+    def _run(self):
+        """Background thread that sends training signals"""
+        # Wait a bit for ARIA to be ready
+        time.sleep(3)
+
+        try:
+            self.ws = websocket.create_connection(ARIA_WS, timeout=5)
+        except Exception as e:
+            print(f"  Trainer: Failed to connect: {e}")
+            return
+
+        while self.running:
+            try:
+                word = random.choice(TRAINING_WORDS)
+                self.ws.send(word)
+                self.messages_sent += 1
+                time.sleep(self.interval)
+            except Exception as e:
+                if self.running:
+                    print(f"  Trainer error: {e}")
+                break
 
 @dataclass
 class EconomyParams:
@@ -108,7 +182,7 @@ def wait_for_aria(timeout: int = 30) -> bool:
     return False
 
 
-def run_trial(params: EconomyParams, duration: int = 120, cells: int = 10000) -> TrialResult:
+def run_trial(params: EconomyParams, duration: int = 120, cells: int = 10000, use_trainer: bool = False) -> TrialResult:
     """
     Run ARIA with given parameters and measure stability
 
@@ -116,9 +190,11 @@ def run_trial(params: EconomyParams, duration: int = 120, cells: int = 10000) ->
         params: Economy parameters to test
         duration: How long to run (seconds)
         cells: Initial cell count
+        use_trainer: Whether to send training signals
     """
+    trainer_str = " [WITH TRAINER]" if use_trainer else ""
     print(f"\n{'='*60}")
-    print(f"Testing: {params.name}")
+    print(f"Testing: {params.name}{trainer_str}")
     print(f"  cost_rest={params.cost_rest}, signal_base={params.signal_energy_base}")
     print(f"  cost_signal={params.cost_signal}, child_energy={params.child_energy}")
     print(f"{'='*60}")
@@ -138,6 +214,8 @@ def run_trial(params: EconomyParams, duration: int = 120, cells: int = 10000) ->
         cwd="/home/mickael/Projects/ia/aria"
     )
 
+    trainer = None
+
     try:
         # Wait for startup
         if not wait_for_aria(timeout=60):
@@ -155,6 +233,12 @@ def run_trial(params: EconomyParams, duration: int = 120, cells: int = 10000) ->
             )
 
         print("  ARIA started, monitoring...")
+
+        # Start trainer if requested
+        if use_trainer:
+            trainer = SimpleTrainer(interval=2.0)
+            trainer.start()
+            print("  Trainer started (sending signals every 2s)")
 
         # Monitor for duration
         start_time = time.time()
@@ -209,12 +293,18 @@ def run_trial(params: EconomyParams, duration: int = 120, cells: int = 10000) ->
             initial_cells=cells
         )
 
-        print(f"  Result: pop={min_pop}-{max_pop}, energy={avg_energy:.3f}, resurrections={resurrections}")
+        trainer_msg = ""
+        if trainer:
+            trainer_msg = f", signals={trainer.messages_sent}"
+        print(f"  Result: pop={min_pop}-{max_pop}, energy={avg_energy:.3f}, resurrections={resurrections}{trainer_msg}")
         print(f"  Score: {result.score():.1f} (stable={stable})")
 
         return result
 
     finally:
+        # Stop trainer first
+        if trainer:
+            trainer.stop()
         proc.terminate()
         proc.wait(timeout=5)
         time.sleep(2)  # Let port be released
@@ -305,7 +395,7 @@ def print_best(results: list):
         print(f"   Stable: {r.stable}")
 
 
-def quick_test():
+def quick_test(use_trainer: bool = False):
     """Quick test with a few promising configurations"""
 
     configs = [
@@ -354,7 +444,7 @@ def quick_test():
     results = []
     for i, params in enumerate(configs):
         print(f"\n[{i+1}/{len(configs)}] Testing configuration...")
-        result = run_trial(params, duration=120, cells=10000)
+        result = run_trial(params, duration=120, cells=10000, use_trainer=use_trainer)
         results.append(result)
 
     save_results(results)
@@ -362,10 +452,19 @@ def quick_test():
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--full":
+    use_trainer = "--trainer" in sys.argv
+    use_full = "--full" in sys.argv
+
+    if use_trainer and not HAS_WEBSOCKET:
+        print("ERROR: --trainer requires websocket-client")
+        print("Install with: pip install websocket-client")
+        sys.exit(1)
+
+    if use_full:
         print("Running full grid search (this will take a while)...")
         results = grid_search()
     else:
-        print("Running quick test with 4 configurations...")
-        print("Use --full for complete grid search")
-        quick_test()
+        mode = "WITH TRAINER" if use_trainer else "without trainer"
+        print(f"Running quick test with 5 configurations ({mode})...")
+        print("Options: --trainer (enable training), --full (grid search)")
+        quick_test(use_trainer=use_trainer)
