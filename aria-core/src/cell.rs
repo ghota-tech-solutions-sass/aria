@@ -102,9 +102,9 @@ impl CellState {
             // Position in semantic space: -10..10 (matches spatial_view grid)
             position: std::array::from_fn(|_| rng.gen::<f32>() * 20.0 - 10.0),
             state: [0.0; STATE_DIMS],
-            // Randomize energy: 0.5 to 1.5 (average 1.0)
-            // This staggers deaths over ~1000 ticks instead of all at once
-            energy: 0.5 + rng.gen::<f32>(),
+            // Randomize energy: 0.3 to 0.6 (average 0.45)
+            // BELOW reproduction_threshold (0.70) - cells must EARN energy to reproduce
+            energy: 0.3 + rng.gen::<f32>() * 0.3,
             tension: 0.0,
             activity_level: 1.0, // Start awake
             flags: 0,
