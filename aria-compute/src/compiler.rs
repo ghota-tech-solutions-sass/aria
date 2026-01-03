@@ -156,9 +156,22 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     cell_energy.energy -= config.cost_rest;
+
+    // DNA GENES for Laws
+    let gene_decay = dna_pool[dna_base+1u].z;       // thresholds[6] (Tension Decay)
     let reflexivity_gain = dna_pool[dna_base+1u].w; // thresholds[7]
     let attention_focus = dna_pool[dna_base+3u].z;  // reactions[6]
     let semantic_filter = dna_pool[dna_base+3u].w;  // reactions[7]
+
+    // LAW: Tension Decay (Inertia)
+    // Map [0,1] -> [0.5, 0.95]
+    let tension_decay = 0.5 + gene_decay * 0.45;
+
+    // Apply decay if activity is low (prevent infinite tension)
+    if (abs(cell_energy.activity_level) < 0.1) {
+        cell_energy.tension = cell_energy.tension * tension_decay;
+        cell_energy.tension = max(0.0, cell_energy.tension - 0.01);
+    }
 
     // [DYNAMIC_LOGIC]
     if cell_energy.activity_level < gene_sleep {
@@ -717,9 +730,18 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                     if (cell_meta.flags & FLAG_SLEEPING) == 0u {
                         let dna_idx = dna_indices[cell_idx];
                         let dna_base = dna_idx * 5u;
-                        let reflexivity_gain = dna_pool[dna_base+1u].w;
+                        // DNA GENES
+                        let gene_efficiency = dna_pool[dna_base+1u].x; // thresholds[4]
+                        let gene_resonance = dna_pool[dna_base+1u].y;  // thresholds[5]
+                        let gene_decay = dna_pool[dna_base+1u].z;      // thresholds[6]
+                        let reflexivity_gain = dna_pool[dna_base+1u].w; // thresholds[7]
+
                         let attention_focus = dna_pool[dna_base+3u].z;
                         let semantic_filter = dna_pool[dna_base+3u].w;
+
+                        // Calculate Traits from Genes (matching Rust logic)
+                        let resonance_threshold = 0.05 + gene_resonance * 0.35; // [0.05, 0.4]
+                        let efficiency = gene_efficiency; // [0.0, 1.0]
 
                         // [DYNAMIC_LOGIC]
                         let dynamic_intensity = intensity * attention_boost;
@@ -729,9 +751,20 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                         for (var j = 0u; j < 4u; j++) { state0[j] += signal.content[j] * dynamic_intensity; }
                         for (var j = 0u; j < 4u; j++) { state1[j] += signal.content[j+4u] * dynamic_intensity; }
                         states[cell_idx * 8u] = state0; states[cell_idx * 8u + 1u] = state1;
+
                         let resonance = calculate_resonance(signal.content, state0, state1);
-                        if resonance > 0.1 {
-                            let energy_gain = config.signal_energy_base * dynamic_intensity * ((resonance - 0.1) / 0.9) * (1.0 + resonance * config.signal_resonance_factor);
+
+                        // LAW: Picky Eaters vs Trash Eaters
+                        if resonance > resonance_threshold {
+                            // Scale understanding from [Threshold, 1.0] -> [0.0, 1.0]
+                            let understanding = (resonance - resonance_threshold) / (1.0 - resonance_threshold);
+
+                            let energy_gain = config.signal_energy_base
+                                * dynamic_intensity
+                                * understanding
+                                * efficiency
+                                * (1.0 + resonance * config.signal_resonance_factor);
+
                             cell_energy.energy = min(cell_energy.energy + energy_gain, config.energy_cap);
                         }
                         cell_energy.activity_level += dynamic_intensity;

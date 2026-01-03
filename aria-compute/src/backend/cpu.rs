@@ -135,18 +135,26 @@ impl CpuBackend {
 
             // === LA VRAIE FAIM: ENERGY FROM RESONANCE ===
             // Cells that resonate with the signal get fed!
-            // resonance < 0.1 = pure noise = no food
-            // resonance > 0.1 = some understanding = food scaled by resonance
-            if resonance > 0.1 {
-                // Scale energy by how well you understand (0.1->0 to 1.0->1)
-                let understanding = (resonance - 0.1) / 0.9;
+            // BUT: Threshold depends on DNA (Picky vs Trash-eater)
+            let resonance_threshold = dna.resonance_threshold();
+
+            if resonance > resonance_threshold {
+                // Scale energy by how close to perfection (understanding)
+                // Range: [0.0, 1.0] where 1.0 is perfect understanding above threshold
+                let understanding = (resonance - resonance_threshold) / (1.0 - resonance_threshold);
+
+                // Efficiency: DNA determines how much energy is extracted vs wasted
+                let efficiency = dna.energy_efficiency(); // 0.0-1.0
+
                 let energy_gain = config.metabolism.signal_energy_base
                     * signal.intensity
                     * understanding
+                    * efficiency
                     * (1.0 + resonance * config.metabolism.signal_resonance_factor);
+
                 state.energy += energy_gain;
             }
-            // resonance <= 0.1: NO ENERGY - pure noise
+            // resonance <= threshold: NO ENERGY - treated as noise
         }
 
         // Normalize state
@@ -167,7 +175,7 @@ impl CpuBackend {
         // === BUG FIX: Decay tension when activity is low (like GPU shader) ===
         // This allows cells to reach the sleep threshold
         if cell.activity.last_energy_delta.abs() < sleep_config.energy_delta_threshold {
-            state.tension *= 0.8;  // Match GPU: faster decay
+            state.tension *= dna.tension_decay();  // DNA-driven inertia
             state.tension -= 0.01;
             if state.tension < 0.0 {
                 state.tension = 0.0;

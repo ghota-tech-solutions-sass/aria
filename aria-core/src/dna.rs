@@ -58,9 +58,9 @@ pub struct DNA {
     /// - [1]: Division threshold (energy needed to reproduce)
     /// - [2]: Connection threshold (when to form new connections)
     /// - [3]: Signal threshold (when to emit signals)
-    /// - [4]: Movement threshold (when to move in semantic space)
-    /// - [5]: Sleep threshold (when to enter dormant state)
-    /// - [6]: Wake threshold (stimulus needed to wake up)
+    /// - [4]: Energy Efficiency (Low = wasteful, High = efficient)
+    /// - [5]: Resonance Threshold (Min similarity to accept signal/food)
+    /// - [6]: Tension Decay (Inertia: Low = calm, High = jittery)
     /// - [7]: Reflexivity gain (how sensitive the cell is to ARIA's own thoughts)
     pub thresholds: [f32; DNA_DIMS],
 
@@ -238,16 +238,29 @@ impl DNA {
         self.thresholds[1]
     }
 
-    /// Get the sleep threshold (below this activity level, cell sleeps)
+    /// Get energy efficiency (0.0=wasteful, 1.0=efficient)
+    /// Higher efficiency means getting more energy from signals, but usually comes with costs.
     #[inline]
-    pub fn sleep_threshold(&self) -> f32 {
-        self.thresholds[5] * 0.01 // Very small changes trigger sleep
+    pub fn energy_efficiency(&self) -> f32 {
+        self.thresholds[4]
     }
 
-    /// Get the wake threshold (stimulus needed to wake)
+    /// Get resonance threshold (what counts as "food" vs "noise")
+    /// Low = eats everything (junk food), High = picky eater (gourmet)
     #[inline]
-    pub fn wake_threshold(&self) -> f32 {
-        self.thresholds[6] * 0.1
+    pub fn resonance_threshold(&self) -> f32 {
+        // Map [0,1] gene to typical range [0.05, 0.4]
+        // Default was 0.1
+        0.05 + self.thresholds[5] * 0.35
+    }
+
+    /// Get tension decay rate (Inertia)
+    /// High = decays fast (calm), Low = decays slow (anxious/jittery)
+    #[inline]
+    pub fn tension_decay(&self) -> f32 {
+        // Map [0,1] gene to range [0.5, 0.95]
+        // Default was 0.8
+        0.5 + self.thresholds[6] * 0.45
     }
 
     /// Get the reflexivity gain (how much self-thoughts influence this cell)

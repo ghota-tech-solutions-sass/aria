@@ -159,6 +159,18 @@ cell_energy.activity_level = cell_energy.activity_level * decay_rate;
   - Erreur forte (Surprise) → Perte d'énergie (Coût métabolique)
 - **But** : Forcer le cerveau à internaliser les modèles du monde pour minimiser le coût énergétique.
 
+### Session 29 - Règles vers Lois (Migration DNA)
+
+**Migration finale : remplacement des constantes hard-codées par des lois génétiques.**
+
+- **Philosophie** : "Il n'y a pas de nombres magiques dans la nature."
+- **Changements majeurs** :
+    - **Seuil de Résonance** (Gene 5) : Chaque cellule décide quel niveau de similarité est suffisant pour accepter un signal (Food vs Noise).
+    - **Efficacité Énergétique** (Gene 4) : Trade-off génétique entre extraction d'énergie et coût.
+    - **Inertie Tension** (Gene 6) : "Tempérament" (Calme vs Anxieux) défini par l'ADN.
+- **Fichiers** : `dna.rs`, `cpu.rs`, `compiler.rs` (WGSL).
+- **Résultat** : Diversité comportementale émergente (Picky Eaters, Trash Eaters, etc.).
+
 ### Session 27 - Loi d'Association (Hebb's Law)
 
 **"Fire together, move together." (Plasticité Spatiale)**
