@@ -136,12 +136,18 @@ impl Substrate {
             let above_threshold = alive_energies.iter().filter(|&&e| e > reproduction_threshold).count();
 
             // Find cells ready to divide (energy > threshold)
-            let ready_to_divide: Vec<(usize, u32, u32)> = self.cells.iter()
+            // SORT BY GENERATION DESC: Higher generations reproduce first!
+            // This ensures lineage progression - Gen1 must reproduce to create Gen2.
+            // Without this, Gen0 (lower indices) monopolizes all 500 reproduction slots.
+            let mut ready_to_divide: Vec<(usize, u32, u32)> = self.cells.iter()
                 .zip(self.states.iter())
                 .enumerate()
                 .filter(|(_, (_, s))| !s.is_dead() && s.energy > reproduction_threshold)
                 .map(|(i, (c, _))| (i, c.dna_index, c.generation))
                 .collect();
+
+            // Sort by generation descending - evolved lineages get priority
+            ready_to_divide.sort_by(|a, b| b.2.cmp(&a.2));
 
             // Limit births per tick to avoid explosion (still biological pacing)
             // But allow significantly more than before if energy is abundant.
@@ -153,13 +159,20 @@ impl Substrate {
                 tracing::info!("🧬 LINEAGE: 0 cells ready (threshold={:.2}, max_energy={:.2}, avg={:.2}, above_thresh={}, pop={})",
                     reproduction_threshold, max_energy, avg_energy, above_threshold, alive_count);
             } else if max_births > 0 {
-                // DEBUG: Count generations of cells ready to divide
+                // DEBUG: Count generations of cells ready to divide (AFTER sorting by gen DESC)
                 let gen0_ready = ready_to_divide.iter().filter(|(_, _, g)| *g == 0).count();
                 let gen1_ready = ready_to_divide.iter().filter(|(_, _, g)| *g == 1).count();
                 let gen2plus_ready = ready_to_divide.iter().filter(|(_, _, g)| *g >= 2).count();
 
-                tracing::info!("🧬 EXPANSION: {} cells ready (Gen0:{}, Gen1:{}, Gen2+:{}), {} dividing (pop: {})",
-                    ready_to_divide.len(), gen0_ready, gen1_ready, gen2plus_ready, max_births, alive_count);
+                // Count which generations will ACTUALLY reproduce (first max_births after sort)
+                let reproducing: Vec<_> = ready_to_divide.iter().take(max_births).collect();
+                let gen0_repr = reproducing.iter().filter(|(_, _, g)| *g == 0).count();
+                let gen1_repr = reproducing.iter().filter(|(_, _, g)| *g == 1).count();
+                let gen2plus_repr = reproducing.iter().filter(|(_, _, g)| *g >= 2).count();
+
+                tracing::info!("🧬 EXPANSION: {} ready (Gen0:{}, Gen1:{}, Gen2+:{}), {} reproducing (Gen0:{}, Gen1:{}, Gen2+:{}) pop:{}",
+                    ready_to_divide.len(), gen0_ready, gen1_ready, gen2plus_ready,
+                    max_births, gen0_repr, gen1_repr, gen2plus_repr, alive_count);
 
                 for (parent_idx, parent_dna_idx, parent_generation) in ready_to_divide.into_iter().take(max_births) {
                     // Parent pays the cost
