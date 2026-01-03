@@ -76,6 +76,7 @@ fn thermal_char(value: f32) -> char {
 
 /// A message in the conversation with timestamp and context
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct ChatMessage {
     pub timestamp: String,
     pub is_user: bool,
@@ -105,6 +106,7 @@ impl ChatMessage {
 
 /// Stats from /stats endpoint
 #[derive(Default, Clone)]
+#[allow(dead_code)]
 pub struct BrainStats {
     pub tick: u64,
     pub alive_cells: usize,
@@ -120,6 +122,7 @@ pub struct BrainStats {
 
 /// Substrate view from /substrate endpoint (enhanced)
 #[derive(Default, Clone)]
+#[allow(dead_code)]
 pub struct SubstrateView {
     pub grid_size: usize,
     pub activity_grid: Vec<f32>,
