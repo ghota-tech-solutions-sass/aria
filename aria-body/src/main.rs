@@ -489,8 +489,18 @@ async fn run_visual_mode() -> Result<(), Box<dyn std::error::Error>> {
             visualizer.update(stats);
         }
 
-        // Handle substrate updates (heatmap)
+        // Handle substrate updates (heatmap + adaptive trainer)
         while let Ok(view) = substrate_rx.try_recv() {
+            // Update trainer with substrate metrics for adaptive behavior
+            trainer.update_metrics(
+                view.alive_cells,
+                view.awake_cells,
+                view.avg_energy,
+                view.avg_tension,
+                view.max_generation,
+                view.avg_generation,
+                view.system_health,
+            );
             visualizer.update_substrate(view);
         }
 

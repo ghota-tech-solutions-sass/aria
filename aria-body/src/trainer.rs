@@ -1,109 +1,140 @@
-//! Auto-Training Module for ARIA
+//! Adaptive Auto-Training Module for ARIA
 //!
-//! Automatically teaches ARIA vocabulary, associations, and emotional responses.
+//! Intelligent trainer that adapts to ARIA's state:
+//! - Interval based on population health
+//! - Phase based on generation maturity
+//! - Intensity based on energy levels
+//!
 //! Toggle with 'a' key in visual mode.
 
 use rand::seq::SliceRandom;
 use rand::Rng;
 use std::time::{Duration, Instant};
 
-/// Training phases - progression from basic to complex
+/// Training intensity levels
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum TrainingPhase {
-    /// Basic words: objects, animals, emotions
-    Vocabulary,
-    /// Word pairs: "chat moka", "joli chat"
-    Associations,
-    /// Predictable sequences: "un" → "deux" → "trois" (trains Prediction Law)
-    Sequence,
-    /// Simple interactions: greetings, questions
-    Conversation,
-    /// Emotional responses: "Bravo!", "Non", varying tones
-    Emotional,
+pub enum Intensity {
+    /// Light touch - cells are thriving
+    Gentle,
+    /// Normal stimulation
+    Normal,
+    /// Aggressive - cells are struggling
+    Urgent,
+    /// Critical - population crashing
+    Critical,
 }
 
-impl TrainingPhase {
+impl Intensity {
+    pub fn symbol(&self) -> &'static str {
+        match self {
+            Intensity::Gentle => "◦",
+            Intensity::Normal => "●",
+            Intensity::Urgent => "◉",
+            Intensity::Critical => "⚠",
+        }
+    }
+}
+
+/// Training mode based on ARIA's maturity
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TrainingMode {
+    /// Newborn: simple, frequent signals to establish energy flow
+    Nurture,
+    /// Growing: vocabulary and associations
+    Teach,
+    /// Mature: sequences and predictions
+    Challenge,
+    /// Elite: complex conversations
+    Converse,
+}
+
+impl TrainingMode {
     pub fn name(&self) -> &'static str {
         match self {
-            TrainingPhase::Vocabulary => "Vocabulary",
-            TrainingPhase::Associations => "Associations",
-            TrainingPhase::Sequence => "Sequence",
-            TrainingPhase::Conversation => "Conversation",
-            TrainingPhase::Emotional => "Emotional",
+            TrainingMode::Nurture => "Nurture",
+            TrainingMode::Teach => "Teach",
+            TrainingMode::Challenge => "Challenge",
+            TrainingMode::Converse => "Converse",
         }
     }
 
-    pub fn next(&self) -> Self {
-        match self {
-            TrainingPhase::Vocabulary => TrainingPhase::Associations,
-            TrainingPhase::Associations => TrainingPhase::Sequence,
-            TrainingPhase::Sequence => TrainingPhase::Conversation,
-            TrainingPhase::Conversation => TrainingPhase::Emotional,
-            TrainingPhase::Emotional => TrainingPhase::Vocabulary,
+    /// Select mode based on max generation
+    pub fn from_generation(max_gen: u32, avg_gen: f32) -> Self {
+        if max_gen < 3 || avg_gen < 1.0 {
+            TrainingMode::Nurture
+        } else if max_gen < 8 || avg_gen < 3.0 {
+            TrainingMode::Teach
+        } else if max_gen < 15 || avg_gen < 6.0 {
+            TrainingMode::Challenge
+        } else {
+            TrainingMode::Converse
         }
     }
 }
 
-/// Auto-trainer state
+/// Substrate metrics for adaptive decisions (only fields actually used)
+#[derive(Clone, Debug, Default)]
+struct SubstrateMetrics {
+    avg_energy: f32,
+    system_health: f32,
+}
+
+/// Adaptive auto-trainer
 pub struct Trainer {
     /// Is auto-training enabled?
     pub enabled: bool,
 
-    /// Current training phase
-    pub phase: TrainingPhase,
+    /// Current training mode (auto-selected)
+    pub mode: TrainingMode,
+
+    /// Current intensity (auto-selected)
+    pub intensity: Intensity,
+
+    /// Last substrate metrics
+    metrics: SubstrateMetrics,
+
+    /// Previous population (to detect growth/decline)
+    prev_population: usize,
+
+    /// Population trend: positive = growing, negative = declining
+    population_trend: i32,
 
     /// Last time we sent a stimulus
     last_stimulus: Instant,
 
-    /// Interval between stimuli (adapts based on ARIA's responses)
-    pub interval: Duration,
+    /// Dynamic interval (adapts to health)
+    interval: Duration,
 
-    /// Last stimulus sent (for feedback)
+    /// Last stimulus sent
     last_sent: Option<String>,
 
-    /// Count of stimuli sent this phase
-    stimuli_count: usize,
-
-    /// Count of responses received this phase
-    responses_count: usize,
-
-    /// Stimuli per phase before advancing
-    stimuli_per_phase: usize,
-
-    /// Basic vocabulary words
-    vocabulary: Vec<&'static str>,
-
-    /// Word pairs for associations
-    associations: Vec<(&'static str, &'static str)>,
-
-    /// Conversation starters
-    conversations: Vec<&'static str>,
-
-    /// Emotional expressions
-    emotional: Vec<&'static str>,
-
-    /// Predictable sequences for Prediction Law training
-    /// Each sequence is a list of words that should be sent in order
-    sequences: Vec<Vec<&'static str>>,
-
-    /// Current position in the active sequence
+    /// Sequence state
     sequence_position: usize,
-
-    /// Which sequence we're currently playing
     current_sequence: usize,
-
-    /// Positive feedback variants
-    positive_feedback: Vec<&'static str>,
-
-    /// Negative feedback variants
-    negative_feedback: Vec<&'static str>,
-
-    /// Should we send feedback next?
-    pending_feedback: Option<bool>,
 
     /// Stats
     pub total_sent: usize,
     pub total_responses: usize,
+
+    /// Auto-start threshold (start training if health drops below)
+    auto_start_threshold: f32,
+
+    // === Vocabulary pools ===
+
+    /// Simple words for nurturing
+    simple_words: Vec<&'static str>,
+
+    /// Word pairs for teaching
+    word_pairs: Vec<(&'static str, &'static str)>,
+
+    /// Sequences for challenging
+    sequences: Vec<Vec<&'static str>>,
+
+    /// Conversation phrases
+    conversations: Vec<&'static str>,
+
+    /// Emotional expressions
+    emotions: Vec<&'static str>,
 }
 
 impl Default for Trainer {
@@ -116,112 +147,130 @@ impl Trainer {
     pub fn new() -> Self {
         Self {
             enabled: false,
-            phase: TrainingPhase::Vocabulary,
+            mode: TrainingMode::Nurture,
+            intensity: Intensity::Normal,
+            metrics: SubstrateMetrics::default(),
+            prev_population: 0,
+            population_trend: 0,
             last_stimulus: Instant::now(),
-            interval: Duration::from_secs(5), // Slower: 5 seconds between stimuli
+            interval: Duration::from_secs(3),
             last_sent: None,
-            stimuli_count: 0,
-            responses_count: 0,
-            stimuli_per_phase: 20,
-
-            // French vocabulary - objects, animals, emotions, actions
-            vocabulary: vec![
-                // Animals (Mickael's cats!)
-                "moka", "chat", "obrigada",
-                // Basic words
-                "bonjour", "salut", "merci", "oui", "non",
-                // Emotions
-                "content", "triste", "curieux", "fatigué",
-                // Objects
-                "eau", "soleil", "lune", "maison",
-                // Actions
-                "jouer", "dormir", "manger", "parler",
-                // Adjectives
-                "joli", "grand", "petit", "bon",
-            ],
-
-            associations: vec![
-                ("chat", "moka"),
-                ("joli", "chat"),
-                ("bon", "matin"),
-                ("bonne", "nuit"),
-                ("petit", "chat"),
-                ("chat", "dort"),
-                ("chat", "joue"),
-                ("soleil", "chaud"),
-                ("lune", "nuit"),
-                ("eau", "fraiche"),
-            ],
-
-            conversations: vec![
-                "bonjour",
-                "comment vas-tu?",
-                "tu es là?",
-                "salut ARIA",
-                "bonne nuit",
-                "qu'est-ce que tu fais?",
-                "tu me reconnais?",
-                "je suis content",
-                "à bientôt",
-            ],
-
-            emotional: vec![
-                "Bravo!",
-                "Super!",
-                "Bien joué!",
-                "Non",
-                "Pas ça",
-                "Encore",
-                "Continue",
-                "C'est bien",
-                "Oui!",
-                "Parfait!",
-            ],
-
-            // Predictable sequences for Prediction Law training
-            // Cells that learn to predict the next word survive
-            sequences: vec![
-                // Numbers (easiest to predict)
-                vec!["un", "deux", "trois"],
-                vec!["un", "deux", "trois", "quatre", "cinq"],
-                // Alphabet
-                vec!["A", "B", "C"],
-                vec!["A", "B", "C", "D", "E"],
-                // Time of day
-                vec!["matin", "midi", "soir"],
-                vec!["matin", "midi", "soir", "nuit"],
-                // Emotions progression
-                vec!["triste", "content", "joyeux"],
-                // Size progression
-                vec!["petit", "moyen", "grand"],
-                // Actions du chat
-                vec!["dort", "réveille", "joue", "mange", "dort"],
-                // Salutations
-                vec!["bonjour", "ça va?", "bien", "au revoir"],
-                // Days (partial)
-                vec!["lundi", "mardi", "mercredi"],
-            ],
             sequence_position: 0,
             current_sequence: 0,
-
-            positive_feedback: vec![
-                "Bravo!",
-                "Oui!",
-                "Super!",
-                "Bien!",
-                "C'est ça!",
-                "Parfait!",
-            ],
-
-            negative_feedback: vec![
-                "Non",
-                "Pas ça",
-                "Essaie encore",
-            ],
-
-            pending_feedback: None,
             total_sent: 0,
             total_responses: 0,
+            auto_start_threshold: 0.3,
+
+            // Simple, high-energy words for nurturing
+            simple_words: vec![
+                "bonjour", "salut", "oui", "non", "merci",
+                "moka", "chat", "bien", "content", "là",
+                "eau", "soleil", "jouer", "manger", "dormir",
+            ],
+
+            // Word pairs for teaching associations
+            word_pairs: vec![
+                ("chat", "moka"), ("joli", "chat"), ("petit", "moka"),
+                ("bon", "matin"), ("bonne", "nuit"), ("chat", "dort"),
+                ("soleil", "chaud"), ("eau", "fraiche"), ("chat", "joue"),
+                ("content", "moka"), ("bonjour", "ARIA"), ("merci", "beaucoup"),
+            ],
+
+            // Predictable sequences for prediction law
+            sequences: vec![
+                vec!["un", "deux", "trois"],
+                vec!["un", "deux", "trois", "quatre", "cinq"],
+                vec!["A", "B", "C", "D"],
+                vec!["matin", "midi", "soir", "nuit"],
+                vec!["petit", "moyen", "grand"],
+                vec!["lundi", "mardi", "mercredi", "jeudi", "vendredi"],
+                vec!["dort", "réveille", "mange", "joue", "dort"],
+            ],
+
+            // Complex conversations
+            conversations: vec![
+                "Comment vas-tu?", "Tu es là?", "Qu'est-ce que tu fais?",
+                "Je suis content de te voir", "Tu me reconnais?",
+                "Raconte-moi quelque chose", "À quoi tu penses?",
+                "Tu as faim?", "On joue?", "Bonne nuit ARIA",
+            ],
+
+            // Emotional expressions
+            emotions: vec![
+                "Bravo!", "Super!", "Bien joué!", "Parfait!",
+                "Oui!", "C'est ça!", "Continue!", "Encore!",
+                "Non", "Pas ça", "Essaie encore",
+            ],
+        }
+    }
+
+    /// Update with latest substrate metrics
+    pub fn update_metrics(
+        &mut self,
+        alive_cells: usize,
+        _awake_cells: usize,
+        avg_energy: f32,
+        _avg_tension: f32,
+        max_generation: u32,
+        avg_generation: f32,
+        system_health: f32,
+    ) {
+        // Track population trend
+        if self.prev_population > 0 {
+            let diff = alive_cells as i32 - self.prev_population as i32;
+            // Smooth the trend
+            self.population_trend = (self.population_trend * 3 + diff.signum()) / 4;
+        }
+        self.prev_population = alive_cells;
+
+        self.metrics = SubstrateMetrics {
+            avg_energy,
+            system_health,
+        };
+
+        // Auto-select mode based on generation
+        self.mode = TrainingMode::from_generation(max_generation, avg_generation);
+
+        // Auto-select intensity based on health
+        self.intensity = self.calculate_intensity();
+
+        // Auto-adjust interval based on intensity
+        self.interval = self.calculate_interval();
+
+        // Auto-start if health is critical and not enabled
+        if !self.enabled && system_health < self.auto_start_threshold && alive_cells > 1000 {
+            self.enabled = true;
+            self.last_stimulus = Instant::now();
+        }
+    }
+
+    fn calculate_intensity(&self) -> Intensity {
+        let m = &self.metrics;
+
+        // Critical: population crashing or very low energy
+        if m.avg_energy < 0.2 || self.population_trend < -2 {
+            return Intensity::Critical;
+        }
+
+        // Urgent: struggling
+        if m.avg_energy < 0.35 || m.system_health < 0.4 {
+            return Intensity::Urgent;
+        }
+
+        // Gentle: thriving
+        if m.avg_energy > 0.6 && m.system_health > 0.7 && self.population_trend > 0 {
+            return Intensity::Gentle;
+        }
+
+        Intensity::Normal
+    }
+
+    fn calculate_interval(&self) -> Duration {
+        match self.intensity {
+            Intensity::Critical => Duration::from_millis(500),  // Very fast
+            Intensity::Urgent => Duration::from_secs(1),        // Fast
+            Intensity::Normal => Duration::from_secs(3),        // Normal
+            Intensity::Gentle => Duration::from_secs(6),        // Slow, let them rest
         }
     }
 
@@ -235,19 +284,7 @@ impl Trainer {
 
     /// Notify trainer that ARIA responded
     pub fn on_response(&mut self, _response: &str) {
-        self.responses_count += 1;
         self.total_responses += 1;
-
-        // Only give feedback sometimes (30% chance) to avoid spam loop
-        // Feedback triggers more responses which triggers more feedback...
-        if rand::thread_rng().gen_bool(0.3) && self.pending_feedback.is_none() {
-            self.pending_feedback = Some(true);
-        }
-
-        // Speed up slightly if ARIA is responsive (but not too fast)
-        if self.responses_count > 5 && self.interval > Duration::from_secs(4) {
-            self.interval = Duration::from_secs(4);
-        }
     }
 
     /// Get the next stimulus to send (if any)
@@ -257,44 +294,13 @@ impl Trainer {
         }
 
         let now = Instant::now();
-
-        // First, check if we need to send feedback (with longer delay to avoid spam)
-        if let Some(positive) = self.pending_feedback.take() {
-            if now.duration_since(self.last_stimulus) > Duration::from_millis(2000) {
-                self.last_stimulus = now;
-                let feedback = if positive {
-                    self.positive_feedback.choose(&mut rand::thread_rng())
-                } else {
-                    self.negative_feedback.choose(&mut rand::thread_rng())
-                };
-                return feedback.map(|s: &&str| s.to_string());
-            }
-        }
-
-        // Check if it's time for a new stimulus
         if now.duration_since(self.last_stimulus) < self.interval {
             return None;
         }
 
         self.last_stimulus = now;
-        self.stimuli_count += 1;
         self.total_sent += 1;
 
-        // Check if we should advance to next phase
-        if self.stimuli_count >= self.stimuli_per_phase {
-            self.phase = self.phase.next();
-            self.stimuli_count = 0;
-            self.responses_count = 0;
-            // Reset interval for new phase
-            self.interval = Duration::from_secs(5);
-            // Reset sequence state when entering Sequence phase
-            if self.phase == TrainingPhase::Sequence {
-                self.sequence_position = 0;
-                self.current_sequence = 0;
-            }
-        }
-
-        // Generate stimulus based on phase
         let stimulus = self.generate_stimulus();
         self.last_sent = Some(stimulus.clone());
         Some(stimulus)
@@ -303,27 +309,40 @@ impl Trainer {
     fn generate_stimulus(&mut self) -> String {
         let mut rng = rand::thread_rng();
 
-        match self.phase {
-            TrainingPhase::Vocabulary => {
-                // Single word
-                self.vocabulary
+        match self.mode {
+            TrainingMode::Nurture => {
+                // Simple, frequent words to establish energy flow
+                // Occasionally repeat for reinforcement
+                if rng.gen_bool(0.3) && self.last_sent.is_some() {
+                    // Repeat last word for reinforcement
+                    return self.last_sent.clone().unwrap();
+                }
+                self.simple_words
                     .choose(&mut rng)
-                    .map(|s: &&str| s.to_string())
+                    .map(|s| s.to_string())
                     .unwrap_or_else(|| "bonjour".to_string())
             }
 
-            TrainingPhase::Associations => {
-                // Word pair
-                if let Some((a, b)) = self.associations.choose(&mut rng) {
-                    format!("{} {}", a, b)
+            TrainingMode::Teach => {
+                // Mix of single words and pairs
+                if rng.gen_bool(0.6) {
+                    // Word pair
+                    if let Some((a, b)) = self.word_pairs.choose(&mut rng) {
+                        format!("{} {}", a, b)
+                    } else {
+                        "chat moka".to_string()
+                    }
                 } else {
-                    "chat moka".to_string()
+                    // Single word
+                    self.simple_words
+                        .choose(&mut rng)
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "moka".to_string())
                 }
             }
 
-            TrainingPhase::Sequence => {
-                // Predictable sequences for Prediction Law training
-                // Cells that predict correctly get energy bonus
+            TrainingMode::Challenge => {
+                // Sequences for prediction law training
                 if self.sequences.is_empty() {
                     return "un".to_string();
                 }
@@ -331,43 +350,27 @@ impl Trainer {
                 let seq = &self.sequences[self.current_sequence % self.sequences.len()];
                 let word = seq[self.sequence_position % seq.len()].to_string();
 
-                // Advance position
                 self.sequence_position += 1;
-
-                // If we finished this sequence, move to next one
                 if self.sequence_position >= seq.len() {
                     self.sequence_position = 0;
-                    self.current_sequence += 1;
-
-                    // Wrap around if we've done all sequences
-                    if self.current_sequence >= self.sequences.len() {
-                        self.current_sequence = 0;
-                    }
+                    self.current_sequence = (self.current_sequence + 1) % self.sequences.len();
                 }
 
                 word
             }
 
-            TrainingPhase::Conversation => {
-                // Full phrase
-                self.conversations
-                    .choose(&mut rng)
-                    .map(|s: &&str| s.to_string())
-                    .unwrap_or_else(|| "bonjour".to_string())
-            }
-
-            TrainingPhase::Emotional => {
-                // Emotional expression with varying intensity
-                let base = self.emotional
-                    .choose(&mut rng)
-                    .map(|s: &&str| s.to_string())
-                    .unwrap_or_else(|| "Bravo!".to_string());
-
-                // Sometimes add emphasis
+            TrainingMode::Converse => {
+                // Mix of conversations and emotional responses
                 if rng.gen_bool(0.3) {
-                    format!("{}!", base.trim_end_matches('!'))
+                    self.emotions
+                        .choose(&mut rng)
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "Bravo!".to_string())
                 } else {
-                    base
+                    self.conversations
+                        .choose(&mut rng)
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "bonjour".to_string())
                 }
             }
         }
@@ -376,23 +379,21 @@ impl Trainer {
     /// Get status string for display
     pub fn status(&self) -> String {
         if self.enabled {
-            let phase_detail = if self.phase == TrainingPhase::Sequence && !self.sequences.is_empty() {
-                format!(" [seq {}/{}]", self.current_sequence + 1, self.sequences.len())
-            } else {
-                String::new()
-            };
+            let trend = if self.population_trend > 0 { "↑" }
+                else if self.population_trend < 0 { "↓" }
+                else { "→" };
 
             format!(
-                "AUTO: {}{} ({}/{}) | Sent: {} | Responses: {}",
-                self.phase.name(),
-                phase_detail,
-                self.stimuli_count,
-                self.stimuli_per_phase,
+                "AUTO {} {} | {}s | Pop{} | Sent:{} Resp:{}",
+                self.intensity.symbol(),
+                self.mode.name(),
+                self.interval.as_secs(),
+                trend,
                 self.total_sent,
                 self.total_responses
             )
         } else {
-            "AUTO: Off (press 'a' to start)".to_string()
+            "AUTO: Off ('a' to start)".to_string()
         }
     }
 }
