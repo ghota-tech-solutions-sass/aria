@@ -552,12 +552,29 @@ impl Substrate {
         }
     }
 
-    /// Calculate entropy of the substrate
-    pub(super) fn calculate_entropy(&self) -> f32 {
-        let active: Vec<f32> = self.states.iter()
-            .filter(|s| !s.is_dead())
-            .map(|s| s.state.iter().map(|x| x.abs()).sum::<f32>())
-            .collect();
+    /// Calculate entropy of the substrate (sampled for O(1) at scale)
+    pub(super) fn calculate_entropy_sampled(&self) -> f32 {
+        let total_cells = self.states.len();
+        let sample_size = 2000.min(total_cells);
+
+        if sample_size == 0 {
+            return 0.0;
+        }
+
+        let mut rng = rand::thread_rng();
+        use rand::Rng;
+
+        let step = total_cells / sample_size;
+        let mut active: Vec<f32> = Vec::with_capacity(sample_size);
+
+        for i in 0..sample_size {
+            let idx = (i * step + rng.gen_range(0..step.max(1))) % total_cells;
+            let state = &self.states[idx];
+            if !state.is_dead() {
+                let activation: f32 = state.state.iter().map(|x| x.abs()).sum();
+                active.push(activation);
+            }
+        }
 
         if active.is_empty() {
             return 0.0;

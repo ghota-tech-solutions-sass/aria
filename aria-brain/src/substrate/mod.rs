@@ -589,13 +589,28 @@ impl Substrate {
     /// Active cells emit internal signals that influence their neighbors,
     /// creating feedback loops and richer internal dynamics.
     fn generate_internal_signals(&self) -> Vec<SignalFragment> {
+        // Skip if recurrent processing is disabled (Session 32 - avoid O(n) loop)
+        if !self.config.recurrent.enabled {
+            return Vec::new();
+        }
+
         let threshold = self.config.recurrent.internal_signal_threshold;
         let decay = self.config.recurrent.internal_signal_decay;
 
         let mut signals = Vec::new();
 
-        // Collect signals from active cells
-        for (cell, state) in self.cells.iter().zip(self.states.iter()) {
+        // Sample-based internal signal generation (avoid O(n) loop)
+        let total_cells = self.cells.len();
+        let sample_size = 1000.min(total_cells);
+        let step = total_cells / sample_size.max(1);
+
+        for i in 0..sample_size {
+            let idx = i * step;
+            if idx >= total_cells {
+                break;
+            }
+            let cell = &self.cells[idx];
+            let state = &self.states[idx];
             // Skip sleeping, dead, or low-activity cells
             // Read from CellState.flags (GPU source of truth)
             if state.is_sleeping() || state.is_dead() {
@@ -640,51 +655,103 @@ impl Substrate {
         signals
     }
 
-    /// Get substrate statistics
+    /// Get substrate statistics (using sampling for O(1) instead of O(n))
     pub fn stats(&self) -> SubstrateStats {
         let current_tick = self.tick.load(Ordering::Relaxed);
         let emotional = self.emotional_state.read();
 
-        let alive_count = self.cells.iter()
-            .zip(self.states.iter())
-            .filter(|(_, s)| !s.is_dead())
-            .count();
+        // Sample-based statistics for O(1) complexity at scale
+        let total_cells = self.cells.len();
+        let sample_size = 5000.min(total_cells);
 
-        // Read sleeping from CellState.flags (GPU source of truth)
-        // NOT from Cell.activity.sleeping (CPU state that may be out of sync)
-        let sleeping_count = self.states.iter()
-            .filter(|s| s.is_sleeping() && !s.is_dead())
-            .count();
+        if sample_size == 0 {
+            let params = self.adaptive_params.read();
+            return SubstrateStats {
+                tick: current_tick,
+                alive_cells: 0,
+                total_energy: 0.0,
+                entropy: 0.0,
+                active_clusters: 0,
+                dominant_emotion: emotional.mood_description().to_string(),
+                signals_per_second: 0.0,
+                oldest_cell_age: 0,
+                average_connections: 0.0,
+                mood: emotional.mood_description().to_string(),
+                happiness: emotional.happiness,
+                arousal: emotional.arousal,
+                curiosity: emotional.curiosity,
+                sleeping_cells: 0,
+                cpu_savings_percent: 0.0,
+                backend_name: self.backend.name().to_string(),
+                adaptive_emission_threshold: params.emission_threshold,
+                adaptive_response_probability: params.response_probability,
+                adaptive_spontaneity: params.spontaneity,
+                adaptive_feedback_positive: params.positive_count(),
+                adaptive_feedback_negative: params.negative_count(),
+                boredom: emotional.boredom,
+            };
+        }
 
-        let total_energy: f32 = self.states.iter()
-            .filter(|s| !s.is_dead())
-            .map(|s| s.energy)
-            .sum();
+        // Stratified sampling for better coverage
+        let mut rng = rand::thread_rng();
+        use rand::Rng;
 
-        let oldest_age = self.cells.iter()
-            .map(|c| c.age)
-            .max()
-            .unwrap_or(0);
+        let mut alive_sample = 0usize;
+        let mut sleeping_sample = 0usize;
+        let mut energy_sum = 0.0f32;
+        let mut max_age = 0u64;
 
-        let cpu_savings = if alive_count > 0 {
-            sleeping_count as f32 / alive_count as f32 * 100.0
+        let step = total_cells / sample_size;
+        for i in 0..sample_size {
+            let idx = (i * step + rng.gen_range(0..step.max(1))) % total_cells;
+            let state = &self.states[idx];
+            let cell = &self.cells[idx];
+
+            if !state.is_dead() {
+                alive_sample += 1;
+                energy_sum += state.energy;
+                if state.is_sleeping() {
+                    sleeping_sample += 1;
+                }
+                if cell.age > max_age {
+                    max_age = cell.age;
+                }
+            }
+        }
+
+        // Extrapolate from sample to population
+        let sample_alive_ratio = alive_sample as f32 / sample_size as f32;
+        let alive_count = (sample_alive_ratio * total_cells as f32) as usize;
+
+        let sample_sleeping_ratio = if alive_sample > 0 {
+            sleeping_sample as f32 / alive_sample as f32
         } else {
             0.0
         };
+        let sleeping_count = (sample_sleeping_ratio * alive_count as f32) as usize;
 
-        // Get adaptive params
+        // Extrapolate total energy
+        let avg_sample_energy = if alive_sample > 0 {
+            energy_sum / alive_sample as f32
+        } else {
+            0.0
+        };
+        let total_energy = avg_sample_energy * alive_count as f32;
+
+        let cpu_savings = sample_sleeping_ratio * 100.0;
+
         let params = self.adaptive_params.read();
 
         SubstrateStats {
             tick: current_tick,
             alive_cells: alive_count,
             total_energy,
-            entropy: self.calculate_entropy(),
-            active_clusters: 0, // TODO
+            entropy: self.calculate_entropy_sampled(),
+            active_clusters: 0,
             dominant_emotion: emotional.mood_description().to_string(),
-            signals_per_second: 0.0, // TODO
-            oldest_cell_age: oldest_age,
-            average_connections: 0.0, // TODO
+            signals_per_second: 0.0,
+            oldest_cell_age: max_age,
+            average_connections: 0.0,
             mood: emotional.mood_description().to_string(),
             happiness: emotional.happiness,
             arousal: emotional.arousal,
@@ -692,13 +759,11 @@ impl Substrate {
             sleeping_cells: sleeping_count,
             cpu_savings_percent: cpu_savings,
             backend_name: self.backend.name().to_string(),
-            // Adaptive params
             adaptive_emission_threshold: params.emission_threshold,
             adaptive_response_probability: params.response_probability,
             adaptive_spontaneity: params.spontaneity,
             adaptive_feedback_positive: params.positive_count(),
             adaptive_feedback_negative: params.negative_count(),
-            // Boredom
             boredom: emotional.boredom,
         }
     }

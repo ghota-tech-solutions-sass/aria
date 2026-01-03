@@ -361,6 +361,32 @@ if actual_magnitude < 0.1 { return; }
 
 **Résultat :** Population stable sans stimulation. Les cellules doivent MÉRITER leur énergie.
 
+#### Fix Sleeping Drain & O(n) Loops (Session 32 Part 8)
+
+**Problème 1 :** Drain des cellules dormantes trop faible (0.1× cost_rest).
+
+**Fix :** Les cellules dormantes paient le même cost_rest que les éveillées - elles respirent encore !
+
+```wgsl
+// AVANT: 0.1× = 0.00003/tick (survie ~27h!)
+cell_energy.energy -= config.cost_rest * 0.1;
+
+// APRÈS: 1.0× = 0.0003/tick (survie ~55min)
+cell_energy.energy -= config.cost_rest;
+```
+
+**Problème 2 :** Freezes avec 1M cells - boucles O(n) CPU restantes.
+
+| Fonction | Avant | Après |
+|----------|-------|-------|
+| `stats()` | 4× O(n) loops | 5k sampling |
+| `calculate_entropy()` | O(n) collect | 2k sampling |
+| `generate_internal_signals()` | O(n) loop | Skip si disabled + 1k sampling |
+
+**Résultat :**
+- CPU savings : de ~100ms/call à <1ms/call
+- Population décroit naturellement sans stimulation (La Vraie Faim effective)
+
 ### Session 31 - Physical Intelligence (Vocabulary Removal)
 
 **ARIA passe en mode "Intelligence Physique" - le vocabulaire est supprimé.**

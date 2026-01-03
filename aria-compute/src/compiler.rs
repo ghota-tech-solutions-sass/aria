@@ -163,8 +163,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             cell_meta.flags = cell_meta.flags & ~FLAG_SLEEPING;
             cell_meta.flags = set_sleep_counter(cell_meta.flags, 0u);
         } else {
-            cell_energy.energy -= config.cost_rest * 0.1;
-            cell_energy.energy += config.energy_gain;
+            // Sleeping cells still breathe! Same drain as awake (La Vraie Faim)
+            cell_energy.energy -= config.cost_rest;
             if cell_energy.energy <= 0.0 { cell_meta.flags = cell_meta.flags | FLAG_DEAD; }
             energies[idx] = cell_energy; metadata[idx] = cell_meta; return;
         }
