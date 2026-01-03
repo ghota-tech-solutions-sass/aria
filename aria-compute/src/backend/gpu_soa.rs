@@ -117,6 +117,12 @@ pub struct GpuSoABackend {
     // Prediction Law buffer
     prediction_buffer: Option<wgpu::Buffer>,
 
+    // Hebbian Spatial Attraction buffer (fixed-point centroid accumulation)
+    centroid_buffer: Option<wgpu::Buffer>,
+
+    // Cluster Hysteresis buffer (256 clusters × (activity_sum + count))
+    cluster_stats_buffer: Option<wgpu::Buffer>,
+
     // Staging buffers for readback
     energy_staging: Option<wgpu::Buffer>,
     metadata_staging: Option<wgpu::Buffer>,
@@ -138,6 +144,14 @@ pub struct GpuSoABackend {
     prediction_generate_pipeline: Option<wgpu::ComputePipeline>,
     prediction_evaluate_pipeline: Option<wgpu::ComputePipeline>,
 
+    // Hebbian Spatial Attraction pipelines
+    hebbian_centroid_pipeline: Option<wgpu::ComputePipeline>,
+    hebbian_attraction_pipeline: Option<wgpu::ComputePipeline>,
+
+    // Cluster Hysteresis pipelines
+    cluster_stats_pipeline: Option<wgpu::ComputePipeline>,
+    cluster_hysteresis_pipeline: Option<wgpu::ComputePipeline>,
+
     // Bind group layouts
     main_bind_group_layout: Option<wgpu::BindGroupLayout>,
     sparse_cell_bind_group_layout: Option<wgpu::BindGroupLayout>,
@@ -150,6 +164,14 @@ pub struct GpuSoABackend {
     // Prediction Law bind group layouts
     prediction_generate_bind_group_layout: Option<wgpu::BindGroupLayout>,
     prediction_evaluate_bind_group_layout: Option<wgpu::BindGroupLayout>,
+
+    // Hebbian Spatial Attraction bind group layouts
+    hebbian_centroid_bind_group_layout: Option<wgpu::BindGroupLayout>,
+    hebbian_attraction_bind_group_layout: Option<wgpu::BindGroupLayout>,
+
+    // Cluster Hysteresis bind group layouts
+    cluster_stats_bind_group_layout: Option<wgpu::BindGroupLayout>,
+    cluster_hysteresis_bind_group_layout: Option<wgpu::BindGroupLayout>,
 
     // Sparse dispatch state
     use_indirect_dispatch: bool,
@@ -248,6 +270,10 @@ impl GpuSoABackend {
             sleeping_drain_pipeline: None,
             prediction_generate_pipeline: None,
             prediction_evaluate_pipeline: None,
+            hebbian_centroid_pipeline: None,
+            hebbian_attraction_pipeline: None,
+            cluster_stats_pipeline: None,
+            cluster_hysteresis_pipeline: None,
             main_bind_group_layout: None,
             sparse_cell_bind_group_layout: None,
             signal_with_hash_bind_group_layout: None,
@@ -257,8 +283,14 @@ impl GpuSoABackend {
             sleeping_drain_bind_group_layout: None,
             prediction_generate_bind_group_layout: None,
             prediction_evaluate_bind_group_layout: None,
+            hebbian_centroid_bind_group_layout: None,
+            hebbian_attraction_bind_group_layout: None,
+            cluster_stats_bind_group_layout: None,
+            cluster_hysteresis_bind_group_layout: None,
             connection_buffer: None,
             prediction_buffer: None,
+            centroid_buffer: None,
+            cluster_stats_buffer: None,
             use_indirect_dispatch,
             last_active_count: 0,
             cell_count: 0,
@@ -497,6 +529,32 @@ impl GpuSoABackend {
             0,
             bytemuck::cast_slice(&empty_predictions),
         );
+
+        // Centroid buffer for Hebbian spatial attraction
+        // Structure: 16 × i32 (weighted_pos) + u32 (total_mass) + u32 (count) + 2 × u32 (padding)
+        // Total: 80 bytes
+        let centroid_bytes = 80;
+        self.centroid_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Hebbian Centroid"),
+            size: centroid_bytes as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        }));
+
+        // Cluster stats buffer for cluster hysteresis
+        // Structure: 256 × u32 (activity_sum) + 256 × u32 (count)
+        // Total: 2048 bytes
+        let cluster_stats_bytes = 256 * 4 * 2;
+        self.cluster_stats_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Cluster Stats"),
+            size: cluster_stats_bytes as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        }));
 
         self.create_bind_group_layouts()?;
         self.create_pipelines()?;
@@ -1169,6 +1227,233 @@ impl GpuSoABackend {
             },
         ));
 
+        // Hebbian Centroid bind group layout
+        // Bindings: energies (read), positions (read), metadata (read), centroid (read-write), cell_count (uniform)
+        self.hebbian_centroid_bind_group_layout = Some(self.device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("Hebbian Centroid Bind Group Layout"),
+                entries: &[
+                    // 0: Energies (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 1: Positions (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 2: Metadata (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 3: Centroid (read-write)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 4: Cell count (uniform)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            },
+        ));
+
+        // Hebbian Attraction bind group layout
+        // Bindings: positions (read-write), energies (read), metadata (read), centroid (read), config (uniform)
+        self.hebbian_attraction_bind_group_layout = Some(self.device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("Hebbian Attraction Bind Group Layout"),
+                entries: &[
+                    // 0: Positions (read-write)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 1: Energies (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 2: Metadata (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 3: Centroid (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 4: Config (uniform)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            },
+        ));
+
+        // Cluster Stats bind group layout
+        // Bindings: metadata (read), energies (read), cluster_stats (read-write), cell_count (uniform)
+        self.cluster_stats_bind_group_layout = Some(self.device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("Cluster Stats Bind Group Layout"),
+                entries: &[
+                    // 0: Metadata (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 1: Energies (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 2: Cluster Stats (read-write)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 3: Cell count (uniform)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            },
+        ));
+
+        // Cluster Hysteresis bind group layout
+        // Bindings: metadata (read-write), cluster_stats (read), cell_count (uniform)
+        self.cluster_hysteresis_bind_group_layout = Some(self.device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("Cluster Hysteresis Bind Group Layout"),
+                entries: &[
+                    // 0: Metadata (read-write)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 1: Cluster Stats (read)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 2: Cell count (uniform)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            },
+        ));
+
         Ok(())
     }
 
@@ -1434,6 +1719,120 @@ impl GpuSoABackend {
             );
 
             tracing::info!("🔮 Prediction Law pipelines created");
+        }
+
+        // Create Hebbian Spatial Attraction pipelines
+        if let Some(centroid_layout) = self.hebbian_centroid_bind_group_layout.as_ref() {
+            let centroid_pipeline_layout = self
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("Hebbian Centroid Pipeline Layout"),
+                    bind_group_layouts: &[centroid_layout],
+                    immediate_size: 0,
+                });
+
+            let centroid_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Hebbian Centroid Shader"),
+                source: wgpu::ShaderSource::Wgsl(self.compiler.get_hebbian_centroid_shader().into()),
+            });
+
+            self.hebbian_centroid_pipeline = Some(
+                self.device
+                    .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some("Hebbian Centroid Pipeline"),
+                        layout: Some(&centroid_pipeline_layout),
+                        module: &centroid_shader,
+                        entry_point: Some("main"),
+                        compilation_options: Default::default(),
+                        cache: None,
+                    }),
+            );
+        }
+
+        if let Some(attraction_layout) = self.hebbian_attraction_bind_group_layout.as_ref() {
+            let attraction_pipeline_layout = self
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("Hebbian Attraction Pipeline Layout"),
+                    bind_group_layouts: &[attraction_layout],
+                    immediate_size: 0,
+                });
+
+            let attraction_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Hebbian Attraction Shader"),
+                source: wgpu::ShaderSource::Wgsl(self.compiler.get_hebbian_attraction_shader().into()),
+            });
+
+            self.hebbian_attraction_pipeline = Some(
+                self.device
+                    .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some("Hebbian Attraction Pipeline"),
+                        layout: Some(&attraction_pipeline_layout),
+                        module: &attraction_shader,
+                        entry_point: Some("main"),
+                        compilation_options: Default::default(),
+                        cache: None,
+                    }),
+            );
+
+            tracing::info!("🧲 Hebbian Spatial Attraction pipelines created");
+        }
+
+        // Create Cluster Hysteresis pipelines
+        if let Some(stats_layout) = self.cluster_stats_bind_group_layout.as_ref() {
+            let stats_pipeline_layout = self
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("Cluster Stats Pipeline Layout"),
+                    bind_group_layouts: &[stats_layout],
+                    immediate_size: 0,
+                });
+
+            let stats_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Cluster Stats Shader"),
+                source: wgpu::ShaderSource::Wgsl(self.compiler.get_cluster_stats_shader().into()),
+            });
+
+            self.cluster_stats_pipeline = Some(
+                self.device
+                    .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some("Cluster Stats Pipeline"),
+                        layout: Some(&stats_pipeline_layout),
+                        module: &stats_shader,
+                        entry_point: Some("main"),
+                        compilation_options: Default::default(),
+                        cache: None,
+                    }),
+            );
+        }
+
+        if let Some(hysteresis_layout) = self.cluster_hysteresis_bind_group_layout.as_ref() {
+            let hysteresis_pipeline_layout = self
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("Cluster Hysteresis Pipeline Layout"),
+                    bind_group_layouts: &[hysteresis_layout],
+                    immediate_size: 0,
+                });
+
+            let hysteresis_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Cluster Hysteresis Shader"),
+                source: wgpu::ShaderSource::Wgsl(self.compiler.get_cluster_hysteresis_shader().into()),
+            });
+
+            self.cluster_hysteresis_pipeline = Some(
+                self.device
+                    .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some("Cluster Hysteresis Pipeline"),
+                        layout: Some(&hysteresis_pipeline_layout),
+                        module: &hysteresis_shader,
+                        entry_point: Some("main"),
+                        compilation_options: Default::default(),
+                        cache: None,
+                    }),
+            );
+
+            tracing::info!("📊 Cluster Hysteresis pipelines created");
         }
 
         tracing::debug!("🎮 GPU SoA pipelines created");
@@ -1748,6 +2147,176 @@ impl GpuSoABackend {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: metadata_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: config_buffer.as_entire_binding(),
+                },
+            ],
+        }))
+    }
+
+    /// Create bind group for prediction evaluate pass
+    fn create_prediction_evaluate_bind_group(&self) -> Option<wgpu::BindGroup> {
+        let layout = self.prediction_evaluate_bind_group_layout.as_ref()?;
+        let state_buffer = self.state_buffer.as_ref()?;
+        let metadata_buffer = self.metadata_buffer.as_ref()?;
+        let prediction_buffer = self.prediction_buffer.as_ref()?;
+        let energy_buffer = self.energy_buffer.as_ref()?;
+        let config_buffer = self.config_buffer.as_ref()?;
+
+        Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Prediction Evaluate Bind Group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: state_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: metadata_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: prediction_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: energy_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: config_buffer.as_entire_binding(),
+                },
+            ],
+        }))
+    }
+
+    /// Create bind group for Hebbian centroid accumulation pass
+    fn create_hebbian_centroid_bind_group(&self) -> Option<wgpu::BindGroup> {
+        let layout = self.hebbian_centroid_bind_group_layout.as_ref()?;
+        let energy_buffer = self.energy_buffer.as_ref()?;
+        let position_buffer = self.position_buffer.as_ref()?;
+        let metadata_buffer = self.metadata_buffer.as_ref()?;
+        let centroid_buffer = self.centroid_buffer.as_ref()?;
+        let config_buffer = self.config_buffer.as_ref()?;
+
+        Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Hebbian Centroid Bind Group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: energy_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: position_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: metadata_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: centroid_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: config_buffer.as_entire_binding(),
+                },
+            ],
+        }))
+    }
+
+    /// Create bind group for Hebbian attraction pass
+    fn create_hebbian_attraction_bind_group(&self) -> Option<wgpu::BindGroup> {
+        let layout = self.hebbian_attraction_bind_group_layout.as_ref()?;
+        let position_buffer = self.position_buffer.as_ref()?;
+        let energy_buffer = self.energy_buffer.as_ref()?;
+        let metadata_buffer = self.metadata_buffer.as_ref()?;
+        let centroid_buffer = self.centroid_buffer.as_ref()?;
+        let config_buffer = self.config_buffer.as_ref()?;
+
+        Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Hebbian Attraction Bind Group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: position_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: energy_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: metadata_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: centroid_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: config_buffer.as_entire_binding(),
+                },
+            ],
+        }))
+    }
+
+    /// Create bind group for cluster stats accumulation pass
+    fn create_cluster_stats_bind_group(&self) -> Option<wgpu::BindGroup> {
+        let layout = self.cluster_stats_bind_group_layout.as_ref()?;
+        let metadata_buffer = self.metadata_buffer.as_ref()?;
+        let energy_buffer = self.energy_buffer.as_ref()?;
+        let cluster_stats_buffer = self.cluster_stats_buffer.as_ref()?;
+        let config_buffer = self.config_buffer.as_ref()?;
+
+        Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cluster Stats Bind Group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: metadata_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: energy_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: cluster_stats_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: config_buffer.as_entire_binding(),
+                },
+            ],
+        }))
+    }
+
+    /// Create bind group for cluster hysteresis pass
+    fn create_cluster_hysteresis_bind_group(&self) -> Option<wgpu::BindGroup> {
+        let layout = self.cluster_hysteresis_bind_group_layout.as_ref()?;
+        let metadata_buffer = self.metadata_buffer.as_ref()?;
+        let cluster_stats_buffer = self.cluster_stats_buffer.as_ref()?;
+        let config_buffer = self.config_buffer.as_ref()?;
+
+        Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Cluster Hysteresis Bind Group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: metadata_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: cluster_stats_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -2159,6 +2728,145 @@ impl ComputeBackend for GpuSoABackend {
                         });
                         pass.set_pipeline(drain_pipeline);
                         pass.set_bind_group(0, &drain_bind_group, &[]);
+                        let workgroups = (self.cell_count as u32 + 255) / 256;
+                        pass.dispatch_workgroups(workgroups, 1, 1);
+                    }
+
+                    self.queue.submit(Some(encoder.finish()));
+                }
+            }
+        }
+
+        // PREDICTION EVALUATE: Run every tick to evaluate predictions and apply energy rewards/penalties
+        // "Surprise costs energy" - cells that predict correctly gain energy
+        if let Some(pred_bind_group) = self.create_prediction_evaluate_bind_group() {
+            if let Some(pred_pipeline) = self.prediction_evaluate_pipeline.as_ref() {
+                let mut encoder = self
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Prediction Evaluate Pass"),
+                    });
+
+                {
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("Prediction Evaluate"),
+                        timestamp_writes: None,
+                    });
+                    pass.set_pipeline(pred_pipeline);
+                    pass.set_bind_group(0, &pred_bind_group, &[]);
+                    let workgroups = (self.cell_count as u32 + 255) / 256;
+                    pass.dispatch_workgroups(workgroups, 1, 1);
+                }
+
+                self.queue.submit(Some(encoder.finish()));
+            }
+        }
+
+        // HEBBIAN SPATIAL ATTRACTION: Run every 5 ticks
+        // "Cells that fire together, move together" - active cells attract to centroid
+        if self.tick % 5 == 0 {
+            // Pass 1: Clear centroid buffer and accumulate weighted positions
+            if let Some(centroid_buffer) = self.centroid_buffer.as_ref() {
+                // Clear centroid buffer (80 bytes of zeros)
+                self.queue.write_buffer(centroid_buffer, 0, &[0u8; 80]);
+            }
+
+            if let Some(centroid_bind_group) = self.create_hebbian_centroid_bind_group() {
+                if let Some(centroid_pipeline) = self.hebbian_centroid_pipeline.as_ref() {
+                    let mut encoder = self
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Hebbian Centroid Pass"),
+                        });
+
+                    {
+                        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some("Hebbian Centroid Accumulation"),
+                            timestamp_writes: None,
+                        });
+                        pass.set_pipeline(centroid_pipeline);
+                        pass.set_bind_group(0, &centroid_bind_group, &[]);
+                        let workgroups = (self.cell_count as u32 + 255) / 256;
+                        pass.dispatch_workgroups(workgroups, 1, 1);
+                    }
+
+                    self.queue.submit(Some(encoder.finish()));
+                }
+            }
+
+            // Pass 2: Apply attraction force towards centroid
+            if let Some(attraction_bind_group) = self.create_hebbian_attraction_bind_group() {
+                if let Some(attraction_pipeline) = self.hebbian_attraction_pipeline.as_ref() {
+                    let mut encoder = self
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Hebbian Attraction Pass"),
+                        });
+
+                    {
+                        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some("Hebbian Attraction"),
+                            timestamp_writes: None,
+                        });
+                        pass.set_pipeline(attraction_pipeline);
+                        pass.set_bind_group(0, &attraction_bind_group, &[]);
+                        let workgroups = (self.cell_count as u32 + 255) / 256;
+                        pass.dispatch_workgroups(workgroups, 1, 1);
+                    }
+
+                    self.queue.submit(Some(encoder.finish()));
+                }
+            }
+        }
+
+        // CLUSTER HYSTERESIS: Run every 50 ticks
+        // "Stable clusters lock in, fading clusters release."
+        if self.tick % 50 == 0 {
+            // Pass 1: Clear cluster stats buffer and accumulate stats
+            if let Some(cluster_stats_buffer) = self.cluster_stats_buffer.as_ref() {
+                // Clear cluster stats buffer (2048 bytes of zeros)
+                self.queue.write_buffer(cluster_stats_buffer, 0, &[0u8; 2048]);
+            }
+
+            if let Some(stats_bind_group) = self.create_cluster_stats_bind_group() {
+                if let Some(stats_pipeline) = self.cluster_stats_pipeline.as_ref() {
+                    let mut encoder = self
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Cluster Stats Pass"),
+                        });
+
+                    {
+                        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some("Cluster Stats Accumulation"),
+                            timestamp_writes: None,
+                        });
+                        pass.set_pipeline(stats_pipeline);
+                        pass.set_bind_group(0, &stats_bind_group, &[]);
+                        let workgroups = (self.cell_count as u32 + 255) / 256;
+                        pass.dispatch_workgroups(workgroups, 1, 1);
+                    }
+
+                    self.queue.submit(Some(encoder.finish()));
+                }
+            }
+
+            // Pass 2: Update hysteresis based on cluster activity
+            if let Some(hysteresis_bind_group) = self.create_cluster_hysteresis_bind_group() {
+                if let Some(hysteresis_pipeline) = self.cluster_hysteresis_pipeline.as_ref() {
+                    let mut encoder = self
+                        .device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Cluster Hysteresis Pass"),
+                        });
+
+                    {
+                        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some("Cluster Hysteresis Update"),
+                            timestamp_writes: None,
+                        });
+                        pass.set_pipeline(hysteresis_pipeline);
+                        pass.set_bind_group(0, &hysteresis_bind_group, &[]);
                         let workgroups = (self.cell_count as u32 + 255) / 256;
                         pass.dispatch_workgroups(workgroups, 1, 1);
                     }

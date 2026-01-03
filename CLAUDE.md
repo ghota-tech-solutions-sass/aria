@@ -165,6 +165,88 @@ fn find_connection(conn: CellConnections, target_id: u32)
 - Évolution multi-générationnelle fonctionnelle
 - Logs enrichis montrant Gen0/Gen1/Gen2+ ready vs reproducing
 
+### Session 31 - CPU→GPU Migration (Scale 1M-10M)
+
+**Migration des opérations critiques CPU vers GPU pour supporter 1M-10M cellules à 1000 TPS.**
+
+#### Opérations migrées
+
+| Opération | Avant | Après | Gain estimé |
+|-----------|-------|-------|-------------|
+| Predictive Physics | CPU 40M ops/tick | GPU PREDICTION_EVALUATE_SHADER | ~40M ops/tick |
+| Hebbian Spatial | CPU 50M ops/5 ticks | GPU HEBBIAN_CENTROID + ATTRACTION | ~50M ops/5 ticks |
+| Cluster Hysteresis | CPU 10M ops/50 ticks | GPU CLUSTER_STATS + HYSTERESIS | ~10M ops/50 ticks |
+| Lineage Sort | O(n log n) sort | O(n) bucket-based | 10-50× sur sort |
+
+#### Nouveaux shaders WGSL
+
+**1. PREDICTION_EVALUATE_SHADER** (déjà existant mais non dispatché)
+- Évalue prédictions vs réalité
+- Applique récompenses/pénalités énergétiques
+- Maintenant dispatché chaque tick
+
+**2. HEBBIAN_CENTROID_SHADER** (nouveau)
+- Accumule le centroïde pondéré des cellules actives
+- Utilise fixed-point i32 atomics (WGSL n'a pas atomicAdd f32)
+- Scale ×1000 pour précision 0.001
+
+**3. HEBBIAN_ATTRACTION_SHADER** (nouveau)
+- Déplace les cellules actives vers le centroïde
+- Force proportionnelle à distance × activité × plasticité
+- Tous les 5 ticks
+
+**4. CLUSTER_STATS_SHADER** (nouveau)
+- Accumule activité et count par cluster (256 clusters max)
+- Fixed-point u32 atomics
+
+**5. CLUSTER_HYSTERESIS_SHADER** (nouveau)
+- Met à jour hysteresis selon activité moyenne du cluster
+- Clusters actifs (>0.6) → hysteresis +0.05
+- Clusters inactifs (<0.2) → hysteresis -0.02
+- Pas de cluster → hysteresis -0.1
+- Tous les 50 ticks
+
+#### Optimisation Lineage Sort
+
+```rust
+// AVANT: O(n log n)
+ready_to_divide.sort_by(|a, b| b.2.cmp(&a.2));
+
+// APRÈS: O(n) bucket-based
+const MAX_GEN_BUCKETS: usize = 32;
+let mut gen_buckets: [Vec<(usize, u32)>; 32] = Default::default();
+// Single pass: bucket by generation
+// Flatten from highest generation down
+```
+
+#### Buffers GPU ajoutés
+
+| Buffer | Taille | Usage |
+|--------|--------|-------|
+| `centroid_buffer` | 80 bytes | 16×i32 + u32 + u32 + 2×u32 pad |
+| `cluster_stats_buffer` | 2048 bytes | 256×u32 (activity) + 256×u32 (count) |
+
+#### Fix WGSL
+
+**Reserved keyword 'meta'** → Renommé en `cell_meta` dans les shaders cluster.
+
+#### Fichiers modifiés
+
+| Fichier | Changements |
+|---------|-------------|
+| `aria-compute/src/compiler.rs` | +4 shaders WGSL, getters |
+| `aria-compute/src/backend/gpu_soa.rs` | +2 buffers, +4 pipelines, +4 bind groups, dispatch calls |
+| `aria-brain/src/substrate/mod.rs` | Suppression CPU predictive/hebbian/cluster |
+| `aria-brain/src/substrate/lifecycle.rs` | O(n) bucket sort |
+
+#### Résultat attendu
+
+| Métrique | Avant | Après |
+|----------|-------|-------|
+| CPU ops/tick @ 5M | ~65M | ~5M |
+| GPU utilisation | 30% | 80%+ |
+| Max cells @ 1000 TPS | ~200k | ~5M+ |
+
 ### Session 24 - CellMetadata & Naga Fix
 
 **Migration majeure : `CellFlags` → `CellMetadata` avec fix critique du compilateur WGSL.**

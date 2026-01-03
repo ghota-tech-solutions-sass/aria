@@ -75,6 +75,14 @@ impl ShaderCompiler {
     // Prediction Law shaders
     pub fn get_prediction_generate_shader(&self) -> &str { PREDICTION_GENERATE_SHADER }
     pub fn get_prediction_evaluate_shader(&self) -> &str { PREDICTION_EVALUATE_SHADER }
+
+    // Hebbian Spatial Attraction shaders (GPU migration)
+    pub fn get_hebbian_centroid_shader(&self) -> &str { HEBBIAN_CENTROID_SHADER }
+    pub fn get_hebbian_attraction_shader(&self) -> &str { HEBBIAN_ATTRACTION_SHADER }
+
+    // Cluster Hysteresis shaders (GPU migration)
+    pub fn get_cluster_stats_shader(&self) -> &str { CLUSTER_STATS_SHADER }
+    pub fn get_cluster_hysteresis_shader(&self) -> &str { CLUSTER_HYSTERESIS_SHADER }
 }
 
 // ============================================================================
@@ -656,6 +664,240 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     predictions[idx] = pred;
     energies[idx] = cell_energy;
+}
+"#;
+
+// ============================================================================
+// HEBBIAN SPATIAL ATTRACTION SHADERS
+// "Cells that fire together, move together."
+// ============================================================================
+
+/// HEBBIAN_CENTROID_SHADER: Pass 1 - Calculate weighted centroid of active cells
+/// Uses fixed-point i32 atomics since WGSL doesn't have atomicAdd for f32.
+/// Scale factor: × 1000 for 0.001 precision.
+const HEBBIAN_CENTROID_SHADER: &str = r#"
+struct CellEnergy { energy: f32, tension: f32, activity_level: f32, _pad: f32 }
+struct CellPosition { position: array<f32, 16> }
+struct CellMetadata { flags: u32, cluster_id: u32, hysteresis: f32, _pad: u32 }
+
+// Centroid buffer: 16 weighted positions + total_mass + count
+// Uses fixed-point i32 (×1000) for atomic accumulation
+struct CentroidData {
+    weighted_pos: array<atomic<i32>, 16>,  // Fixed-point weighted position sum
+    total_mass: atomic<u32>,               // Fixed-point total mass (×1000)
+    count: atomic<u32>,                    // Number of contributing cells
+}
+
+const FLAG_SLEEPING: u32 = 1u;
+const FLAG_DEAD: u32 = 32u;
+const ACTIVITY_THRESHOLD: f32 = 0.1;  // Minimum activity to contribute
+const FP_SCALE: f32 = 1000.0;         // Fixed-point scale factor
+
+@group(0) @binding(0) var<storage, read> energies: array<CellEnergy>;
+@group(0) @binding(1) var<storage, read> positions: array<CellPosition>;
+@group(0) @binding(2) var<storage, read> metadata: array<CellMetadata>;
+@group(0) @binding(3) var<storage, read_write> centroid: CentroidData;
+@group(0) @binding(4) var<uniform> cell_count: u32;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let idx = id.x;
+    if idx >= cell_count { return; }
+
+    let flags = metadata[idx].flags;
+    if (flags & (FLAG_SLEEPING | FLAG_DEAD)) != 0u { return; }
+
+    let cell_energy = energies[idx];
+    let mass = cell_energy.activity_level * cell_energy.energy;
+
+    // Only active cells contribute
+    if mass < ACTIVITY_THRESHOLD { return; }
+
+    let pos = positions[idx];
+
+    // Convert mass to fixed-point
+    let mass_fp = u32(mass * FP_SCALE);
+
+    // Accumulate weighted position (fixed-point)
+    for (var i = 0u; i < 16u; i = i + 1u) {
+        // pos × mass in fixed-point: (pos × 1000) × mass_fp / 1000
+        let weighted_fp = i32(pos.position[i] * FP_SCALE) * i32(mass_fp) / 1000;
+        atomicAdd(&centroid.weighted_pos[i], weighted_fp);
+    }
+
+    // Accumulate total mass and count
+    atomicAdd(&centroid.total_mass, mass_fp);
+    atomicAdd(&centroid.count, 1u);
+}
+"#;
+
+/// HEBBIAN_ATTRACTION_SHADER: Pass 2 - Move active cells towards centroid
+/// Reads normalized centroid and applies attraction force.
+const HEBBIAN_ATTRACTION_SHADER: &str = r#"
+struct CellEnergy { energy: f32, tension: f32, activity_level: f32, _pad: f32 }
+struct CellPosition { position: array<f32, 16> }
+struct CellMetadata { flags: u32, cluster_id: u32, hysteresis: f32, _pad: u32 }
+
+// Centroid buffer (read the accumulated values)
+struct CentroidData {
+    weighted_pos: array<atomic<i32>, 16>,
+    total_mass: atomic<u32>,
+    count: atomic<u32>,
+}
+
+struct Config {
+    energy_cap: f32, reaction_amplification: f32, state_cap: f32, signal_radius: f32,
+    cost_rest: f32, cost_signal: f32, cost_move: f32, cost_divide: f32,
+    signal_energy_base: f32, signal_resonance_factor: f32, energy_gain: f32,
+    tick: u32, cell_count: u32, workgroup_size: u32, _pad: vec2<u32>
+}
+
+const FLAG_SLEEPING: u32 = 1u;
+const FLAG_DEAD: u32 = 32u;
+const ACTIVITY_THRESHOLD: f32 = 0.1;
+const FP_SCALE: f32 = 1000.0;
+const PLASTICITY: f32 = 0.01;  // Base attraction rate
+
+@group(0) @binding(0) var<storage, read_write> positions: array<CellPosition>;
+@group(0) @binding(1) var<storage, read> energies: array<CellEnergy>;
+@group(0) @binding(2) var<storage, read> metadata: array<CellMetadata>;
+@group(0) @binding(3) var<storage, read> centroid: CentroidData;
+@group(0) @binding(4) var<uniform> config: Config;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let idx = id.x;
+    if idx >= config.cell_count { return; }
+
+    let flags = metadata[idx].flags;
+    if (flags & (FLAG_SLEEPING | FLAG_DEAD)) != 0u { return; }
+
+    let cell_energy = energies[idx];
+    if cell_energy.activity_level < ACTIVITY_THRESHOLD { return; }
+
+    // Read total mass (fixed-point)
+    let total_mass_fp = atomicLoad(&centroid.total_mass);
+    if total_mass_fp < 1000u { return; }  // No significant centroid (< 1.0 mass)
+
+    var pos = positions[idx];
+
+    // Calculate attraction for each dimension
+    for (var i = 0u; i < 16u; i = i + 1u) {
+        // Get centroid position (normalized from fixed-point)
+        let weighted_fp = atomicLoad(&centroid.weighted_pos[i]);
+        let center = f32(weighted_fp) / f32(total_mass_fp);
+
+        // Calculate distance to center
+        let dist = center - pos.position[i];
+
+        // Force proportional to distance × activity × plasticity
+        let move_amount = dist * cell_energy.activity_level * PLASTICITY;
+
+        // Apply movement (clamped to world bounds)
+        pos.position[i] = clamp(pos.position[i] + move_amount, -10.0, 10.0);
+    }
+
+    positions[idx] = pos;
+}
+"#;
+
+// ============================================================================
+// CLUSTER HYSTERESIS SHADERS
+// "Stable clusters lock in, fading clusters release."
+// ============================================================================
+
+/// CLUSTER_STATS_SHADER: Pass 1 - Accumulate activity and count per cluster
+/// Uses fixed-point u32 atomics for activity sum.
+const CLUSTER_STATS_SHADER: &str = r#"
+struct CellEnergy { energy: f32, tension: f32, activity_level: f32, _pad: f32 }
+struct CellMetadata { flags: u32, cluster_id: u32, hysteresis: f32, _pad: u32 }
+
+// Per-cluster stats (256 clusters max)
+struct ClusterStats {
+    activity_sum: array<atomic<u32>, 256>,  // Fixed-point (×1000)
+    count: array<atomic<u32>, 256>,
+}
+
+const FLAG_DEAD: u32 = 32u;
+const FP_SCALE: f32 = 1000.0;
+const MAX_CLUSTERS: u32 = 256u;
+
+@group(0) @binding(0) var<storage, read> metadata: array<CellMetadata>;
+@group(0) @binding(1) var<storage, read> energies: array<CellEnergy>;
+@group(0) @binding(2) var<storage, read_write> cluster_stats: ClusterStats;
+@group(0) @binding(3) var<uniform> cell_count: u32;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let idx = id.x;
+    if idx >= cell_count { return; }
+
+    let cell_meta = metadata[idx];
+    if (cell_meta.flags & FLAG_DEAD) != 0u { return; }
+    if cell_meta.cluster_id == 0u { return; }
+    if cell_meta.cluster_id >= MAX_CLUSTERS { return; }
+
+    let activity = energies[idx].activity_level;
+    let activity_fp = u32(activity * FP_SCALE);
+
+    atomicAdd(&cluster_stats.activity_sum[cell_meta.cluster_id], activity_fp);
+    atomicAdd(&cluster_stats.count[cell_meta.cluster_id], 1u);
+}
+"#;
+
+/// CLUSTER_HYSTERESIS_SHADER: Pass 2 - Update hysteresis based on cluster activity
+const CLUSTER_HYSTERESIS_SHADER: &str = r#"
+struct CellMetadata { flags: u32, cluster_id: u32, hysteresis: f32, _pad: u32 }
+
+// Per-cluster stats (256 clusters max)
+struct ClusterStats {
+    activity_sum: array<atomic<u32>, 256>,
+    count: array<atomic<u32>, 256>,
+}
+
+const FLAG_DEAD: u32 = 32u;
+const FP_SCALE: f32 = 1000.0;
+const MAX_CLUSTERS: u32 = 256u;
+const HIGH_ACTIVITY_THRESHOLD: f32 = 0.6;
+const LOW_ACTIVITY_THRESHOLD: f32 = 0.2;
+const HYSTERESIS_LOCK_RATE: f32 = 0.05;
+const HYSTERESIS_RELEASE_RATE: f32 = 0.02;
+const HYSTERESIS_NO_CLUSTER_DECAY: f32 = 0.1;
+
+@group(0) @binding(0) var<storage, read_write> metadata: array<CellMetadata>;
+@group(0) @binding(1) var<storage, read> cluster_stats: ClusterStats;
+@group(0) @binding(2) var<uniform> cell_count: u32;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let idx = id.x;
+    if idx >= cell_count { return; }
+
+    var cell_meta = metadata[idx];
+    if (cell_meta.flags & FLAG_DEAD) != 0u { return; }
+
+    var hysteresis = cell_meta.hysteresis;
+
+    if cell_meta.cluster_id > 0u && cell_meta.cluster_id < MAX_CLUSTERS {
+        // Read cluster stats
+        let count = max(atomicLoad(&cluster_stats.count[cell_meta.cluster_id]), 1u);
+        let activity_sum_fp = atomicLoad(&cluster_stats.activity_sum[cell_meta.cluster_id]);
+        let avg_activity = f32(activity_sum_fp) / (f32(count) * FP_SCALE);
+
+        if avg_activity > HIGH_ACTIVITY_THRESHOLD {
+            // Stable & Active: lock it in!
+            hysteresis = min(hysteresis + HYSTERESIS_LOCK_RATE, 1.0);
+        } else if avg_activity < LOW_ACTIVITY_THRESHOLD {
+            // Fading out: release bond
+            hysteresis = max(hysteresis - HYSTERESIS_RELEASE_RATE, 0.0);
+        }
+    } else {
+        // No cluster: decay hysteresis faster
+        hysteresis = max(hysteresis - HYSTERESIS_NO_CLUSTER_DECAY, 0.0);
+    }
+
+    cell_meta.hysteresis = hysteresis;
+    metadata[idx] = cell_meta;
 }
 "#;
 

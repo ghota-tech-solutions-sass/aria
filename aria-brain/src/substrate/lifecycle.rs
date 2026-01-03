@@ -136,18 +136,28 @@ impl Substrate {
             let above_threshold = alive_energies.iter().filter(|&&e| e > reproduction_threshold).count();
 
             // Find cells ready to divide (energy > threshold)
-            // SORT BY GENERATION DESC: Higher generations reproduce first!
-            // This ensures lineage progression - Gen1 must reproduce to create Gen2.
-            // Without this, Gen0 (lower indices) monopolizes all 500 reproduction slots.
-            let mut ready_to_divide: Vec<(usize, u32, u32)> = self.cells.iter()
-                .zip(self.states.iter())
-                .enumerate()
-                .filter(|(_, (_, s))| !s.is_dead() && s.energy > reproduction_threshold)
-                .map(|(i, (c, _))| (i, c.dna_index, c.generation))
-                .collect();
+            // Use bucket-based O(n) selection instead of O(n log n) sort.
+            // Higher generations reproduce first to ensure lineage progression.
+            const MAX_GEN_BUCKETS: usize = 32;
+            let mut gen_buckets: [Vec<(usize, u32)>; MAX_GEN_BUCKETS] = Default::default();
+            let mut total_ready = 0usize;
 
-            // Sort by generation descending - evolved lineages get priority
-            ready_to_divide.sort_by(|a, b| b.2.cmp(&a.2));
+            // O(n) single pass: bucket cells by generation
+            for (i, (cell, state)) in self.cells.iter().zip(self.states.iter()).enumerate() {
+                if !state.is_dead() && state.energy > reproduction_threshold {
+                    let gen = (cell.generation as usize).min(MAX_GEN_BUCKETS - 1);
+                    gen_buckets[gen].push((i, cell.dna_index));
+                    total_ready += 1;
+                }
+            }
+
+            // Flatten buckets from highest generation down (O(n) total)
+            let mut ready_to_divide: Vec<(usize, u32, u32)> = Vec::with_capacity(total_ready);
+            for gen in (0..MAX_GEN_BUCKETS).rev() {
+                for (idx, dna_idx) in gen_buckets[gen].iter() {
+                    ready_to_divide.push((*idx, *dna_idx, gen as u32));
+                }
+            }
 
             // Limit births per tick to avoid explosion (still biological pacing)
             // But allow significantly more than before if energy is abundant.
