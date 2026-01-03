@@ -37,7 +37,9 @@ impl ShaderCompiler {
         }
 
         // 2. Activity decay strategy (Bits 8-15)
-        let decay_rate = 0.8 + ((checksum >> 8) & 0x0F) as f32 * 0.0125; // Range: 0.8 to 0.9875
+        // TUNED: Lower decay rate for faster cooling (was 0.8-0.9875, now 0.5-0.75)
+        // This allows cells to sleep more easily when not actively stimulated
+        let decay_rate = 0.5 + ((checksum >> 8) & 0x0F) as f32 * 0.0167; // Range: 0.5 to 0.75
         let decay_nonlinear = (checksum >> 12) & 0x01;
 
         if decay_nonlinear != 0 {
@@ -141,8 +143,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if (cell_meta.flags & FLAG_DEAD) != 0u { return; }
     let dna_idx = dna_indices[idx];
     let dna_base = dna_idx * 5u;
-    let gene_sleep = dna_pool[dna_base+1u].y;
-    let gene_wake = dna_pool[dna_base+1u].z;
+    // TUNED: Sleep/wake thresholds for better sparse savings
+    // gene_sleep: cells sleep when activity < this (higher = sleep easier) range 0.15-0.4
+    // gene_wake: cells wake when activity > this (lower = wake easier) range 0.1-0.3
+    let raw_sleep = dna_pool[dna_base+1u].y;  // thresholds[5] in 0-1
+    let raw_wake = dna_pool[dna_base+1u].z;   // thresholds[6] in 0-1
+    let gene_sleep = 0.15 + raw_sleep * 0.25; // Map to 0.15-0.4
+    let gene_wake = 0.1 + raw_wake * 0.2;     // Map to 0.1-0.3
     if (cell_meta.flags & FLAG_SLEEPING) != 0u {
         if cell_energy.activity_level > gene_wake {
             cell_meta.flags = cell_meta.flags & ~FLAG_SLEEPING;
