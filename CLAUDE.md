@@ -91,7 +91,79 @@ Chats de Mickael :
 - **Obrigada** : Abyssin
 
 ---
-*Version : 0.9.2 | Dernière update : 2026-01-01*
+*Version : 0.9.3 | Dernière update : 2026-01-03*
+
+### Session 30 - GPU Fixes & Lineage Progression
+
+**Déblocage de l'évolution multi-générationnelle et corrections critiques GPU.**
+
+#### 1. Fix Lineage Progression
+
+Le compteur de génération était bloqué à Gen1 malgré 3000 cellules Gen1 prêtes à reproduire.
+
+**Cause** : `ready_to_divide.into_iter().take(500)` sélectionnait par ordre d'index. Les cellules Gen0 (indices 0-99999) monopolisaient les 500 slots de reproduction.
+
+**Fix** : Tri par génération décroissante avant sélection.
+```rust
+// lifecycle.rs
+ready_to_divide.sort_by(|a, b| b.2.cmp(&a.2));  // Gen DESC
+// Les générations supérieures reproduisent en priorité
+```
+
+**Résultat** : Gen2+, Gen3+, etc. peuvent maintenant émerger.
+
+#### 2. GPU Alignment Fixes (110k+ cells)
+
+Trois erreurs WGSL corrigées pour supporter >100k cellules :
+
+**a) Uniform Buffer Alignment**
+```wgsl
+// AVANT (crash avec uniform buffer)
+_pad: array<u32, 3>  // stride = 4 bytes - interdit!
+
+// APRÈS
+_pad1: u32,
+_pad2: u32,
+_pad3: u32,         // 3 champs séparés OK
+```
+
+**b) CLEAR_GRID_SHADER Bindings**
+```wgsl
+// Le shader utilisait binding(0) pour grid
+// Mais le layout attendait:
+// - binding 0: positions (read-only)
+// - binding 1: grid (read-write)
+// - binding 2: spatial_config
+
+// Fix: Ajouter tous les bindings même si inutilisés
+@group(0) @binding(0) var<storage, read> positions: ...
+@group(0) @binding(1) var<storage, read_write> grid: ...
+@group(0) @binding(2) var<uniform> config: ...
+```
+
+**c) Reserved Keyword 'target'**
+```wgsl
+// AVANT
+fn find_connection(conn: CellConnections, target: u32)  // 'target' réservé!
+
+// APRÈS
+fn find_connection(conn: CellConnections, target_id: u32)
+```
+
+#### Commits
+
+| Hash | Description |
+|------|-------------|
+| `c8a96b3` | fix(gpu): rename reserved keyword 'target' |
+| `04d794c` | fix(gpu): align CLEAR_GRID_SHADER bindings |
+| `647df81` | fix(gpu): correct WGSL uniform buffer alignment |
+| `31c2c8c` | fix(evolution): prioritize higher generations |
+
+#### État
+
+- GPU backend stable à 110k+ cellules
+- Évolution multi-générationnelle fonctionnelle
+- Logs enrichis montrant Gen0/Gen1/Gen2+ ready vs reproducing
 
 ### Session 24 - CellMetadata & Naga Fix
 
