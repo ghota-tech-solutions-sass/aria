@@ -94,6 +94,9 @@ pub struct BackendStats {
 
     /// GPU memory used (if applicable)
     pub gpu_memory_bytes: u64,
+
+    /// Maximum cell capacity (GPU buffer limit) - population should not exceed this
+    pub max_capacity: usize,
 }
 
 /// Substrate trait - the living environment

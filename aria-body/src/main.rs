@@ -379,15 +379,6 @@ async fn run_visual_mode() -> Result<(), Box<dyn std::error::Error>> {
                 if let Ok(json) = resp.json::<serde_json::Value>().await {
                     let stats = visualizer::BrainStats {
                         tick: json.get("tick").and_then(|v| v.as_u64()).unwrap_or(0),
-                        alive_cells: json.get("alive_cells").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
-                        sleeping_cells: json.get("sleeping_cells").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
-                        total_energy: json.get("total_energy").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
-                        entropy: json.get("entropy").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
-                        dominant_emotion: json.get("dominant_emotion").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                        mood: json.get("mood").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                        happiness: json.get("happiness").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
-                        arousal: json.get("arousal").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
-                        curiosity: json.get("curiosity").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
                     };
                     let _ = stats_tx.send(stats).await;
                 }
@@ -416,31 +407,17 @@ async fn run_visual_mode() -> Result<(), Box<dyn std::error::Error>> {
                             .and_then(|v| v.as_array())
                             .map(|arr| arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
                             .unwrap_or_default(),
-                        cell_count_grid: json.get("cell_count_grid")
-                            .and_then(|v| v.as_array())
-                            .map(|arr| arr.iter().filter_map(|v| v.as_u64().map(|n| n as usize)).collect())
-                            .unwrap_or_default(),
-                        total_cells: json.get("total_cells").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
                         alive_cells: json.get("alive_cells").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
                         sleeping_cells: json.get("sleeping_cells").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
-                        dead_cells: json.get("dead_cells").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
                         awake_cells: json.get("awake_cells").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
-                        energy_histogram: json.get("energy_histogram")
-                            .and_then(|v| v.as_array())
-                            .map(|arr| arr.iter().filter_map(|v| v.as_u64().map(|n| n as usize)).collect())
-                            .unwrap_or_default(),
-                        // Health and entropy
                         activity_entropy: json.get("activity_entropy").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32,
                         system_health: json.get("system_health").and_then(|v| v.as_f64()).unwrap_or(0.7) as f32,
-                        // Advanced metrics (lineage, sparse dispatch, tension)
                         max_generation: json.get("max_generation").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
                         avg_generation: json.get("avg_generation").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
                         elite_count: json.get("elite_count").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
                         sparse_savings_percent: json.get("sparse_savings_percent").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
                         avg_energy: json.get("avg_energy").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32,
                         avg_tension: json.get("avg_tension").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
-                        total_tension: json.get("total_tension").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
-                        tps: json.get("tps").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32,
                     };
                     let _ = substrate_tx.send(view).await;
                 }

@@ -11,7 +11,6 @@
 //! - Elite Lineage: Genetic strength indicator (evolution pressure)
 //! - Tension Map: Physical desire to act (replaces semantic encoding)
 
-use chrono::Local;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -74,10 +73,9 @@ fn thermal_char(value: f32) -> char {
 // DATA TYPES
 // ============================================================================
 
-/// A message in the conversation with timestamp and context
+/// A message in the conversation
 #[derive(Clone)]
 pub struct ChatMessage {
-    pub timestamp: String,
     pub is_user: bool,
     pub text: String,
     pub context: Option<String>,
@@ -86,7 +84,6 @@ pub struct ChatMessage {
 impl ChatMessage {
     pub fn user(text: String) -> Self {
         Self {
-            timestamp: Local::now().format("%H:%M").to_string(),
             is_user: true,
             text,
             context: None,
@@ -95,7 +92,6 @@ impl ChatMessage {
 
     pub fn aria(text: String, context: Option<String>) -> Self {
         Self {
-            timestamp: Local::now().format("%H:%M").to_string(),
             is_user: false,
             text,
             context,
@@ -103,46 +99,30 @@ impl ChatMessage {
     }
 }
 
-/// Stats from /stats endpoint
+/// Stats from /stats endpoint (simplified - most data now in SubstrateView)
 #[derive(Default, Clone)]
 pub struct BrainStats {
     pub tick: u64,
-    pub alive_cells: usize,
-    pub sleeping_cells: usize,
-    pub total_energy: f32,
-    pub entropy: f32,
-    pub dominant_emotion: String,
-    pub mood: String,
-    pub happiness: f32,
-    pub arousal: f32,
-    pub curiosity: f32,
 }
 
-/// Substrate view from /substrate endpoint (enhanced)
+/// Substrate view from /substrate endpoint
 #[derive(Default, Clone)]
 pub struct SubstrateView {
     pub grid_size: usize,
     pub activity_grid: Vec<f32>,
     pub energy_grid: Vec<f32>,
     pub tension_grid: Vec<f32>,
-    pub cell_count_grid: Vec<usize>,
-    pub total_cells: usize,
     pub alive_cells: usize,
     pub sleeping_cells: usize,
-    pub dead_cells: usize,
     pub awake_cells: usize,
-    pub energy_histogram: Vec<usize>,
     pub activity_entropy: f32,
     pub system_health: f32,
-    // Advanced metrics
     pub max_generation: u32,
     pub avg_generation: f32,
     pub elite_count: usize,
     pub sparse_savings_percent: f32,
     pub avg_energy: f32,
     pub avg_tension: f32,
-    pub total_tension: f32,
-    pub tps: f32,
 }
 
 /// Learning progress stats

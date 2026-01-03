@@ -90,7 +90,7 @@ Chats de Mickael :
 - **Obrigada** : Abyssin
 
 ---
-*Version : 0.9.5 | Dernière update : 2026-01-03*
+*Version : 0.9.6 | Dernière update : 2026-01-03*
 
 ### Session 32 - Full GPU Migration (CPU Liberation)
 
@@ -296,6 +296,42 @@ let cell_count_with_headroom = (cell_count * 2).min(max_cells_in_buffer);
 | CellPosition | 64 | 16.7M |
 
 **Résultat :** ARIA s'adapte automatiquement au GPU disponible.
+
+#### Adaptive Headroom & Population Cap (Session 32 Part 6)
+
+**Problème :** "Device lost" errors sur RTX 2070 et MacBook avec 3-5M cells.
+
+**Cause :** Réallocation GPU pendant l'expansion de population = VRAM temporairement doublée.
+
+**Solution :** Headroom dynamique + population cap automatique.
+
+```rust
+// Headroom basé sur la taille de population (pas de config!)
+let headroom_factor = if cell_count > 3_000_000 {
+    1.25  // 25% headroom pour >3M cells
+} else if cell_count > 1_000_000 {
+    1.5   // 50% headroom pour 1-3M cells
+} else {
+    2.0   // 100% headroom pour <1M cells
+};
+
+// Population cappée automatiquement à la capacité GPU
+let backend_max = self.backend.stats().max_capacity;
+let safety_cap = (target * 2).min(backend_max);
+```
+
+**Chaîne automatique :**
+```
+GPU init → adapter.limits() → headroom factor → max_cell_count → safety_cap
+```
+
+**Résultat :** Zéro configuration, ARIA s'adapte au matériel disponible.
+
+| GPU | 5M cells | Headroom | Capacity | VRAM |
+|-----|----------|----------|----------|------|
+| RTX 2070 (8GB) | ✅ | 25% | 6.25M | ~2.4GB |
+| RTX 4090 (24GB) | ✅ | 25% | 6.25M | ~2.4GB |
+| MacBook Intel | ✅ | 50% | 1.5M | ~600MB |
 
 ### Session 31 - Physical Intelligence (Vocabulary Removal)
 

@@ -317,15 +317,28 @@ impl GpuSoABackend {
         let connections_size = std::mem::size_of::<CellConnections>(); // 144 bytes
         let max_cells_in_buffer = self.max_buffer_size / connections_size;
 
-        // Calculate headroom: aim for 100% but cap at GPU limit
-        let desired_headroom = cell_count * 2;
+        // Calculate headroom based on population size to avoid VRAM exhaustion:
+        // - Small populations (<1M): 100% headroom (2x)
+        // - Medium populations (1-3M): 50% headroom (1.5x)
+        // - Large populations (>3M): 25% headroom (1.25x)
+        // This prevents "Device lost" errors during reallocation on 8GB GPUs
+        let headroom_factor = if cell_count > 3_000_000 {
+            1.25 // 25% headroom for >3M cells
+        } else if cell_count > 1_000_000 {
+            1.5 // 50% headroom for 1-3M cells
+        } else {
+            2.0 // 100% headroom for <1M cells
+        };
+        let desired_headroom = (cell_count as f64 * headroom_factor) as usize;
         let cell_count_with_headroom = desired_headroom.min(max_cells_in_buffer);
-        let dna_count_with_headroom = (dna_count * 2).min(max_cells_in_buffer);
+        let dna_count_with_headroom = ((dna_count as f64 * headroom_factor) as usize).min(max_cells_in_buffer);
 
         if cell_count_with_headroom < desired_headroom {
             tracing::warn!("⚠️ GPU buffer limit: headroom reduced from {}M to {}M cells",
                 desired_headroom / 1_000_000, cell_count_with_headroom / 1_000_000);
         }
+        tracing::info!("📊 Headroom: {:.0}% ({} → {} cells)",
+            (headroom_factor - 1.0) * 100.0, cell_count, cell_count_with_headroom);
 
         self.max_cell_count = cell_count_with_headroom;
 
@@ -343,6 +356,12 @@ impl GpuSoABackend {
 
         let sparse_bytes = counter_bytes + indices_bytes;
 
+        // Connection and Prediction buffers (created later but counted here for VRAM estimate)
+        let connection_bytes_est = std::mem::size_of::<CellConnections>() * cell_count_with_headroom;
+        let prediction_bytes_est = std::mem::size_of::<CellPrediction>() * cell_count_with_headroom;
+        // Grid buffer for spatial hashing
+        let grid_bytes_est = TOTAL_REGIONS * 4 * 21; // 21 u32 per region (count + 20 cells)
+
         let total_bytes = energy_bytes
             + position_bytes
             + state_bytes
@@ -351,13 +370,21 @@ impl GpuSoABackend {
             + signals_bytes
             + sparse_bytes
             + indirect_bytes
-            + dna_indices_bytes;
+            + dna_indices_bytes
+            + connection_bytes_est
+            + prediction_bytes_est
+            + grid_bytes_est;
 
+        let total_mb = total_bytes / 1024 / 1024;
         tracing::info!(
-            "🎮 GPU SoA: Allocating {} MB for {} cells (SoA layout)",
-            total_bytes / 1024 / 1024,
-            cell_count
+            "🎮 GPU SoA: Allocating ~{} MB VRAM for {} cells (capacity: {})",
+            total_mb,
+            cell_count,
+            cell_count_with_headroom
         );
+        if total_mb > 6000 {
+            tracing::warn!("⚠️ High VRAM usage ({}MB) - risk of 'Device lost' on 8GB GPUs", total_mb);
+        }
 
         // Create SoA buffers
         self.energy_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -3097,7 +3124,9 @@ impl ComputeBackend for GpuSoABackend {
     }
 
     fn stats(&self) -> BackendStats {
-        self.stats.clone()
+        let mut stats = self.stats.clone();
+        stats.max_capacity = self.max_cell_count;
+        stats
     }
 
     fn sync(&mut self) -> AriaResult<()> {

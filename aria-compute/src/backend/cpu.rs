@@ -489,7 +489,10 @@ impl ComputeBackend for CpuBackend {
     }
 
     fn stats(&self) -> BackendStats {
-        self.stats.clone()
+        let mut stats = self.stats.clone();
+        // CPU backend has no VRAM limit - use a high cap (50M cells ~= 15GB RAM)
+        stats.max_capacity = 50_000_000;
+        stats
     }
 
     fn sync(&mut self) -> AriaResult<()> {

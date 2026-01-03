@@ -144,7 +144,13 @@ impl Substrate {
         let avg_energy = if sampled_alive > 0 { sum_energy / sampled_alive as f32 } else { 0.0 };
 
         // === CONTINUOUS REPRODUCTION (Law of Expansion) ===
-        let safety_cap = target * 2;
+        // Cap population at GPU's max_capacity to prevent VRAM exhaustion and "Device lost" errors
+        let backend_max = self.backend.stats().max_capacity;
+        let safety_cap = if backend_max > 0 {
+            (target * 2).min(backend_max)
+        } else {
+            target * 2
+        };
 
         if alive_count < safety_cap {
             // === SAMPLED reproduction candidates (Session 32) ===
