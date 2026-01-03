@@ -351,10 +351,10 @@ struct CellMetadata { flags: u32, cluster_id: u32, hysteresis: f32, _pad: u32 }
 @group(0) @binding(2) var<storage, read_write> connections: array<CellConnections>;
 @group(0) @binding(3) var<uniform> config: Config;
 
-// Find an existing connection to target, returns slot index or MAX_CONNECTIONS if not found
-fn find_connection(conn: CellConnections, target: u32) -> u32 {
+// Find an existing connection to target_id, returns slot index or MAX_CONNECTIONS if not found
+fn find_connection(conn: CellConnections, target_id: u32) -> u32 {
     for (var i = 0u; i < conn.count; i = i + 1u) {
-        if conn.targets[i] == target {
+        if conn.targets[i] == target_id {
             return i;
         }
     }
