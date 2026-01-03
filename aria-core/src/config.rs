@@ -402,6 +402,11 @@ impl AriaConfig {
     /// Reads:
     /// - ARIA_CELLS: Target population (default: 50000)
     /// - ARIA_BACKEND: "cpu" or "gpu" (default: cpu)
+    /// - ARIA_COST_REST: Base metabolism cost (default: 0.0003)
+    /// - ARIA_COST_SIGNAL: Signal emission cost (default: 0.005)
+    /// - ARIA_SIGNAL_ENERGY_BASE: Base energy from signals (default: 0.10)
+    /// - ARIA_CHILD_ENERGY: Energy given to children (default: 0.50)
+    /// - ARIA_SLEEPING_DRAIN_MULT: Sleeping drain multiplier (default: 1.0)
     pub fn from_env() -> Self {
         let target_cells = std::env::var("ARIA_CELLS")
             .ok()
@@ -412,9 +417,42 @@ impl AriaConfig {
             .map(|s| s.to_lowercase())
             .ok();
 
-        match backend.as_deref() {
+        let mut config = match backend.as_deref() {
             Some("gpu") => Self::gpu_optimized(target_cells),
             _ => Self::cpu_high_performance(target_cells),
+        };
+
+        // Economy tuning parameters
+        if let Ok(val) = std::env::var("ARIA_COST_REST") {
+            if let Ok(v) = val.parse() {
+                config.metabolism.cost_rest = v;
+            }
         }
+        if let Ok(val) = std::env::var("ARIA_COST_SIGNAL") {
+            if let Ok(v) = val.parse() {
+                config.metabolism.cost_signal = v;
+            }
+        }
+        if let Ok(val) = std::env::var("ARIA_SIGNAL_ENERGY_BASE") {
+            if let Ok(v) = val.parse() {
+                config.metabolism.signal_energy_base = v;
+            }
+        }
+        if let Ok(val) = std::env::var("ARIA_CHILD_ENERGY") {
+            if let Ok(v) = val.parse() {
+                config.metabolism.child_energy = v;
+            }
+        }
+
+        config
+    }
+
+    /// Get sleeping drain multiplier from environment
+    /// Returns multiplier for how much sleeping cells drain compared to awake cells
+    pub fn sleeping_drain_multiplier() -> f32 {
+        std::env::var("ARIA_SLEEPING_DRAIN_MULT")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1.0)  // Default: same drain as awake (La Vraie Faim)
     }
 }

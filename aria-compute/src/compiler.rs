@@ -318,8 +318,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var cell_meta = metadata[idx];
     if (cell_meta.flags & FLAG_SLEEPING) != 0u {
         var cell_energy = energies[idx];
-        // Session 31: Increased from 0.1 to 2.0 to kill sleeping cells faster (~3 min survival)
-        cell_energy.energy = cell_energy.energy - config.cost_rest * 2.0;
+        // Session 32: Reduced from 2.0 to 0.5 - sleeping cells conserve energy
+        // This prevents death loop after resurrection (cells need time to receive signals)
+        cell_energy.energy = cell_energy.energy - config.cost_rest * 0.5;
         if cell_energy.energy <= 0.0 { cell_meta.flags = cell_meta.flags | FLAG_DEAD; }
         energies[idx] = cell_energy;
         metadata[idx] = cell_meta;

@@ -330,7 +330,10 @@ impl Substrate {
                         let dna_index = self.dna_pool.len() as u32;
                         self.dna_pool.push(dna);
                         let cell = Cell::new(new_id, dna_index);
-                        let state = CellState::new();
+                        let mut state = CellState::new();
+                        // Give new cells high energy and tension to survive until training
+                        state.energy = self.config.metabolism.energy_cap * 0.8;
+                        state.tension = 0.5;
                         self.cells.push(cell);
                         self.states.push(state);
                     }
@@ -363,7 +366,11 @@ impl Substrate {
                         cell.generation = (*parent_gen as u32) + 1;
 
                         let mut state = CellState::new();
-                        state.energy = self.config.metabolism.child_energy;
+                        // Resurrected cells get FULL energy (not child_energy)
+                        // They need to survive long enough to receive training signals
+                        state.energy = self.config.metabolism.energy_cap * 0.8;
+                        // Give them initial tension to stay awake longer
+                        state.tension = 0.5;
 
                         if let Some(idx) = self.free_slots.pop() {
                             self.cells[idx] = cell;
