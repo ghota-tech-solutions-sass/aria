@@ -161,7 +161,8 @@ def run_trial(params: EconomyParams, duration: int = 120, cells: int = 10000) ->
         populations = []
         energies = []
         resurrections = 0
-        last_pop = 0
+        last_pop = -1  # -1 means not initialized yet
+        first_reading = True
 
         while time.time() - start_time < duration:
             status = check_aria_status()
@@ -172,11 +173,13 @@ def run_trial(params: EconomyParams, duration: int = 120, cells: int = 10000) ->
                 energies.append(energy)
 
                 # Detect resurrection (population jumps after hitting minimum)
-                if last_pop <= 15 and pop > last_pop + 5:
+                # Skip the first reading (initial population creation is not resurrection)
+                if not first_reading and last_pop <= 15 and pop > last_pop + 5:
                     resurrections += 1
                     print(f"  [t={int(time.time()-start_time)}s] RESURRECTION detected: {last_pop} -> {pop}")
 
                 last_pop = pop
+                first_reading = False
 
                 # Early termination if death loop
                 if resurrections >= 5:
@@ -292,12 +295,11 @@ def print_best(results: list):
     print("="*60)
 
     for i, r in enumerate(sorted_results[:5]):
-        print(f"\n#{i+1} Score: {r.score():.1f}")
+        print(f"\n#{i+1} Score: {r.score():.1f} - {r.params.name}")
         print(f"   cost_rest: {r.params.cost_rest}")
         print(f"   signal_energy_base: {r.params.signal_energy_base}")
-        print(f"   sleeping_drain_mult: {r.params.sleeping_drain_mult}")
         print(f"   child_energy: {r.params.child_energy}")
-        print(f"   Population: {r.min_pop} - {r.max_pop}")
+        print(f"   Population: {r.min_population} - {r.max_population}")
         print(f"   Avg Energy: {r.avg_energy:.3f}")
         print(f"   Resurrections: {r.resurrections}")
         print(f"   Stable: {r.stable}")
