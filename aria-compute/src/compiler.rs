@@ -657,7 +657,7 @@ struct CellEnergy { energy: f32, tension: f32, activity_level: f32, _pad: f32 }
 struct CellPosition { position: array<f32, 16> }
 struct SignalFragment { source_id_low: u32, source_id_high: u32, content: array<f32, 8>, position: array<f32, 8>, intensity: f32, _pad: array<f32, 3> }
 struct GridRegion { count: u32, cell_indices: array<u32, 64>, _pad: array<u32, 3> }
-struct SpatialConfig { grid_size: vec3<u32>, max_cells_per_region: u32, min_pos: vec3<f32>, region_size: f32, cell_count: u32, _pad: array<u32, 3> }
+struct SpatialConfig { grid_size: vec3<u32>, max_cells_per_region: u32, min_pos: vec3<f32>, region_size: f32, cell_count: u32, _pad1: u32, _pad2: u32, _pad3: u32 }
 struct Config { energy_cap: f32, reaction_amplification: f32, state_cap: f32, signal_radius: f32, cost_rest: f32, cost_signal: f32, cost_move: f32, cost_divide: f32, signal_energy_base: f32, signal_resonance_factor: f32, energy_gain: f32, tick: u32, cell_count: u32, workgroup_size: u32, _pad: vec2<u32> }
 struct CellConnections { targets: array<u32, 16>, strengths: array<f32, 16>, count: u32, _pad: array<u32, 3> }
 

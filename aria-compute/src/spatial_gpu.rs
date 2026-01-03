@@ -122,7 +122,10 @@ struct SpatialConfig {
     min_pos: vec3<f32>,
     region_size: f32,
     cell_count: u32,
-    _pad: array<u32, 3>,
+    // NOTE: Use separate fields instead of array<u32, 3> for uniform buffer alignment
+    _pad1: u32,
+    _pad2: u32,
+    _pad3: u32,
 }
 
 struct CellPosition {
@@ -229,7 +232,10 @@ struct SpatialConfig {
     min_pos: vec3<f32>,
     region_size: f32,
     cell_count: u32,
-    _pad: array<u32, 3>,
+    // NOTE: Use separate fields instead of array<u32, 3> for uniform buffer alignment
+    _pad1: u32,
+    _pad2: u32,
+    _pad3: u32,
 }
 
 struct Config {
