@@ -396,4 +396,12 @@ impl Trainer {
         }
     }
 
+    /// Get response rate
+    pub fn response_rate(&self) -> f32 {
+        if self.total_sent > 0 {
+            self.total_responses as f32 / self.total_sent as f32
+        } else {
+            0.0
+        }
+    }
 }
