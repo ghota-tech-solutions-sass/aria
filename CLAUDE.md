@@ -41,7 +41,7 @@ cost_divide: 0.12              // Coût parent
 
 // Métabolisme
 cost_rest: 0.0003              // Drain passif par tick
-signal_energy_base: 0.15       // Session 35: augmenté 0.08→0.12→0.15 (population_scale dilue trop)
+signal_energy_base: 0.20       // Session 35: augmenté 0.08→0.20 + fix efficiency [0.5-1.5]
 signal_resonance_factor: 3.0   // Multiplicateur résonance
 signal_radius: 30.0            // Portée en 8D
 
@@ -132,4 +132,5 @@ TPS: ~1000                     // Rate limité dans main.rs
 | **Startup freeze (120k awake)** | Toutes cells awake au démarrage → 90% start sleeping dans `CellState::new()` |
 | **DNA pool 854k entries** | DNA croît sans limite → `compact_dead_cells()` aussi si DNA > 2× cells |
 | **GPU poll blocking** | `device.poll()` sans timeout → ajout timeout 50-100ms + fallback |
-| **Énergie trop diluée** | À 200k cells, `population_scale=0.22` → `signal_energy_base` 0.08→0.15 |
+| **Énergie trop diluée** | À 200k cells, `population_scale=0.22` → `signal_energy_base` 0.08→0.20 |
+| **Efficiency crush** | `efficiency` DNA [0-1] multipliait l'énergie → changé à [0.5-1.5] (bonus pas pénalité) |

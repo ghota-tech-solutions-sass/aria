@@ -61,7 +61,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let semantic_filter = dna_pool[dna_base+3u].w;
 
     let resonance_threshold = 0.05 + gene_resonance * 0.35;
-    let efficiency = gene_efficiency;
+    // Session 35: efficiency was 0-1 (average 0.5), crushing energy gains
+    // Now 0.5-1.5: bad DNA = half energy, good DNA = 1.5x bonus
+    let efficiency = 0.5 + gene_efficiency;
 
     // Stochastic seed: unique per cell per tick
     let noise_seed = idx * 31337u + config.tick * 7919u;
@@ -263,7 +265,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
                         // Calculate Traits from Genes (matching Rust logic)
                         let resonance_threshold = 0.05 + gene_resonance * 0.35; // [0.05, 0.4]
-                        let efficiency = gene_efficiency; // [0.0, 1.0]
+                        // Session 35: efficiency 0.5-1.5 instead of 0-1
+                        let efficiency = 0.5 + gene_efficiency;
 
                         // [DYNAMIC_LOGIC]
                         let dynamic_intensity = intensity * attention_boost;

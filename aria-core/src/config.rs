@@ -148,9 +148,9 @@ impl Default for MetabolismConfig {
             cost_rest: 0.0003,
 
             // Signal energy - must exceed cost_rest for NET POSITIVE growth
-            // Session 35: Increased to 0.15 - population was declining at 0.12
-            // At 200k cells: effective = 0.15 × 0.224 = 0.034 per signal
-            signal_energy_base: 0.15,
+            // Session 35: Increased to 0.20 - still declining at 0.15
+            // At 200k cells: effective = 0.20 × 0.224 = 0.045 per signal
+            signal_energy_base: 0.20,
             signal_resonance_factor: 3.0,   // Good differentiation for selection
         }
     }
