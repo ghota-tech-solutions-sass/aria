@@ -280,28 +280,26 @@ impl ComputeBackend for GpuSoABackend {
     ) -> AriaResult<Vec<(u64, CellAction)>> {
         self.tick += 1;
 
-        // Proactive reallocation at 50% capacity to prevent buffer overflow
-        // Session 34: Changed from 70% to 50% - population can double in crash scenarios
-        let capacity_threshold = (self.max_cell_count as f64 * 0.50) as usize;
-
-        // Also check DNA pool size - it might grow independently
-        let max_data_count = cells.len().max(dna_pool.len());
+        // Proactive reallocation at 80% capacity
+        // Only check cells - DNA pool should be managed separately to avoid REALLOC spam
+        // DNA safety checks in upload_new_dna will prevent overflow
+        let capacity_threshold = (self.max_cell_count as f64 * 0.80) as usize;
 
         let needs_realloc = !self.initialized
-            || max_data_count > self.max_cell_count
-            || (self.initialized && max_data_count > capacity_threshold);
+            || cells.len() > self.max_cell_count
+            || (self.initialized && cells.len() > capacity_threshold);
         let old_count = self.cell_count;
         let new_count = cells.len();
 
         if needs_realloc {
             tracing::info!(
-                "🔄 GPU REALLOC: {} → {} cells, {} DNA (threshold: {}, max_cap: {})",
-                old_count, new_count, dna_pool.len(), capacity_threshold, self.max_cell_count
+                "🔄 GPU REALLOC: {} → {} cells (threshold: {}, max_cap: {})",
+                old_count, new_count, capacity_threshold, self.max_cell_count
             );
-            // Reallocate based on the larger of cells or DNA pool
-            self.init_buffers(max_data_count, dna_pool.len())?;
+            self.init_buffers(new_count, new_count)?;
             self.upload_cells(states);
-            self.upload_dna(dna_pool);
+            // Only upload DNA up to cell count to avoid buffer overflow
+            self.upload_dna(&dna_pool[..new_count.min(dna_pool.len())]);
             self.cell_count = new_count;
         } else if new_count > old_count {
             self.cell_count = new_count;
