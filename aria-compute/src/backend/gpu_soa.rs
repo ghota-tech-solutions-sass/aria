@@ -123,6 +123,11 @@ pub struct GpuSoABackend {
     // Cluster Hysteresis buffer (256 clusters × (activity_sum + count))
     cluster_stats_buffer: Option<wgpu::Buffer>,
 
+    // GPU Lifecycle Slot System buffers
+    free_list_buffer: Option<wgpu::Buffer>,           // Available slot indices
+    lifecycle_counters_buffer: Option<wgpu::Buffer>,  // Atomic counters
+    lifecycle_counters_staging: Option<wgpu::Buffer>, // For reading counters
+
     // Staging buffers for readback
     energy_staging: Option<wgpu::Buffer>,
     metadata_staging: Option<wgpu::Buffer>,
@@ -152,6 +157,11 @@ pub struct GpuSoABackend {
     cluster_stats_pipeline: Option<wgpu::ComputePipeline>,
     cluster_hysteresis_pipeline: Option<wgpu::ComputePipeline>,
 
+    // GPU Lifecycle pipelines
+    death_pipeline: Option<wgpu::ComputePipeline>,
+    birth_pipeline: Option<wgpu::ComputePipeline>,
+    reset_lifecycle_counters_pipeline: Option<wgpu::ComputePipeline>,
+
     // Bind group layouts
     main_bind_group_layout: Option<wgpu::BindGroupLayout>,
     sparse_cell_bind_group_layout: Option<wgpu::BindGroupLayout>,
@@ -172,6 +182,9 @@ pub struct GpuSoABackend {
     // Cluster Hysteresis bind group layouts
     cluster_stats_bind_group_layout: Option<wgpu::BindGroupLayout>,
     cluster_hysteresis_bind_group_layout: Option<wgpu::BindGroupLayout>,
+
+    // GPU Lifecycle bind group layouts
+    lifecycle_bind_group_layout: Option<wgpu::BindGroupLayout>,
 
     // Sparse dispatch state
     use_indirect_dispatch: bool,
@@ -294,10 +307,17 @@ impl GpuSoABackend {
             hebbian_attraction_bind_group_layout: None,
             cluster_stats_bind_group_layout: None,
             cluster_hysteresis_bind_group_layout: None,
+            lifecycle_bind_group_layout: None,
             connection_buffer: None,
             prediction_buffer: None,
             centroid_buffer: None,
             cluster_stats_buffer: None,
+            free_list_buffer: None,
+            lifecycle_counters_buffer: None,
+            lifecycle_counters_staging: None,
+            death_pipeline: None,
+            birth_pipeline: None,
+            reset_lifecycle_counters_pipeline: None,
             use_indirect_dispatch,
             last_active_count: 0,
             cell_count: 0,
@@ -601,6 +621,73 @@ impl GpuSoABackend {
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_DST
                 | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        }));
+
+        // ================================================================
+        // GPU LIFECYCLE SLOT SYSTEM
+        // ================================================================
+
+        // Free list buffer: stores available slot indices
+        // Size: max_capacity × u32 (4 bytes each)
+        let free_list_bytes = std::mem::size_of::<u32>() * cell_count_with_headroom;
+        tracing::info!(
+            "🔄 Lifecycle: Allocating {} MB for free_list ({} slots)",
+            free_list_bytes / 1024 / 1024,
+            cell_count_with_headroom
+        );
+
+        self.free_list_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Free List"),
+            size: free_list_bytes as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        }));
+
+        // Initialize free list with indices [cell_count..max_capacity)
+        // These are the "empty" slots that can be used for new births
+        let initial_free_slots: Vec<u32> = (cell_count as u32..cell_count_with_headroom as u32).collect();
+        if !initial_free_slots.is_empty() {
+            self.queue.write_buffer(
+                self.free_list_buffer.as_ref().unwrap(),
+                0,
+                bytemuck::cast_slice(&initial_free_slots),
+            );
+        }
+
+        // Lifecycle counters buffer: atomic counters for GPU-side lifecycle
+        // Size: 32 bytes (LifecycleCounters struct)
+        use aria_core::LifecycleCounters;
+        let lifecycle_counters_bytes = std::mem::size_of::<LifecycleCounters>();
+        self.lifecycle_counters_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Lifecycle Counters"),
+            size: lifecycle_counters_bytes as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        }));
+
+        // Initialize counters
+        let initial_counters = LifecycleCounters::new(
+            cell_count_with_headroom,
+            cell_count,
+            self.config.metabolism.reproduction_threshold,
+            self.config.metabolism.child_energy,
+        );
+        self.queue.write_buffer(
+            self.lifecycle_counters_buffer.as_ref().unwrap(),
+            0,
+            bytemuck::bytes_of(&initial_counters),
+        );
+
+        // Staging buffer for reading counters back to CPU (fast stats)
+        self.lifecycle_counters_staging = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Lifecycle Counters Staging"),
+            size: lifecycle_counters_bytes as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         }));
 
@@ -1502,6 +1589,99 @@ impl GpuSoABackend {
             },
         ));
 
+        // ================================================================
+        // GPU LIFECYCLE SLOT SYSTEM BIND GROUP LAYOUTS
+        // ================================================================
+
+        // Death shader layout: energies(read), metadata(rw), free_list(rw), counters(rw)
+        // Birth shader layout: energies(rw), metadata(rw), positions(rw), dna_pool(rw),
+        //                      dna_indices(rw), free_list(rw), counters(rw)
+        // We use one combined layout for both (birth uses all, death uses subset)
+        self.lifecycle_bind_group_layout = Some(self.device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("Lifecycle Bind Group Layout"),
+                entries: &[
+                    // 0: energies (read-write for birth, read for death)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 1: metadata (read-write)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 2: positions (read-write for birth)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 3: dna_pool (read-write for birth)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 4: dna_indices (read-write for birth)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 5: free_list (read-write)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // 6: lifecycle_counters (read-write)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            },
+        ));
+
         Ok(())
     }
 
@@ -1882,6 +2062,107 @@ impl GpuSoABackend {
 
             tracing::info!("📊 Cluster Hysteresis pipelines created");
         }
+
+        // ================================================================
+        // GPU LIFECYCLE SLOT SYSTEM PIPELINES
+        // ================================================================
+
+        let lifecycle_layout = self
+            .lifecycle_bind_group_layout
+            .as_ref()
+            .ok_or_else(|| AriaError::gpu("Lifecycle bind group layout not created"))?;
+
+        let lifecycle_pipeline_layout = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Lifecycle Pipeline Layout"),
+                bind_group_layouts: &[lifecycle_layout],
+                immediate_size: 0,
+            });
+
+        // Death shader pipeline
+        let death_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Death Shader"),
+            source: wgpu::ShaderSource::Wgsl(self.compiler.get_death_shader().into()),
+        });
+
+        self.death_pipeline = Some(
+            self.device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("Death Pipeline"),
+                    layout: Some(&lifecycle_pipeline_layout),
+                    module: &death_shader,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                }),
+        );
+
+        // Birth shader pipeline
+        let birth_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Birth Shader"),
+            source: wgpu::ShaderSource::Wgsl(self.compiler.get_birth_shader().into()),
+        });
+
+        self.birth_pipeline = Some(
+            self.device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("Birth Pipeline"),
+                    layout: Some(&lifecycle_pipeline_layout),
+                    module: &birth_shader,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                }),
+        );
+
+        // Reset lifecycle counters pipeline (single workgroup)
+        // This shader only needs the counters buffer, but we reuse the layout
+        let reset_shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Reset Lifecycle Counters Shader"),
+            source: wgpu::ShaderSource::Wgsl(self.compiler.get_reset_lifecycle_counters_shader().into()),
+        });
+
+        // Create a simpler layout for just the counters
+        let reset_counters_layout = self.device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("Reset Counters Bind Group Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            },
+        );
+
+        let reset_counters_pipeline_layout = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Reset Counters Pipeline Layout"),
+                bind_group_layouts: &[&reset_counters_layout],
+                immediate_size: 0,
+            });
+
+        self.reset_lifecycle_counters_pipeline = Some(
+            self.device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("Reset Lifecycle Counters Pipeline"),
+                    layout: Some(&reset_counters_pipeline_layout),
+                    module: &reset_shader,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                }),
+        );
+
+        tracing::info!("🔄 GPU Lifecycle pipelines created (death, birth, reset)");
 
         tracing::debug!("🎮 GPU SoA pipelines created");
         Ok(())
@@ -2292,6 +2573,88 @@ impl GpuSoABackend {
         }))
     }
 
+    /// Create bind group for lifecycle shaders (death/birth)
+    fn create_lifecycle_bind_group(&self) -> Option<wgpu::BindGroup> {
+        let layout = self.lifecycle_bind_group_layout.as_ref()?;
+        let energy_buffer = self.energy_buffer.as_ref()?;
+        let metadata_buffer = self.metadata_buffer.as_ref()?;
+        let position_buffer = self.position_buffer.as_ref()?;
+        let dna_buffer = self.dna_buffer.as_ref()?;
+        let dna_indices_buffer = self.dna_indices_buffer.as_ref()?;
+        let free_list_buffer = self.free_list_buffer.as_ref()?;
+        let lifecycle_counters_buffer = self.lifecycle_counters_buffer.as_ref()?;
+
+        Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Lifecycle Bind Group"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: energy_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: metadata_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: position_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: dna_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: dna_indices_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: free_list_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: lifecycle_counters_buffer.as_entire_binding(),
+                },
+            ],
+        }))
+    }
+
+    /// Create bind group for reset lifecycle counters shader
+    fn create_reset_counters_bind_group(&self) -> Option<wgpu::BindGroup> {
+        let lifecycle_counters_buffer = self.lifecycle_counters_buffer.as_ref()?;
+
+        // Create a simple layout with just the counters buffer
+        let layout = self.device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                label: Some("Reset Counters Bind Group Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            },
+        );
+
+        Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Reset Counters Bind Group"),
+            layout: &layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: lifecycle_counters_buffer.as_entire_binding(),
+                },
+            ],
+        }))
+    }
+
     /// Create bind group for prediction evaluate pass
     fn create_prediction_evaluate_bind_group(&self) -> Option<wgpu::BindGroup> {
         let layout = self.prediction_evaluate_bind_group_layout.as_ref()?;
@@ -2571,6 +2934,53 @@ impl GpuSoABackend {
         Ok(count)
     }
 
+    /// Read lifecycle counters from GPU (alive_count, deaths_this_tick, births_this_tick)
+    /// Returns (alive_count, free_count, deaths_this_tick, births_this_tick)
+    pub fn read_lifecycle_counters(&self) -> AriaResult<(u32, u32, u32, u32)> {
+        let counters_buffer = self
+            .lifecycle_counters_buffer
+            .as_ref()
+            .ok_or_else(|| AriaError::gpu("Lifecycle counters buffer not initialized"))?;
+        let staging_buffer = self
+            .lifecycle_counters_staging
+            .as_ref()
+            .ok_or_else(|| AriaError::gpu("Lifecycle counters staging not initialized"))?;
+
+        use aria_core::LifecycleCounters;
+        let size = std::mem::size_of::<LifecycleCounters>() as u64;
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Read Lifecycle Counters"),
+            });
+        encoder.copy_buffer_to_buffer(counters_buffer, 0, staging_buffer, 0, size);
+        self.queue.submit(Some(encoder.finish()));
+
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        let _ = self.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+
+        rx.recv()
+            .map_err(|e| AriaError::gpu(format!("Failed to receive map result: {}", e)))?
+            .map_err(|e| AriaError::gpu(format!("Failed to map buffer: {:?}", e)))?;
+
+        let (free_count, alive_count, births, deaths) = {
+            let data = buffer_slice.get_mapped_range();
+            let counters: &LifecycleCounters = bytemuck::from_bytes(&data);
+            (counters.free_count, counters.alive_count, counters.births_this_tick, counters.deaths_this_tick)
+        };
+
+        staging_buffer.unmap();
+        Ok((alive_count, free_count, deaths, births))
+    }
+
     fn create_main_bind_group(&self) -> AriaResult<wgpu::BindGroup> {
         let layout = self
             .main_bind_group_layout
@@ -2734,6 +3144,9 @@ impl ComputeBackend for GpuSoABackend {
 
         // Run signal propagation
         if !signals.is_empty() {
+            if self.tick % 1000 == 0 {
+                tracing::info!("⚡ GPU: {} signals to {} cells (spatial_hash={})", signals.len(), self.cell_count, self.use_spatial_hash);
+            }
             let mut encoder = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -2888,6 +3301,42 @@ impl ComputeBackend for GpuSoABackend {
             }
         }
 
+        // ================================================================
+        // GPU LIFECYCLE: Death shader marks dead cells (energy <= 0)
+        // ================================================================
+        // DISABLED: Causes population collapse due to GPU/CPU lifecycle desync
+        // The GPU marks cells with FLAG_DEAD but CPU lifecycle.rs doesn't know,
+        // leading to desynchronization where CPU keeps Vec<Cell> at 50k but GPU
+        // thinks most are dead. Re-enable when CPU lifecycle is fully removed.
+        // Run every tick after energy updates (cell update + sleeping drain)
+        // This marks cells with FLAG_DEAD and pushes their slots to free_list
+        let gpu_lifecycle_enabled = false;
+        if gpu_lifecycle_enabled {
+        if let Some(lifecycle_bind_group) = self.create_lifecycle_bind_group() {
+            if let Some(death_pipeline) = self.death_pipeline.as_ref() {
+                let mut encoder = self
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Death Pass"),
+                    });
+
+                {
+                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("Death Shader"),
+                        timestamp_writes: None,
+                    });
+                    pass.set_pipeline(death_pipeline);
+                    pass.set_bind_group(0, &lifecycle_bind_group, &[]);
+                    // Dispatch for all cells (max_cell_count, not just alive)
+                    let workgroups = (self.max_cell_count as u32 + 255) / 256;
+                    pass.dispatch_workgroups(workgroups, 1, 1);
+                }
+
+                self.queue.submit(Some(encoder.finish()));
+            }
+        }
+        } // gpu_lifecycle_enabled
+
         // PREDICTION EVALUATE: Run every tick to evaluate predictions and apply energy rewards/penalties
         // "Surprise costs energy" - cells that predict correctly gain energy
         if let Some(pred_bind_group) = self.create_prediction_evaluate_bind_group() {
@@ -3034,7 +3483,8 @@ impl ComputeBackend for GpuSoABackend {
 
         // Periodic download for CPU sync
         // Session 31: Reduced from 100 to 1000 ticks for better performance
-        let should_download = self.tick % 1000 == 0 || needs_realloc;
+        // Session 32 Part 11: Reduced to 5000 ticks - download is blocking ~2.5MB
+        let should_download = self.tick % 5000 == 0 || needs_realloc;
         let mut actions = Vec::new();
 
         if should_download {

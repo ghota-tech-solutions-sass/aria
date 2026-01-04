@@ -83,6 +83,11 @@ impl ShaderCompiler {
     // Cluster Hysteresis shaders (GPU migration)
     pub fn get_cluster_stats_shader(&self) -> &str { CLUSTER_STATS_SHADER }
     pub fn get_cluster_hysteresis_shader(&self) -> &str { CLUSTER_HYSTERESIS_SHADER }
+
+    // GPU Lifecycle Slot System shaders
+    pub fn get_death_shader(&self) -> &str { DEATH_SHADER }
+    pub fn get_birth_shader(&self) -> &str { BIRTH_SHADER }
+    pub fn get_reset_lifecycle_counters_shader(&self) -> &str { RESET_LIFECYCLE_COUNTERS_SHADER }
 }
 
 // ============================================================================
@@ -213,38 +218,163 @@ struct Config {
     signal_energy_base: f32, signal_resonance_factor: f32, energy_gain: f32,
     tick: u32, cell_count: u32, workgroup_size: u32, _pad: vec2<u32>
 }
+struct SignalFragment { source_id_low: u32, source_id_high: u32, content: array<f32, 8>, position: array<f32, 8>, intensity: f32, _pad: array<f32, 3> }
 const FLAG_SLEEPING: u32 = 1u;
 const FLAG_DEAD: u32 = 32u;
 struct CellMetadata { flags: u32, cluster_id: u32, hysteresis: f32, _pad: u32 }
+struct CellPosition { position: array<f32, 16> }
+
 @group(0) @binding(0) var<storage, read_write> energies: array<CellEnergy>;
-@group(0) @binding(1) var<storage, read> positions: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read> positions: array<CellPosition>;
 @group(0) @binding(2) var<storage, read_write> states: array<vec4<f32>>;
 @group(0) @binding(3) var<storage, read_write> metadata: array<CellMetadata>;
 @group(0) @binding(4) var<storage, read> dna_pool: array<vec4<f32>>;
-@group(0) @binding(5) var<storage, read> signals: array<vec4<f32>>;
+@group(0) @binding(5) var<storage, read> signals: array<SignalFragment>;
 @group(0) @binding(6) var<uniform> config: Config;
 @group(0) @binding(7) var<storage, read> dna_indices: array<u32>;
+
+// Simple hash for stochastic noise (same signal != same result)
+fn hash(seed: u32) -> f32 {
+    var x = seed;
+    x = x ^ (x >> 16u);
+    x = x * 0x7feb352du;
+    x = x ^ (x >> 15u);
+    x = x * 0x846ca68bu;
+    x = x ^ (x >> 16u);
+    return f32(x & 0xFFFFu) / 65535.0;  // [0, 1]
+}
+
+fn calculate_resonance(signal_content: array<f32, 8>, state0: vec4<f32>, state1: vec4<f32>) -> f32 {
+    var dot = 0.0; var norm_sig = 0.0; var norm_state = 0.0;
+    for (var i = 0u; i < 4u; i++) { dot += signal_content[i] * state0[i]; norm_sig += signal_content[i] * signal_content[i]; norm_state += state0[i] * state0[i]; }
+    for (var i = 0u; i < 4u; i++) { dot += signal_content[i+4u] * state1[i]; norm_sig += signal_content[i+4u] * signal_content[i+4u]; norm_state += state1[i] * state1[i]; }
+    let denom = sqrt(norm_sig * norm_state);
+    if denom > 0.001 { return (dot / denom + 1.0) * 0.5; }
+    return 0.5;
+}
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let idx = id.x;
     if idx >= config.cell_count { return; }
-    let cell_meta = metadata[idx];
-    if (cell_meta.flags & (FLAG_SLEEPING | FLAG_DEAD)) != 0u { return; }
+    var cell_meta = metadata[idx];
+    if (cell_meta.flags & FLAG_DEAD) != 0u { return; }
     var cell_energy = energies[idx];
+    let cell_pos = positions[idx];
+
     let dna_idx = dna_indices[idx];
     let dna_base = dna_idx * 5u;
-    let reflexivity_gain = dna_pool[dna_base+1u].w; // thresholds[7]
-    let attention_focus = dna_pool[dna_base+3u].z;  // reactions[6]
-    let semantic_filter = dna_pool[dna_base+3u].w;  // reactions[7]
+    let gene_efficiency = dna_pool[dna_base+1u].x;
+    let gene_resonance = dna_pool[dna_base+1u].y;
+    let reflexivity_gain = dna_pool[dna_base+1u].w;
+    let attention_focus = dna_pool[dna_base+3u].z;
+    let semantic_filter = dna_pool[dna_base+3u].w;
+
+    let resonance_threshold = 0.05 + gene_resonance * 0.35;
+    let efficiency = gene_efficiency;
+
+    // Stochastic seed: unique per cell per tick
+    let noise_seed = idx * 31337u + config.tick * 7919u;
 
     // [DYNAMIC_LOGIC]
 
-    if cell_energy.tension > 0.8 {
-        cell_energy.activity_level += 0.5 * reflexive_boost;
-        cell_energy.energy -= config.cost_signal;
+    // === DYNAMIC SIGNAL RADIUS (Session 32 Part 11) ===
+    // At low population, signals must reach further to find cells
+    // This prevents death spirals when cells are spread thin in 8D space
+    let density_factor = 10000.0 / max(f32(config.cell_count), 1000.0);
+    let effective_radius = config.signal_radius * sqrt(density_factor);
+    // At 50k cells: radius = 30 * sqrt(0.2) = 13.4 (tighter)
+    // At 10k cells: radius = 30 * sqrt(1.0) = 30 (baseline)
+    // At 1k cells:  radius = 30 * sqrt(10) = 95 (wider to find cells)
+    // At 500 cells: radius = 30 * sqrt(20) = 134 (very wide)
+
+    // === WAVE PROPAGATION ===
+    // Signals propagate like waves: intensity decreases with distance
+    // Cells near the signal source receive it first and strongest
+    let signal_count = arrayLength(&signals);
+    for (var s = 0u; s < signal_count; s++) {
+        let signal = signals[s];
+        if signal.intensity < 0.001 { continue; }
+
+        // Calculate distance in semantic space (8D)
+        var dist_sq = 0.0;
+        for (var d = 0u; d < 8u; d++) {
+            let diff = cell_pos.position[d] - signal.position[d];
+            dist_sq += diff * diff;
+        }
+        let dist = sqrt(dist_sq);
+
+        // Skip if outside dynamic wave radius
+        if dist >= effective_radius { continue; }
+
+        // Wave attenuation: stronger near source, weaker far away
+        let attenuation = 1.0 - (dist / effective_radius);
+
+        // Add stochastic noise (±10%) so same signal != same result
+        let noise = (hash(noise_seed + s) - 0.5) * 0.2;  // [-0.1, 0.1]
+        let noisy_attenuation = clamp(attenuation + noise, 0.0, 1.0);
+
+        let intensity = signal.intensity * noisy_attenuation * config.reaction_amplification;
+
+        // Wake up sleeping cells if wave is strong enough
+        if (cell_meta.flags & FLAG_SLEEPING) != 0u && intensity > 0.1 {
+            cell_meta.flags = cell_meta.flags & ~FLAG_SLEEPING;
+            cell_energy.activity_level = 0.5;
+            cell_energy.tension = 0.2;
+        }
+
+        // Only awake cells process signals
+        if (cell_meta.flags & FLAG_SLEEPING) == 0u {
+            // Update cell state from signal with noise
+            var state0 = states[idx * 8u];
+            var state1 = states[idx * 8u + 1u];
+            for (var j = 0u; j < 4u; j++) {
+                let content_noise = (hash(noise_seed + s * 8u + j) - 0.5) * 0.1;
+                state0[j] += (signal.content[j] + content_noise) * intensity;
+            }
+            for (var j = 0u; j < 4u; j++) {
+                let content_noise = (hash(noise_seed + s * 8u + 4u + j) - 0.5) * 0.1;
+                state1[j] += (signal.content[j + 4u] + content_noise) * intensity;
+            }
+            states[idx * 8u] = state0;
+            states[idx * 8u + 1u] = state1;
+
+            // Calculate resonance for energy
+            let resonance = calculate_resonance(signal.content, state0, state1);
+
+            // LA VRAIE FAIM: Only resonance feeds
+            // Population scaling: more cells = more energy per signal (sqrt scaling)
+            // At 10k: scale=1.0, at 40k: scale=2.0, at 100k: scale=3.2
+            let population_scale = sqrt(max(f32(config.cell_count), 10000.0) / 10000.0);
+
+            if resonance > resonance_threshold {
+                let understanding = (resonance - resonance_threshold) / (1.0 - resonance_threshold);
+                let energy_gain = config.signal_energy_base
+                    * signal.intensity
+                    * noisy_attenuation
+                    * understanding
+                    * efficiency
+                    * population_scale
+                    * (1.0 + resonance * config.signal_resonance_factor);
+                cell_energy.energy = min(cell_energy.energy + energy_gain, config.energy_cap);
+            }
+
+            // Build tension from wave (cells want to re-emit)
+            cell_energy.tension += intensity * 0.1;
+            cell_energy.activity_level += intensity;
+        }
     }
+
+    // High tension = cell wants to emit (propagate the wave)
+    // reflexivity_gain is already read from DNA, use it directly
+    if cell_energy.tension > 0.8 {
+        cell_energy.activity_level += 0.5 * (0.5 + reflexivity_gain);
+        cell_energy.energy -= config.cost_signal;
+        cell_energy.tension -= 0.3;  // Release some tension after "emitting"
+    }
+
     energies[idx] = cell_energy;
+    metadata[idx] = cell_meta;
 }
 "#;
 
@@ -969,9 +1099,15 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if signal_idx >= arrayLength(&signals) { return; }
     let signal = signals[signal_idx];
     if signal.intensity < 0.001 { return; }
+
+    // === DYNAMIC SIGNAL RADIUS (Session 32 Part 11) ===
+    // At low population, signals must reach further to find cells
+    let density_factor = 10000.0 / max(f32(config.cell_count), 1000.0);
+    let effective_radius = config.signal_radius * sqrt(density_factor);
+
     let signal_pos = vec3<f32>(signal.content[0], signal.content[1], signal.content[2]);
     let signal_grid = position_to_grid(signal_pos);
-    let grid_radius = i32(ceil(config.signal_radius / spatial_config.region_size));
+    let grid_radius = i32(ceil(effective_radius / spatial_config.region_size));
     for (var dx = -grid_radius; dx <= grid_radius; dx++) {
         for (var dy = -grid_radius; dy <= grid_radius; dy++) {
             for (var dz = -grid_radius; dz <= grid_radius; dz++) {
@@ -989,8 +1125,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                     var dist_sq = 0.0;
                     for (var d = 0u; d < 8u; d++) { let diff = cell_pos.position[d] - signal.position[d]; dist_sq += diff * diff; }
                     let dist = sqrt(dist_sq);
-                    if dist >= config.signal_radius { continue; }
-                    let attenuation = 1.0 - (dist / config.signal_radius);
+                    if dist >= effective_radius { continue; }
+                    let attenuation = 1.0 - (dist / effective_radius);
                     let intensity = signal.intensity * attenuation * config.reaction_amplification;
                     if (cell_meta.flags & FLAG_SLEEPING) != 0u && intensity > 0.1 { cell_meta.flags = cell_meta.flags & ~FLAG_SLEEPING; cell_energy.activity_level = 0.5; cell_energy.tension = 0.2; }
                     if (cell_meta.flags & FLAG_SLEEPING) == 0u {
@@ -1020,6 +1156,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
                         let resonance = calculate_resonance(signal.content, state0, state1);
 
+                        // LA VRAIE FAIM: Population scaling - more cells = more energy per signal
+                        // sqrt scaling: 10k=1.0, 40k=2.0, 100k=3.2
+                        let population_scale = sqrt(max(f32(config.cell_count), 10000.0) / 10000.0);
+
                         // LAW: Picky Eaters vs Trash Eaters
                         if resonance > resonance_threshold {
                             // Scale understanding from [Threshold, 1.0] -> [0.0, 1.0]
@@ -1029,6 +1169,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
                                 * dynamic_intensity
                                 * understanding
                                 * efficiency
+                                * population_scale
                                 * (1.0 + resonance * config.signal_resonance_factor);
 
                             cell_energy.energy = min(cell_energy.energy + energy_gain, config.energy_cap);
@@ -1080,5 +1221,274 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     // Use atomicAdd if possible or separate reduction pass
     // For now, simple stable placeholder
     clusters[cid].total_activity += energy.activity_level;
+}
+"#;
+
+// ============================================================================
+// GPU LIFECYCLE SLOT SYSTEM SHADERS
+// ============================================================================
+
+/// Death shader: marks dead cells and returns their slots to the free list
+///
+/// Called each tick to:
+/// 1. Check if cell energy <= 0
+/// 2. If not already dead, mark as dead
+/// 3. Push slot index to free_list (atomic)
+/// 4. Decrement alive_count, increment deaths_this_tick
+const DEATH_SHADER: &str = r#"
+struct CellEnergy {
+    energy: f32,
+    tension: f32,
+    activity_level: f32,
+    _pad: f32,
+}
+
+struct CellMetadata {
+    flags: u32,
+    cluster_id: u32,
+    hysteresis: f32,
+    _pad: u32,
+}
+
+struct LifecycleCounters {
+    free_count: atomic<u32>,
+    alive_count: atomic<u32>,
+    births_this_tick: atomic<u32>,
+    deaths_this_tick: atomic<u32>,
+    max_births_per_tick: u32,
+    max_capacity: u32,
+    reproduction_threshold_u32: u32,
+    child_energy_u32: u32,
+}
+
+struct CellPosition {
+    position: array<f32, 16>,
+}
+
+struct DNA {
+    genes: array<f32, 16>,
+    lineage_id_low: u32,
+    lineage_id_high: u32,
+    generation: u32,
+    structural_checksum: u32,
+}
+
+const FLAG_DEAD: u32 = 32u; // 1 << 5
+
+// Match lifecycle bind group layout (same as birth shader)
+// All buffers are read_write to match the unified layout
+@group(0) @binding(0) var<storage, read_write> energies: array<CellEnergy>;
+@group(0) @binding(1) var<storage, read_write> metadata: array<CellMetadata>;
+@group(0) @binding(2) var<storage, read_write> positions: array<CellPosition>;  // unused
+@group(0) @binding(3) var<storage, read_write> dna_pool: array<DNA>;           // unused
+@group(0) @binding(4) var<storage, read_write> dna_indices: array<u32>;        // unused
+@group(0) @binding(5) var<storage, read_write> free_list: array<u32>;
+@group(0) @binding(6) var<storage, read_write> counters: LifecycleCounters;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let idx = id.x;
+    let max_cells = counters.max_capacity;
+    if idx >= max_cells { return; }
+
+    let cell_meta = metadata[idx];
+
+    // Already dead - skip
+    if (cell_meta.flags & FLAG_DEAD) != 0u { return; }
+
+    let energy = energies[idx].energy;
+
+    // Cell dies when energy <= 0
+    if energy <= 0.0 {
+        // Mark as dead (atomic read-modify-write pattern for flags)
+        metadata[idx].flags = cell_meta.flags | FLAG_DEAD;
+
+        // Push slot to free list
+        let free_idx = atomicAdd(&counters.free_count, 1u);
+        if free_idx < max_cells {
+            free_list[free_idx] = idx;
+        }
+
+        // Update counters
+        atomicSub(&counters.alive_count, 1u);
+        atomicAdd(&counters.deaths_this_tick, 1u);
+    }
+}
+"#;
+
+/// Birth shader: creates new cells from ready parents
+///
+/// Called each tick after death shader to:
+/// 1. Check if cell has enough energy to reproduce
+/// 2. Try to claim a birth slot (atomic counter)
+/// 3. Pop a slot from free_list (atomic)
+/// 4. Initialize child cell with mutated DNA
+/// 5. Reduce parent energy
+const BIRTH_SHADER: &str = r#"
+struct CellEnergy {
+    energy: f32,
+    tension: f32,
+    activity_level: f32,
+    _pad: f32,
+}
+
+struct CellMetadata {
+    flags: u32,
+    cluster_id: u32,
+    hysteresis: f32,
+    _pad: u32,
+}
+
+struct CellPosition {
+    position: array<f32, 16>,
+}
+
+struct DNA {
+    genes: array<f32, 16>,
+    lineage_id_low: u32,
+    lineage_id_high: u32,
+    generation: u32,
+    structural_checksum: u32,
+}
+
+struct LifecycleCounters {
+    free_count: atomic<u32>,
+    alive_count: atomic<u32>,
+    births_this_tick: atomic<u32>,
+    deaths_this_tick: atomic<u32>,
+    max_births_per_tick: u32,
+    max_capacity: u32,
+    reproduction_threshold_u32: u32,
+    child_energy_u32: u32,
+}
+
+const FLAG_DEAD: u32 = 32u;
+const FLAG_SLEEPING: u32 = 1u;
+
+@group(0) @binding(0) var<storage, read_write> energies: array<CellEnergy>;
+@group(0) @binding(1) var<storage, read_write> metadata: array<CellMetadata>;
+@group(0) @binding(2) var<storage, read_write> positions: array<CellPosition>;
+@group(0) @binding(3) var<storage, read_write> dna_pool: array<DNA>;
+@group(0) @binding(4) var<storage, read_write> dna_indices: array<u32>;
+@group(0) @binding(5) var<storage, read_write> free_list: array<u32>;
+@group(0) @binding(6) var<storage, read_write> counters: LifecycleCounters;
+
+// Simple hash function for stochastic mutation
+fn hash(seed: u32) -> f32 {
+    var x = seed;
+    x = x ^ (x >> 16u);
+    x = x * 0x7feb352du;
+    x = x ^ (x >> 15u);
+    x = x * 0x846ca68bu;
+    x = x ^ (x >> 16u);
+    return f32(x & 0xFFFFu) / 65535.0;
+}
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let parent_idx = id.x;
+    let max_cells = counters.max_capacity;
+    if parent_idx >= max_cells { return; }
+
+    let parent_meta = metadata[parent_idx];
+
+    // Skip dead or sleeping cells
+    if (parent_meta.flags & FLAG_DEAD) != 0u { return; }
+    if (parent_meta.flags & FLAG_SLEEPING) != 0u { return; }
+
+    let parent_energy = energies[parent_idx].energy;
+    let reproduction_threshold = bitcast<f32>(counters.reproduction_threshold_u32);
+    let child_energy_config = bitcast<f32>(counters.child_energy_u32);
+
+    // Check if ready to reproduce
+    if parent_energy < reproduction_threshold { return; }
+
+    // Try to claim a birth slot (limited per tick)
+    let birth_claim = atomicAdd(&counters.births_this_tick, 1u);
+    if birth_claim >= counters.max_births_per_tick { return; }
+
+    // Try to get a free slot
+    let free_count = atomicSub(&counters.free_count, 1u);
+    if free_count == 0u {
+        // No free slots available, restore counter
+        atomicAdd(&counters.free_count, 1u);
+        return;
+    }
+
+    // Pop slot from free list (free_count was pre-decremented, so use free_count - 1)
+    let child_idx = free_list[free_count - 1u];
+
+    // Sanity check
+    if child_idx >= max_cells {
+        atomicAdd(&counters.free_count, 1u);
+        return;
+    }
+
+    // === Initialize child cell ===
+
+    // Energy: child gets child_energy, parent pays the cost
+    let child_energy = child_energy_config;
+    energies[child_idx] = CellEnergy(child_energy, 0.0, 1.0, 0.0);
+    energies[parent_idx].energy = parent_energy - child_energy;
+
+    // Metadata: child starts alive and awake
+    metadata[child_idx] = CellMetadata(0u, 0u, 0.0, 0u);
+
+    // Position: child near parent with small offset
+    var child_pos: CellPosition;
+    let parent_pos = positions[parent_idx];
+    let noise_seed = parent_idx * 16u + counters.births_this_tick;
+    for (var i = 0u; i < 16u; i = i + 1u) {
+        let noise = (hash(noise_seed + i) - 0.5) * 0.2; // ±0.1
+        child_pos.position[i] = parent_pos.position[i] + noise;
+    }
+    positions[child_idx] = child_pos;
+
+    // DNA: copy parent DNA with mutation
+    let parent_dna_idx = dna_indices[parent_idx];
+    let parent_dna = dna_pool[parent_dna_idx];
+
+    var child_dna: DNA;
+    // Mutate genes slightly
+    for (var i = 0u; i < 16u; i = i + 1u) {
+        let mutation = (hash(noise_seed + 100u + i) - 0.5) * 0.1; // ±5% mutation
+        child_dna.genes[i] = clamp(parent_dna.genes[i] + mutation, 0.0, 1.0);
+    }
+    child_dna.lineage_id_low = parent_dna.lineage_id_low;
+    child_dna.lineage_id_high = parent_dna.lineage_id_high;
+    child_dna.generation = parent_dna.generation + 1u;
+    child_dna.structural_checksum = parent_dna.structural_checksum; // Could mutate too
+
+    // Store child DNA (reuse same index for simplicity, or could allocate new)
+    // For now, child uses its own slot index as DNA index (1:1 mapping)
+    dna_pool[child_idx] = child_dna;
+    dna_indices[child_idx] = child_idx;
+
+    // Update alive count
+    atomicAdd(&counters.alive_count, 1u);
+}
+"#;
+
+/// Reset lifecycle counters: called at the start of each tick
+///
+/// Resets per-tick counters (births_this_tick, deaths_this_tick) to 0
+const RESET_LIFECYCLE_COUNTERS_SHADER: &str = r#"
+struct LifecycleCounters {
+    free_count: atomic<u32>,
+    alive_count: atomic<u32>,
+    births_this_tick: atomic<u32>,
+    deaths_this_tick: atomic<u32>,
+    max_births_per_tick: u32,
+    max_capacity: u32,
+    reproduction_threshold_u32: u32,
+    child_energy_u32: u32,
+}
+
+@group(0) @binding(0) var<storage, read_write> counters: LifecycleCounters;
+
+@compute @workgroup_size(1)
+fn main() {
+    atomicStore(&counters.births_this_tick, 0u);
+    atomicStore(&counters.deaths_this_tick, 0u);
 }
 "#;

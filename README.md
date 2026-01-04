@@ -172,11 +172,33 @@ When groups of cells synchronize their activity, **emergent signals** are genera
 ### Memory
 
 ARIA's memory persists between sessions:
-- **Elite DNA**: Best-performing genetic codes
+- **Elite DNA**: Best-performing genetic codes (Gen 10+)
 - **Patterns**: Recurring sequences
 - **Associations**: Stimulus-response pairs
 - **Structural DNA**: Directives for JIT-compiled shaders
-- **Memories**: Emotionally significant moments
+- **Episodes**: Emotionally significant moments (first times, strong emotions)
+
+### Generations & Evolution
+
+ARIA evolves through natural selection. Cells reproduce, and their DNA is inherited (with mutations).
+
+```
+Gen 0 (random DNA) → survival/death → reproduction → Gen 1 → ... → Gen 10+ (Elite)
+```
+
+| Generation | Description |
+|------------|-------------|
+| **Gen 0** | Initial cells with random DNA |
+| **Gen 1** | Children of Gen 0, inherited DNA + mutations |
+| **Gen 2+** | Grandchildren+, DNA optimized through selection |
+| **Gen 10+** | Elite survivors, their DNA is saved for future runs |
+
+**What makes a cell survive?**
+- **Resonance**: Cells that resonate with signals gain energy
+- **Efficiency**: Cells that waste energy die
+- **Reproduction**: Cells with energy > 0.28 can divide
+
+**Elite DNA**: When a cell reaches Gen 10+, its DNA is saved. On restart, new cells can inherit elite DNA, accelerating evolution
 
 ## Configuration
 

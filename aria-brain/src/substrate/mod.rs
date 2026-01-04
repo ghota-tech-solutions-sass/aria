@@ -336,6 +336,11 @@ impl Substrate {
             let _ = self.check_for_structural_evolution();
         }
 
+        // Save elite DNA every 10000 ticks (before any crash/restart)
+        if current_tick % 10000 == 0 && current_tick > 0 {
+            self.save_elite_dna_periodic();
+        }
+
         // Decay spatial inhibition (Gemini optimization)
         {
             let mut inhibitor = self.spatial_inhibitor.write();
@@ -520,9 +525,23 @@ impl Substrate {
 
         // Compact dead cells FIRST (La Vraie Faim cleanup)
         // Must happen BEFORE natural_selection to avoid 100k+ element vectors
-        // Every 1000 ticks to reduce freezes (was 100)
-        if current_tick % 1000 == 0 {
-            self.compact_dead_cells();
+        // Session 32 Part 11: Every 5000 ticks + sampled check to reduce freezes
+        if current_tick % 5000 == 0 {
+            // Quick sample to check if compacting is even needed (>50% dead)
+            use rand::Rng;
+            let mut rng = rand::thread_rng();
+            let sample_size = 500.min(self.states.len());
+            let dead_sample = (0..sample_size)
+                .filter(|_| {
+                    let idx = rng.gen_range(0..self.states.len());
+                    self.states[idx].is_dead()
+                })
+                .count();
+            let dead_ratio = dead_sample as f32 / sample_size as f32;
+
+            if dead_ratio > 0.5 {
+                self.compact_dead_cells();
+            }
         }
 
         // Natural selection (repopulate if needed)

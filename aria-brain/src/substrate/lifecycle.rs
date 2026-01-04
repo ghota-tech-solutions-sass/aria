@@ -174,17 +174,20 @@ impl Substrate {
             }
 
             // Flatten buckets from highest generation down
-            let mut ready_to_divide: Vec<(usize, u32, u32)> = Vec::with_capacity(500);
+            // Session 32 Part 11: Removed artificial 500 cap - let economy self-regulate
+            // Technical limit of 2000 prevents massive allocation spikes
+            const TECHNICAL_MAX_BIRTHS: usize = 2000;
+            let mut ready_to_divide: Vec<(usize, u32, u32)> = Vec::with_capacity(TECHNICAL_MAX_BIRTHS);
             for gen in (0..MAX_GEN_BUCKETS).rev() {
                 for (idx, dna_idx) in gen_buckets[gen].iter() {
                     ready_to_divide.push((*idx, *dna_idx, gen as u32));
-                    if ready_to_divide.len() >= 500 { break; }
+                    if ready_to_divide.len() >= TECHNICAL_MAX_BIRTHS { break; }
                 }
-                if ready_to_divide.len() >= 500 { break; }
+                if ready_to_divide.len() >= TECHNICAL_MAX_BIRTHS { break; }
             }
 
             let room = safety_cap.saturating_sub(alive_count);
-            let max_births = room.min(ready_to_divide.len()).min(500);
+            let max_births = room.min(ready_to_divide.len()); // No artificial cap!
 
             if ready_to_divide.is_empty() {
                 tracing::info!("🧬 LINEAGE: 0 cells ready (threshold={:.2}, max_energy={:.2}, avg={:.2}, pop={})",
@@ -518,6 +521,47 @@ impl Substrate {
 
         tracing::info!("🧹 COMPACTED: {} alive cells, DNA pool {} → {} (freed {})",
             alive, old_dna_count, new_dna_count, old_dna_count - new_dna_count);
+    }
+
+    /// Periodically save elite DNA (cells with gen > 10)
+    /// Called every 10000 ticks to preserve genetic heritage without mass extinction
+    pub fn save_elite_dna_periodic(&mut self) {
+        // Collect elite cells (gen > 10) with good energy
+        let mut elite_cells: Vec<(f32, &Cell, u32)> = self.cells.iter()
+            .zip(self.states.iter())
+            .filter(|(c, s)| !s.is_dead() && c.generation > 10 && s.energy > 0.2)
+            .map(|(c, s)| (s.energy, c, c.generation))
+            .collect();
+
+        if elite_cells.is_empty() {
+            return;
+        }
+
+        // Sort by generation DESC, then energy DESC
+        elite_cells.sort_by(|a, b| {
+            b.2.cmp(&a.2).then_with(|| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal))
+        });
+
+        // Save top 20 to memory
+        let mut saved = 0;
+        {
+            let mut memory = self.memory.write();
+            for (energy, cell, gen) in elite_cells.iter().take(20) {
+                if let Some(dna) = self.dna_pool.get(cell.dna_index as usize) {
+                    memory.preserve_elite(
+                        dna.clone(),
+                        *energy / self.config.metabolism.energy_cap,
+                        *gen as u64,
+                        "elite",
+                    );
+                    saved += 1;
+                }
+            }
+        }
+
+        if saved > 0 {
+            tracing::info!("💾 ELITE SAVED: {} DNA (top gen: {})", saved, elite_cells[0].2);
+        }
     }
 
     /// Calculate coherence among active cells

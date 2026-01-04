@@ -267,10 +267,10 @@ impl Trainer {
 
     fn calculate_interval(&self) -> Duration {
         match self.intensity {
-            Intensity::Critical => Duration::from_millis(500),  // Very fast
-            Intensity::Urgent => Duration::from_secs(1),        // Fast
-            Intensity::Normal => Duration::from_secs(3),        // Normal
-            Intensity::Gentle => Duration::from_secs(6),        // Slow, let them rest
+            Intensity::Critical => Duration::from_millis(300),  // Emergency
+            Intensity::Urgent => Duration::from_millis(500),    // Fast
+            Intensity::Normal => Duration::from_secs(1),        // Match Python script
+            Intensity::Gentle => Duration::from_secs(2),        // Slow, let them rest
         }
     }
 

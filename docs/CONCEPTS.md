@@ -231,6 +231,107 @@ Une unité de temps dans ARIA. Le brain fait ~100 ticks/seconde.
 
 ---
 
+## Générations (Evolution)
+
+Les cellules naissent, se reproduisent et meurent. Chaque génération hérite de l'ADN de ses parents (avec mutations).
+
+| Génération | Description | Caractéristiques |
+|------------|-------------|------------------|
+| **Gen 0** | Cellules initiales | ADN aléatoire, pas de parent |
+| **Gen 1** | Enfants de Gen 0 | ADN hérité + mutations |
+| **Gen 2+** | Petits-enfants+ | ADN optimisé par sélection naturelle |
+| **Gen 10+** | Élite | Survivants de 10+ cycles de sélection |
+
+**Cycle de vie :**
+```
+Gen 0 (random) → survie/mort → reproduction → Gen 1 → survie/mort → reproduction → Gen 2...
+```
+
+**Conditions de reproduction :**
+- Énergie > `reproduction_threshold` (0.28 par défaut)
+- La cellule donne `child_energy` (0.24) à l'enfant
+- Coût de division : `cost_divide` (0.12)
+
+**Pression évolutive :**
+- Les cellules qui résonnent bien avec les signaux gagnent de l'énergie
+- Les cellules qui gaspillent de l'énergie meurent
+- Les générations supérieures ont un ADN optimisé pour la survie
+
+**Commande pour voir l'état :**
+```bash
+task stats  # Affiche gen_max, gen_avg, elite_count
+```
+
+---
+
+## ADN Élite (Elite DNA)
+
+L'ADN des meilleures cellules est sauvegardé dans la mémoire pour les futures générations.
+
+**Critères d'élite :**
+- Génération ≥ 10 (a survécu 10+ cycles de sélection)
+- Énergie élevée (>0.5)
+- Activité positive (contribue aux émergences)
+
+**Ce qui est sauvegardé :**
+```rust
+EliteDNA {
+    dna: DNA,           // Le code génétique complet
+    generation: u32,    // Génération atteinte
+    fitness_score: f32, // Score de performance
+    saved_at: u64,      // Tick de sauvegarde
+}
+```
+
+**Utilisation :**
+- Au redémarrage, les nouvelles cellules peuvent hériter de l'ADN élite
+- L'ADN élite guide l'évolution vers des comportements optimaux
+- Plus il y a d'élites, plus ARIA évolue vite
+
+**Pourquoi tu as 2 élites en Gen 11 :**
+- 2 cellules ont survécu 11 cycles de reproduction
+- Leur ADN est exceptionnel pour la résonance avec tes signaux
+- Elles vont reproduire et propager leurs gènes
+
+---
+
+## Épisodes (Mémoire Épisodique)
+
+Les épisodes sont les moments significatifs qu'ARIA se souvient. C'est sa mémoire autobiographique.
+
+**Types d'épisodes :**
+
+| Type | Déclencheur | Exemple |
+|------|-------------|---------|
+| `FirstTime` | Premier mot/concept | "Première fois que j'entends 'Moka'" |
+| `Emotional` | Forte émotion | "Grande joie quand tu as dit 'Bravo!'" |
+| `Learning` | Apprentissage réussi | "J'ai compris que 'chat' et 'Moka' sont liés" |
+| `Social` | Interaction positive | "Feedback positif après émergence" |
+
+**Structure :**
+```rust
+Episode {
+    timestamp: u64,          // Quand c'est arrivé
+    episode_type: EpisodeType,
+    emotional_intensity: f32, // Force de l'émotion
+    context: String,         // Description
+    tension_state: [f32; 8], // État émotionnel
+}
+```
+
+**Pourquoi tu as 0 épisodes :**
+- Les épisodes se créent lors d'événements **significatifs**
+- Un simple échange ne crée pas d'épisode
+- Il faut : feedback positif, apprentissage nouveau, ou forte émotion
+- Essaie : envoie "Bravo!" après une bonne émergence → épisode créé
+
+**Commande :**
+```bash
+task episodes  # Voir les épisodes mémorisés
+```
+
+---
+
 ## Résonance
 
 Comment une cellule gagne de l'énergie. Le signal doit "résonner" avec l'état interne de la cellule.
@@ -358,4 +459,4 @@ ARIA_BACKEND=gpu task brain  # Forcer GPU
 
 ---
 
-*Version ARIA : 0.9.0 | Dernière mise à jour : 2026-01-01*
+*Version ARIA : 0.9.6 | Dernière mise à jour : 2026-01-04*

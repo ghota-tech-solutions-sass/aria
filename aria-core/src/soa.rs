@@ -453,6 +453,69 @@ impl Default for CellConnections {
     }
 }
 
+// ============================================================================
+// GPU LIFECYCLE SLOT SYSTEM
+// ============================================================================
+
+/// Atomic counters for GPU-side lifecycle management
+///
+/// The GPU slot system allows birth/death without CPU sync:
+/// - `free_count`: How many slots are available in free_list
+/// - `alive_count`: Current population (for stats)
+/// - `births_this_tick`: Births claimed this tick (capped)
+/// - `deaths_this_tick`: Deaths recorded this tick
+///
+/// Buffer: Single instance, 32 bytes
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+#[repr(C)]
+pub struct LifecycleCounters {
+    /// Number of available slots in free_list (atomic)
+    pub free_count: u32,
+    /// Current number of alive cells (atomic)
+    pub alive_count: u32,
+    /// Births claimed this tick (reset each tick, capped)
+    pub births_this_tick: u32,
+    /// Deaths this tick (reset each tick)
+    pub deaths_this_tick: u32,
+    /// Maximum births allowed per tick
+    pub max_births_per_tick: u32,
+    /// Maximum cell capacity (free_list size)
+    pub max_capacity: u32,
+    /// Reproduction energy threshold
+    pub reproduction_threshold_u32: u32, // f32 as u32 bits
+    /// Child energy (f32 as u32 bits)
+    pub child_energy_u32: u32,
+}
+
+impl LifecycleCounters {
+    pub fn new(max_capacity: usize, initial_alive: usize, reproduction_threshold: f32, child_energy: f32) -> Self {
+        Self {
+            free_count: (max_capacity - initial_alive) as u32,
+            alive_count: initial_alive as u32,
+            births_this_tick: 0,
+            deaths_this_tick: 0,
+            max_births_per_tick: 2000, // Technical limit per tick
+            max_capacity: max_capacity as u32,
+            reproduction_threshold_u32: reproduction_threshold.to_bits(),
+            child_energy_u32: child_energy.to_bits(),
+        }
+    }
+
+    pub fn reproduction_threshold(&self) -> f32 {
+        f32::from_bits(self.reproduction_threshold_u32)
+    }
+
+    pub fn child_energy(&self) -> f32 {
+        f32::from_bits(self.child_energy_u32)
+    }
+}
+
+impl Default for LifecycleCounters {
+    fn default() -> Self {
+        Self::new(100_000, 50_000, 0.45, 0.35)
+    }
+}
+
 /// Indirect dispatch arguments for GPU
 /// Used to let GPU decide workgroup count without CPU roundtrip
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]

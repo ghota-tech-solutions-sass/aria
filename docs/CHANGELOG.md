@@ -4,6 +4,53 @@ Historique des sessions de développement.
 
 ---
 
+## 2026-01-04
+
+### Session 33: Autonomous Learning (Web + Expression)
+- **Web Learner** : Fetch Wikipedia/Wikiquote, extraction phrases, injection substrate
+- **Expression Generator** : Parole émergente sans LLM, résonance avec patterns appris
+- **Trainer autonome** : `scripts/run_overnight.sh` pour training 24h
+- Nouveaux endpoints `/learn` et `/express`
+
+### Session 32: Full GPU Migration & Economy Tuning
+- **Part 1-8** : Migration boucles O(n) CPU → GPU
+  - `inject_signal()`, `propagate_signal()` → buffer only
+  - `spatial_view()`, `stats()` → sampling 5-10k
+  - Headroom GPU dynamique (25-100% selon population)
+- **Part 9-10** : Fix signal shader + wave propagation stochastique
+- **Part 11-12** : GPU lifecycle slot system (naissances/morts atomiques)
+- **Part 13** : TPS rate limiting (1ms/tick), fix reproduction economy
+  - `reproduction_threshold`: 0.40 → 0.28
+  - `cost_divide`: 0.40 → 0.12 (parent survit)
+  - `EMISSION_COOLDOWN_TICKS`: 25 → 5000
+
+### Session 31: Physical Intelligence (Vocabulary Removal)
+- **Suppression vocabulaire** : `vocabulary.rs`, `WordCategory`, `VisualWordLink` supprimés
+- **Intelligence physique** : comportement émerge des lois, pas des mots
+- **Fix sleeping drain** : cohérence GPU/CPU (2.0× cost_rest)
+- **Gen0 drain** : 2%/tick pour Gen0 non sélectionnées
+
+### Session 30: GPU Fixes & Lineage Progression
+- **Fix lignée** : tri par génération DESC avant sélection reproduction
+- **Fix WGSL alignment** : uniform buffer padding, bindings CLEAR_GRID
+- **Fix reserved keyword** : `target` → `target_id`
+
+### Session 29: Rules to Laws (DNA Migration)
+- **Seuil résonance** (Gene 5) : chaque cellule décide food vs noise
+- **Efficacité énergétique** (Gene 4) : trade-off extraction/coût
+- **Inertie tension** (Gene 6) : tempérament calme vs anxieux
+- Diversité émergente : Picky Eaters, Trash Eaters
+
+### Session 28: Compression Law (Predictive Physics)
+- "Surprise costs energy" - prédiction correcte = récompense
+- Erreur faible (<0.1) → gain, erreur forte → perte
+
+### Session 27: Hebb's Law (Spatial Plasticity)
+- "Fire together, move together" - attraction spatiale O(N)
+- Cellules actives → centroïde → clustering sémantique
+
+---
+
 ## 2026-01-01
 
 ### Session 26: Lineage Fix & La Vraie Faim v2
@@ -261,4 +308,4 @@ Historique des sessions de développement.
 
 ---
 
-*Mis à jour le 2026-01-01 | Version 0.9.2*
+*Mis à jour le 2026-01-04 | Version 0.9.7*

@@ -48,6 +48,8 @@ pub use soa::{
     HEBBIAN_COACTIVATION_THRESHOLD, HEBBIAN_STRENGTHEN_RATE, HEBBIAN_DECAY_RATE, HEBBIAN_MAX_STRENGTH,
     // Prediction Law
     CellPrediction,
+    // GPU Lifecycle Slot System
+    LifecycleCounters,
 };
 
 /// Current version of ARIA's genome format
