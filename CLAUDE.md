@@ -35,13 +35,13 @@ task episodes           # Mémoire épisodique
 
 ```rust
 // Reproduction
-reproduction_threshold: 0.28   // Énergie nécessaire
-child_energy: 0.15             // Session 34: réduit de 0.24
+reproduction_threshold: 0.22   // Session 34: abaissé de 0.28 (max_energy=0.24 empêchait repro)
+child_energy: 0.15             // Session 34: réduit de 0.24 → enfants doivent gagner 0.07
 cost_divide: 0.12              // Coût parent
 
 // Métabolisme
 cost_rest: 0.0003              // Session 34: augmenté pour équilibre ~100k
-signal_energy_base: 0.03       // Session 34: réduit pour équilibre ~100k
+signal_energy_base: 0.04       // Session 34: augmenté de 0.03 (cells starved)
 signal_resonance_factor: 3.0   // Multiplicateur résonance
 signal_radius: 30.0            // Portée en 8D
 
@@ -124,3 +124,5 @@ TPS: ~1000                     // Rate limité dans main.rs
 | **Population explosion** | `population_scale` était inversé ! Plus de cellules = plus d'énergie → fix: dilution `sqrt(10k/count)` |
 | **GPU buffer overflow** | Réalloc proactive à 70% capacité + hard limit check |
 | **Web learner 0 items** | Parser HTML manuel cassé (`<header>` matchait `<head>`) → remplacé par lib `scraper` |
+| **REALLOC spam** | DNA pool croissait indéfiniment (190k+ DNA pour 105k cells) → check seulement cells.len() à 80% |
+| **Cells can't reproduce** | `reproduction_threshold=0.28` mais `max_energy=0.24` → abaissé à 0.22, augmenté `signal_energy_base` 0.03→0.04 |
