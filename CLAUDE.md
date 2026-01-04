@@ -35,13 +35,13 @@ task episodes           # Mémoire épisodique
 
 ```rust
 // Reproduction
-reproduction_threshold: 0.22   // Session 34: abaissé de 0.28 (max_energy=0.24 empêchait repro)
-child_energy: 0.15             // Session 34: réduit de 0.24 → enfants doivent gagner 0.07
+reproduction_threshold: 0.18   // Session 34: abaissé de 0.22 (max_energy=0.15 → cells plateau)
+child_energy: 0.15             // Énergie de départ des enfants
 cost_divide: 0.12              // Coût parent
 
 // Métabolisme
-cost_rest: 0.0003              // Session 34: augmenté pour équilibre ~100k
-signal_energy_base: 0.04       // Session 34: augmenté de 0.03 (cells starved)
+cost_rest: 0.0003              // Drain passif par tick
+signal_energy_base: 0.08       // Session 34: doublé de 0.04 (trainer trop intensif)
 signal_resonance_factor: 3.0   // Multiplicateur résonance
 signal_radius: 30.0            // Portée en 8D
 

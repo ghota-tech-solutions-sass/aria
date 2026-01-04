@@ -133,9 +133,9 @@ impl Default for MetabolismConfig {
             energy_consumption: 0.0,    // Replaced by action costs
             energy_gain: 0.0,           // NO PASSIVE GAIN - ARIA must earn energy through resonance!
             energy_cap: 1.5,
-            // Session 34: Lowered to 0.22 - logs showed max_energy=0.24, cells couldn't reproduce
-            // Must be BELOW observed max energy for evolution to work!
-            reproduction_threshold: 0.22,
+            // Session 34: Lowered to 0.18 - logs showed max_energy=0.15, cells plateau at child_energy
+            // Must be just above child_energy (0.15) so cells can reproduce with minimal gain
+            reproduction_threshold: 0.18,
             // Session 34: Reduced from 0.24 to 0.15 - children must earn 0.13 before reproducing
             child_energy: 0.15,
 
@@ -148,9 +148,9 @@ impl Default for MetabolismConfig {
             cost_rest: 0.0003,
 
             // Signal energy - must exceed cost_rest for NET POSITIVE growth
-            // Session 34: Increased from 0.03 to 0.04 - cells couldn't reach reproduction threshold
-            // Combined with population_scale dilution, equilibrium should be ~100k
-            signal_energy_base: 0.04,
+            // Session 34: Doubled from 0.04 to 0.08 - cells were plateauing at child_energy
+            // Stronger signal income to compensate for trainer's rapid feedback
+            signal_energy_base: 0.08,
             signal_resonance_factor: 3.0,   // Good differentiation for selection
         }
     }
