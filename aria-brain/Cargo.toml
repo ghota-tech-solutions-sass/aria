@@ -47,9 +47,5 @@ base64 = { workspace = true }
 name = "aria-brain"
 path = "src/main.rs"
 
-[[bin]]
-name = "aria-train"
-path = "src/bin/train.rs"
-
 [dev-dependencies]
 tempfile = "3"

@@ -43,6 +43,8 @@ aria-body (MacBook)  ◄──WebSocket──►  aria-brain (PC + RTX 2070)
 - **S'auto-modifier (Session 16)** : analyse ses performances et change ses propres paramètres
 - **S'auto-évoluer (Genesis)** : traduit son DNA en code GPU WGSL, recompile ses pipelines à chaud (Session 23)
 - **Intelligence physique (Session 31)** : comportement émerge des lois physiques, pas du vocabulaire
+- **Apprendre du web (Session 33)** : fetch Wikipedia/Wikiquote, extrait connaissances, injecte dans substrate
+- **Parler sans LLM (Session 33)** : expressions émergentes par résonance avec patterns appris
 
 ## Commandes
 
@@ -53,6 +55,7 @@ ARIA_BACKEND=gpu task brain  # Forcer GPU (AMD/NVIDIA via Vulkan)
 task body           # Interface
 task stats          # Stats du cerveau
 task episodes       # Mémoire épisodique
+./scripts/run_overnight.sh   # Training autonome 24h (Session 33)
 # Note: task words et task associations supprimés (Session 31)
 ```
 
@@ -90,7 +93,7 @@ Chats de Mickael :
 - **Obrigada** : Abyssin
 
 ---
-*Version : 0.9.6 | Dernière update : 2026-01-03*
+*Version : 0.9.7 | Dernière update : 2026-01-04*
 
 ### Session 32 - Full GPU Migration (CPU Liberation)
 
@@ -386,6 +389,298 @@ cell_energy.energy -= config.cost_rest;
 **Résultat :**
 - CPU savings : de ~100ms/call à <1ms/call
 - Population décroit naturellement sans stimulation (La Vraie Faim effective)
+
+#### Fix GPU Signal Shader (Session 32 Part 9)
+
+**Problème critique :** Le shader SIGNAL_TEMPLATE (legacy <100k cells) ne traitait PAS les signaux !
+
+```wgsl
+// AVANT: Shader ne faisait rien avec les signaux
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    // ... aucun code pour traiter signals[]
+    if cell_energy.tension > 0.8 { ... }  // Seule logique présente
+}
+
+// APRÈS: Traitement complet des signaux (comme CPU)
+for (var s = 0u; s < signal_count; s++) {
+    let signal = signals[s];
+    // Wake sleeping cells
+    if (cell_meta.flags & FLAG_SLEEPING) != 0u && intensity > 0.1 {
+        cell_meta.flags = cell_meta.flags & ~FLAG_SLEEPING;
+    }
+    // Give energy via resonance (La Vraie Faim)
+    let resonance = calculate_resonance(signal.content, state);
+    if resonance > resonance_threshold {
+        cell_energy.energy += energy_gain;
+    }
+}
+```
+
+**Aussi supprimé :** Filtre de distance qui excluait 50% des cellules.
+
+**Résultat :**
+- GPU évolution multi-générationnelle fonctionnelle
+- 5k cells : Gen 3-7, E=0.60, stable
+- 10k+ cells : nécessite plus de signaux (trainer plus rapide)
+
+**Paramètres finaux :**
+```rust
+reproduction_threshold: 0.50,  // Abaissé de 0.70
+child_energy: 0.40,
+cost_rest: 0.0002,
+signal_energy_base: 0.30,
+signal_resonance_factor: 3.0,
+```
+
+#### Fix Wave Propagation + Stochasticity (Session 32 Part 10)
+
+**Philosophie :** Les signaux ne sont pas continus - ils se propagent comme des **ondes** dans le substrat. Le même signal ne doit pas toujours donner le même résultat.
+
+**Problèmes identifiés :**
+
+1. **Distance filter trop restrictif** : `signal_radius=15` dans un espace 8D où la distance moyenne est ~23
+2. **Pas de stochasticité** : même signal → même résultat (déterministe)
+3. **Test script cassé** : envoyait du texte brut au lieu de JSON `Signal`
+
+**Fixes appliqués :**
+
+```wgsl
+// SIGNAL_TEMPLATE - Wave propagation avec stochasticité
+
+// Hash function pour bruit stochastique
+fn hash(seed: u32) -> f32 {
+    var x = seed;
+    x = x ^ (x >> 16u);
+    x = x * 0x7feb352du;
+    x = x ^ (x >> 15u);
+    x = x * 0x846ca68bu;
+    x = x ^ (x >> 16u);
+    return f32(x & 0xFFFFu) / 65535.0;  // [0, 1]
+}
+
+// Distance-based wave attenuation
+let dist = sqrt(dist_sq);
+if dist >= config.signal_radius { continue; }  // Outside wave
+let attenuation = 1.0 - (dist / config.signal_radius);
+
+// Stochastic noise (±10%) - same signal ≠ same result
+let noise = (hash(noise_seed + s) - 0.5) * 0.2;
+let noisy_attenuation = clamp(attenuation + noise, 0.0, 1.0);
+```
+
+**Config mise à jour :**
+
+```rust
+signal_radius: 30.0,         // Élargi de 15 → 30 pour 8D
+reproduction_threshold: 0.45, // Abaissé de 0.50
+child_energy: 0.35,
+```
+
+**Test script corrigé :**
+
+```python
+# Avant: ws.send("bonjour")  # Texte brut - ignoré!
+# Après: Conversion en JSON Signal
+def text_to_signal_json(text):
+    h = hashlib.md5(text.encode()).digest()
+    tension = [((b / 255.0) * 2.0 - 1.0) for b in h[:8]]
+    return json.dumps({
+        "content": tension + [0.0] * 24,
+        "intensity": 0.3 + 0.7 * min(magnitude / 2.0, 1.0),
+        "label": text,
+        "signal_type": "Perception"
+    })
+```
+
+**Résultat :**
+- Gen 11 atteint en 90 secondes
+- Évolution multi-générationnelle fonctionnelle sur GPU
+- Propagation par ondes (atténuation distance)
+- Stochasticité (même mot → résultats différents)
+
+#### GPU Lifecycle Slot System (Session 32 Part 12)
+
+**Objectif :** Éliminer les freezes tous les 1000 ticks causés par les téléchargements GPU→CPU.
+
+**Architecture Slot System :**
+
+```
+GPU (Fixed capacity)
+├── cell_slots[MAX_CAPACITY]      // Pré-alloué
+├── free_list[MAX_CAPACITY]       // Indices disponibles
+├── lifecycle_counters            // Compteurs atomiques
+│   ├── free_count: u32           // Slots libres
+│   ├── alive_count: u32          // Cellules vivantes
+│   ├── births_this_tick: u32     // Naissances ce tick
+│   └── deaths_this_tick: u32     // Morts ce tick
+```
+
+**Nouveaux fichiers/structs :**
+
+| Fichier | Ajout |
+|---------|-------|
+| `aria-core/src/soa.rs` | `LifecycleCounters` struct (32 bytes) |
+| `aria-compute/src/compiler.rs` | `DEATH_SHADER`, `BIRTH_SHADER`, `RESET_LIFECYCLE_COUNTERS_SHADER` |
+| `aria-compute/src/backend/gpu_soa.rs` | Buffers, pipelines, dispatch |
+
+**DEATH_SHADER :**
+```wgsl
+// Marque les cellules mortes (energy <= 0)
+// Push leur slot dans free_list (atomique)
+// Update alive_count et deaths_this_tick
+if energy <= 0.0 {
+    metadata[idx].flags = cell_meta.flags | FLAG_DEAD;
+    let free_idx = atomicAdd(&counters.free_count, 1u);
+    free_list[free_idx] = idx;
+    atomicSub(&counters.alive_count, 1u);
+    atomicAdd(&counters.deaths_this_tick, 1u);
+}
+```
+
+**BIRTH_SHADER (prêt, non dispatché) :**
+```wgsl
+// Pop slot de free_list (atomique)
+// Initialise l'enfant avec DNA muté
+// Update alive_count et births_this_tick
+let free_count = atomicSub(&counters.free_count, 1u);
+let child_idx = free_list[free_count - 1u];
+// ... initialize child ...
+atomicAdd(&counters.alive_count, 1u);
+```
+
+**Avantages :**
+- Zéro téléchargement GPU→CPU pendant le tick normal
+- Naissance/mort = opérations atomiques GPU O(1)
+- `read_lifecycle_counters()` pour stats périodiques (léger)
+- Prépare la migration complète de lifecycle.rs vers GPU
+
+**État :**
+- ⏳ Death shader prêt mais DÉSACTIVÉ (cause désync GPU/CPU)
+- ⏳ Birth shader prêt mais pas encore dispatché (nécessite plus d'intégration)
+- ✅ Méthode `read_lifecycle_counters()` pour lire les stats GPU
+
+#### TPS Rate Limiting & Economy Tuning (Session 32 Part 13)
+
+**Problème 1 : Émissions trop fréquentes (~1/sec au lieu de ~1/5sec)**
+
+La boucle principale n'avait pas de rate limiter - TPS réel ~5000+ au lieu de 1000.
+
+```rust
+// main.rs - AVANT: yield_now() = aussi vite que possible
+tokio::task::yield_now().await;
+
+// APRÈS: Rate limit à 1000 TPS
+tokio::time::sleep(tokio::time::Duration::from_micros(1000)).await;
+```
+
+**Cooldowns corrigés :**
+
+| Cooldown | Avant | Après |
+|----------|-------|-------|
+| `EMISSION_COOLDOWN_TICKS` | 25 | 5000 |
+| Spontaneous cooldown | 500 | 5000 |
+| Expression cooldown | 5000 | 5000 (ok) |
+
+**Problème 2 : Gen 0 éternellement (pas de reproduction)**
+
+Énergie moyenne ~0.30 mais seuil de reproduction = 0.40 → impossible de reproduire.
+
+```rust
+// config.rs - AVANT
+reproduction_threshold: 0.40,
+child_energy: 0.35,
+cost_divide: 0.40,  // Parent meurt après division!
+
+// APRÈS
+reproduction_threshold: 0.28,  // Accessible avec énergie ~0.30
+child_energy: 0.24,
+cost_divide: 0.12,  // Parent survit (0.28 - 0.12 = 0.16)
+```
+
+**Fichiers modifiés :**
+
+| Fichier | Changement |
+|---------|------------|
+| `aria-brain/src/main.rs` | Rate limit 1ms/tick |
+| `aria-brain/src/substrate/types.rs` | EMISSION_COOLDOWN: 25 → 5000 |
+| `aria-brain/src/substrate/spontaneous.rs` | Cooldown: 500 → 5000 |
+| `aria-core/src/config.rs` | Seuils reproduction ajustés |
+| `Taskfile.yml` | Supprimé références à aria-train |
+
+**Résultat attendu :**
+- Émissions espacées de ~5 secondes
+- Évolution multi-générationnelle (Gen1, Gen2, etc.)
+- Population oscillante mais avec lignée évolutive
+
+### Session 33 - Autonomous Learning (Web + Expression)
+
+**ARIA apprend du web et génère des expressions émergentes sans LLM.**
+
+#### 1. Web Learner (`web_learner.rs`)
+
+Module pour apprentissage autonome depuis Internet :
+
+```rust
+// Sources de connaissance
+- Simple Wikipedia (articles accessibles)
+- Wikiquote (sagesse/philosophie)
+
+// Flux d'apprentissage
+1. Fetch URL → Extract HTML → Strip tags
+2. Split en phrases → Filter (20-500 chars)
+3. text_to_tension() → TensionVector [8D]
+4. Queue injections → Inject into substrate
+
+// Tous les 5 minutes
+autonomous_learning_loop() → fetch_and_learn()
+```
+
+#### 2. Expression Generator (`expression.rs`)
+
+Génération de "parole" émergente sans LLM :
+
+```rust
+// Expressions apprises
+- User input → learn_from_user()
+- Web content → learn_from_web()
+- Seeds: ~20 mots émotionnels de base
+
+// Génération
+1. Emergence → tension pattern [8D]
+2. find_related() → expressions similaires
+3. resonance() → meilleur match
+4. Output: "tension:positive|says:curieux"
+```
+
+#### 3. Trainer Autonome (`scripts/autonomous_trainer.py`)
+
+Script pour entraînement 24h/24 :
+
+```bash
+./scripts/run_overnight.sh  # Démarre brain + trainer
+```
+
+- Envoie des stimuli toutes les 5s
+- Varie les patterns émotionnels
+- Log activité dans `data/trainer_log.txt`
+- Stats toutes les 60s
+
+#### Nouveaux endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `/learn` | Stats du web learner |
+| `/express` | Stats du générateur d'expressions |
+
+#### Fichiers créés
+
+| Fichier | Description |
+|---------|-------------|
+| `aria-brain/src/web_learner.rs` | Web fetcher et knowledge extraction |
+| `aria-brain/src/expression.rs` | Expression generator |
+| `scripts/autonomous_trainer.py` | Trainer Python |
+| `scripts/run_overnight.sh` | Script de lancement |
 
 ### Session 31 - Physical Intelligence (Vocabulary Removal)
 

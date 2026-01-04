@@ -28,3 +28,4 @@ Cargo.lock
 *.dll
 *.so
 *.dylib
+.venv/

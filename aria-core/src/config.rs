@@ -133,25 +133,22 @@ impl Default for MetabolismConfig {
             energy_consumption: 0.0,    // Replaced by action costs
             energy_gain: 0.0,           // NO PASSIVE GAIN - ARIA must earn energy through resonance!
             energy_cap: 1.5,
-            // Children must EARN energy before reproducing - no exponential explosion
-            // Without signals, population should stabilize or decline
-            reproduction_threshold: 0.70, // Higher threshold - cells must be well-fed
-            child_energy: 0.50,           // BELOW threshold - children must earn energy to reproduce
+            // Session 32 Part 12: Lowered threshold to match actual energy levels (~0.30 avg)
+            // Cells need to reproduce to create generational evolution!
+            reproduction_threshold: 0.28,
+            child_energy: 0.24,           // 85% of threshold - small gap to earn
 
             // Action costs - "La Vraie Faim v3" (BRUTAL - real evolutionary pressure)
             cost_signal: 0.005,  // Speaking is EXPENSIVE
-            cost_divide: 0.5,    // Creating life is exhausting
+            cost_divide: 0.12,   // Creating life costs but parent survives (Session 32 Part 12)
             cost_move: 0.002,    // Moving costs energy
-            // Active cells: 1.0 / 0.0003 = 3,333 ticks to death without food
-            // At 500 TPS = ~6.7 seconds to death - children can survive trainer interval
-            // Still harsh but allows multi-generational evolution
-            cost_rest: 0.0003,   // Balanced for ~5 second survival
+            // Session 32: Tuned for balance between survival and pressure
+            cost_rest: 0.0002,   // From tuning: "Balanced drain" scored best
 
             // Signal energy - must exceed cost_rest for NET POSITIVE growth
-            // At 150 TPS, 5 sec interval: loss = 0.0003 * 150 * 5 = 0.225
-            // With resonance 2.0: gain = 0.10 * 3 = 0.30 > 0.225 ✓
-            signal_energy_base: 0.10,       // Children can now GROW
-            signal_resonance_factor: 2.0,   // Good resonance = 0.10 * 3 = 0.30 gain
+            // Session 32 Part 11: Stronger feeding for wave propagation
+            signal_energy_base: 0.60,       // 6x original - compensate wave attenuation
+            signal_resonance_factor: 3.0,   // Good differentiation for selection
         }
     }
 }
@@ -213,11 +210,11 @@ impl Default for SignalConfig {
             reaction_amplification: 10.0,
             immediate_activation: 5.0,
             state_cap: 5.0,
-            // Signal radius in semantic space [-10..10]
-            // 15.0 = broad propagation (most cells can receive signal)
-            // At high TPS, cells need to receive signals to survive
-            // Spatial specialization comes from resonance, not distance
-            signal_radius: 15.0,
+            // Signal radius in 8D semantic space [-10..10]
+            // Expected distance between random points: ~23
+            // 30.0 = covers most cells with strong attenuation at edges
+            // Wave propagation: cells near signal source get more energy
+            signal_radius: 30.0,
         }
     }
 }

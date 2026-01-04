@@ -18,9 +18,9 @@ impl Substrate {
             return None;
         }
 
-        // Cooldown between spontaneous emissions
+        // Cooldown between spontaneous emissions (~5 seconds)
         let last_spont = self.last_spontaneous_tick.load(Ordering::Relaxed);
-        if current_tick.saturating_sub(last_spont) < 500 {
+        if current_tick.saturating_sub(last_spont) < 5000 {
             return None;
         }
 

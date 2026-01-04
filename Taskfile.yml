@@ -17,11 +17,10 @@ tasks:
     deps: [build-brain, build-body]
 
   build-brain:
-    desc: Build the brain and trainer
+    desc: Build the brain
     dir: aria-brain
     cmds:
       - cargo build --release --bin aria-brain
-      - cargo build --release --bin aria-train
 
   build-body:
     desc: Build the body (interface)
@@ -176,11 +175,8 @@ tasks:
   # TRAINING
   train:
     desc: Automatically train ARIA with common patterns
-    dir: aria-brain
-    env:
-      ARIA_BRAIN_URL: '{{.BRAIN_URL}}'
     cmds:
-      - cargo run --release --bin aria-train
+      - ./scripts/run_overnight.sh
 
   # DATA MANAGEMENT
   reset:

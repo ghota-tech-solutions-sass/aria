@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// Minimum ticks between emissions (anti-spam)
 /// At ~4ms/tick (actual observed rate), 75 ticks ≈ 300ms between responses
-pub const EMISSION_COOLDOWN_TICKS: u64 = 25;  // ~100ms between emissions (faster response)
+pub const EMISSION_COOLDOWN_TICKS: u64 = 5000;  // ~5 seconds between emissions (meaningful responses)
 
 // NOTE: STOP_WORDS removed in Session 20 (Physical Intelligence)
 // ARIA no longer processes language semantically - only tension vectors
