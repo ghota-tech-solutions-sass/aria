@@ -261,12 +261,13 @@ impl WebLearner {
                     source.fetch_count += 1;
 
                     // Create injections for substrate
+                    // Session 34: Reduced from 10 items @ 0.3 to 5 items @ 0.15 to prevent population explosion
                     let injections: Vec<PendingInjection> = items.iter()
-                        .take(10) // Inject up to 10 items per fetch
+                        .take(5) // Inject up to 5 items per fetch
                         .map(|item| PendingInjection {
                             tension: item.tension_vector,
                             label: format!("web:{}", item.content.chars().take(50).collect::<String>()),
-                            intensity: 0.3,
+                            intensity: 0.15, // Half intensity for web learning
                         })
                         .collect();
 
