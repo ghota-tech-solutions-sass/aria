@@ -31,17 +31,17 @@ task episodes           # Mémoire épisodique
 ./scripts/run_overnight.sh  # Training autonome 24h
 ```
 
-## Économie actuelle (Session 32)
+## Économie actuelle (Session 34)
 
 ```rust
 // Reproduction
 reproduction_threshold: 0.28   // Énergie nécessaire
-child_energy: 0.24             // Donné à l'enfant
+child_energy: 0.15             // Session 34: réduit de 0.24 → enfants doivent gagner 0.13
 cost_divide: 0.12              // Coût parent
 
 // Métabolisme
 cost_rest: 0.0002              // Respirer
-signal_energy_base: 0.60       // Gain par signal
+signal_energy_base: 0.05       // Session 34: réduit de 0.60 (fix double scaling)
 signal_resonance_factor: 3.0   // Multiplicateur résonance
 signal_radius: 30.0            // Portée en 8D
 
@@ -106,7 +106,7 @@ TPS: ~1000                     // Rate limité dans main.rs
 | 31 | Suppression vocabulaire, intelligence physique |
 | 32 | Full GPU migration, TPS rate limiting |
 | 33 | Web learner, expression generator |
-| 34 | Refactoring: shaders/, gpu_soa/, handlers/ modulaires |
+| 34 | Refactoring modulaire + fix économie (double scaling, buffer overflow) + fix web learner (scraper lib) |
 
 ## Problèmes courants résolus
 
@@ -117,3 +117,6 @@ TPS: ~1000                     // Rate limité dans main.rs
 | GPU freeze | Réallocation constante → headroom 100% |
 | 0 épisodes | Normal - envoyer "Bravo!" après émergence |
 | Population collapse | Sleeping drain trop fort (2.0 → 1.0) |
+| **Population explosion** | Double scaling (CPU 50x + GPU 3x) → retiré scaling CPU, réduit `signal_energy_base` 0.60→0.05 |
+| **GPU buffer overflow** | Réalloc proactive à 90% capacité + safety check dans upload_new_cells |
+| **Web learner 0 items** | Parser HTML manuel cassé (`<header>` matchait `<head>`) → remplacé par lib `scraper` |

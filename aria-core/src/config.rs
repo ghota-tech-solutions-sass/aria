@@ -136,7 +136,8 @@ impl Default for MetabolismConfig {
             // Session 32 Part 12: Lowered threshold to match actual energy levels (~0.30 avg)
             // Cells need to reproduce to create generational evolution!
             reproduction_threshold: 0.28,
-            child_energy: 0.24,           // 85% of threshold - small gap to earn
+            // Session 34: Reduced from 0.24 to 0.15 - children must earn 0.13 before reproducing
+            child_energy: 0.15,
 
             // Action costs - "La Vraie Faim v3" (BRUTAL - real evolutionary pressure)
             cost_signal: 0.005,  // Speaking is EXPENSIVE
@@ -146,8 +147,9 @@ impl Default for MetabolismConfig {
             cost_rest: 0.0002,   // From tuning: "Balanced drain" scored best
 
             // Signal energy - must exceed cost_rest for NET POSITIVE growth
-            // Session 32 Part 11: Stronger feeding for wave propagation
-            signal_energy_base: 0.60,       // 6x original - compensate wave attenuation
+            // Session 34: Reduced from 0.60 to 0.05 after removing CPU-side 50x scaling
+            // Now ~3 good signals needed to reproduce (was 1 signal = 480 reproductions!)
+            signal_energy_base: 0.05,
             signal_resonance_factor: 3.0,   // Good differentiation for selection
         }
     }

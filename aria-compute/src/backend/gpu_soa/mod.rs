@@ -280,7 +280,11 @@ impl ComputeBackend for GpuSoABackend {
     ) -> AriaResult<Vec<(u64, CellAction)>> {
         self.tick += 1;
 
-        let needs_realloc = !self.initialized || cells.len() > self.max_cell_count;
+        // Proactive reallocation at 90% capacity to prevent buffer overflow
+        let capacity_threshold = (self.max_cell_count as f64 * 0.90) as usize;
+        let needs_realloc = !self.initialized
+            || cells.len() > self.max_cell_count
+            || (self.initialized && cells.len() > capacity_threshold);
         let old_count = self.cell_count;
         let new_count = cells.len();
 

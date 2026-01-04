@@ -378,6 +378,14 @@ impl GpuSoABackend {
     /// Upload cell data to SoA buffers
     pub(super) fn upload_cells(&self, states: &[CellState]) {
         let count = states.len().min(self.max_cell_count);
+        if count < states.len() {
+            tracing::warn!(
+                "⚠️ upload_cells truncated: {} → {} cells (max_cell_count: {})",
+                states.len(),
+                count,
+                self.max_cell_count
+            );
+        }
 
         let energies: Vec<CellEnergy> = states[..count]
             .iter()
@@ -435,7 +443,19 @@ impl GpuSoABackend {
             return;
         }
 
-        let new_cells = &states[old_count..];
+        // Safety check: don't write beyond buffer capacity
+        let safe_end = states.len().min(self.max_cell_count);
+        if old_count >= safe_end {
+            tracing::warn!(
+                "⚠️ upload_new_cells skipped: old_count {} >= safe_end {} (max_cell_count: {})",
+                old_count,
+                safe_end,
+                self.max_cell_count
+            );
+            return;
+        }
+
+        let new_cells = &states[old_count..safe_end];
         let offset_bytes_energy = old_count * std::mem::size_of::<CellEnergy>();
         let offset_bytes_position = old_count * std::mem::size_of::<CellPosition>();
         let offset_bytes_state = old_count * std::mem::size_of::<CellInternalState>();

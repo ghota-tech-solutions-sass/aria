@@ -70,8 +70,9 @@ impl Substrate {
 
         // === PURE TENSION INJECTION ===
         // No word learning, no familiarity boost - just raw energy injection
-        let cell_scale = (self.cells.len() as f32 / 10_000.0).max(1.0);
-        let base_intensity = signal.intensity * 5.0 * cell_scale;
+        // Session 34: Removed CPU-side scaling - GPU population_scale handles this
+        // Old: signal.intensity * 5.0 * cell_scale caused 50x amplification!
+        let base_intensity = signal.intensity;
 
         // Build 8D tension array from signal content
         let mut tension_8d = [0.0f32; SIGNAL_DIMS];

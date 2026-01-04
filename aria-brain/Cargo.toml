@@ -39,6 +39,9 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 chrono = "0.4"
 
+# HTML parsing for web learning
+scraper = "0.18"
+
 # Image processing (visual perception)
 image = { workspace = true }
 base64 = { workspace = true }

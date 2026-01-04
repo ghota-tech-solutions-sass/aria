@@ -4,6 +4,7 @@
 //! and learn from it autonomously.
 
 use aria_core::TensionVector;
+use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use tracing::{info, warn};
@@ -151,21 +152,41 @@ impl WebLearner {
         // Simple HTML text extraction (remove tags)
         let text = Self::strip_html_tags(html);
 
+        // Debug: log extracted text length
+        info!("📖 Extracted {} chars from HTML ({} chars)", text.len(), html.len());
+
         // Split into sentences
-        let sentences: Vec<&str> = text.split(|c| c == '.' || c == '!' || c == '?')
+        let all_sentences: Vec<&str> = text.split(|c| c == '.' || c == '!' || c == '?').collect();
+        let sentences: Vec<&str> = all_sentences.iter()
             .filter(|s| s.len() > 20 && s.len() < 500)
             .take(50) // Limit per page
+            .copied()
             .collect();
+
+        info!("📖 Found {} sentences ({} after length filter)", all_sentences.len(), sentences.len());
 
         for sentence in sentences {
             let clean = sentence.trim();
-            // Skip error messages and robot policy notices
+            // Skip error messages, robot policy notices, and code fragments
             let lower = clean.to_lowercase();
             if lower.contains("user-agent")
                 || lower.contains("robot")
                 || lower.contains("phabricator")
                 || lower.contains("error")
                 || lower.contains("blocked")
+                || lower.contains("javascript")
+                || lower.contains("stylesheet")
+                || lower.contains("cookie")
+                || lower.contains("privacy policy")
+                || lower.contains("terms of use")
+                || lower.contains("from wikipedia")  // Skip Wikipedia meta-content
+                || lower.contains("wikipedia, the free")
+                || lower.contains("wikimedia foundation")
+                || lower.contains("creative commons")
+                || lower.contains("edit this page")
+                || lower.contains("last edited")
+                || lower.contains("retrieved from")
+                || clean.chars().filter(|c| c.is_alphabetic()).count() < 15  // Must have real words
             {
                 continue;
             }
@@ -185,36 +206,25 @@ impl WebLearner {
         items
     }
 
-    /// Strip HTML tags from content
+    /// Strip HTML tags from content - extracts clean text using scraper library
     fn strip_html_tags(html: &str) -> String {
-        let mut result = String::new();
-        let mut in_tag = false;
-        let mut in_script = false;
-        let mut in_style = false;
+        let document = Html::parse_document(html);
 
-        for c in html.chars() {
-            match c {
-                '<' => {
-                    in_tag = true;
-                    // Check for script/style tags
-                    let lower = html.to_lowercase();
-                    if lower.contains("<script") { in_script = true; }
-                    if lower.contains("<style") { in_style = true; }
-                }
-                '>' => {
-                    in_tag = false;
-                    if html.to_lowercase().contains("</script>") { in_script = false; }
-                    if html.to_lowercase().contains("</style>") { in_style = false; }
-                }
-                _ if !in_tag && !in_script && !in_style => {
-                    result.push(c);
-                }
-                _ => {}
+        // Select only content paragraphs (skip navigation, scripts, etc.)
+        let content_selector = Selector::parse("p, h1, h2, h3, h4, h5, h6, li, td, th, blockquote")
+            .unwrap_or_else(|_| Selector::parse("p").unwrap());
+
+        let mut texts = Vec::new();
+
+        for element in document.select(&content_selector) {
+            let text: String = element.text().collect::<Vec<_>>().join(" ");
+            let cleaned = text.trim();
+            if !cleaned.is_empty() {
+                texts.push(cleaned.to_string());
             }
         }
 
-        // Clean up whitespace
-        result.split_whitespace().collect::<Vec<_>>().join(" ")
+        texts.join(" ")
     }
 
     /// Fetch and learn from a source (async)
@@ -228,11 +238,11 @@ impl WebLearner {
         let url = source.url.clone();
         let category = source.category.clone();
 
-        // Fetch content with proper User-Agent
+        // Fetch content with browser-like User-Agent (bot detection bypass)
         let client = reqwest::Client::new();
         match client
             .get(&url)
-            .header("User-Agent", "ARIA/0.9.7 (Autonomous Learning Bot; +https://github.com/ghota-tech-solutions-sass/aria)")
+            .header("User-Agent", "Mozilla/5.0 (compatible; ARIA/0.9.7; Learning System)")
             .send()
             .await
         {

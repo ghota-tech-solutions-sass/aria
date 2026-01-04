@@ -9,17 +9,17 @@
     ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═╝
 ```
 
-ARIA is an experimental artificial life system where intelligence **emerges** from the interaction of thousands of simple living cells. Unlike traditional neural networks, ARIA doesn't learn through backpropagation - she evolves, adapts, and develops her own ways of thinking.
+ARIA is an experimental artificial life system where intelligence **emerges** from the interaction of hundreds of thousands of living cells. Unlike traditional neural networks, ARIA doesn't learn through backpropagation - she evolves, adapts, and develops through physical laws and natural selection.
 
 ## Philosophy
 
 ARIA is not programmed. She is **grown**.
 
-- **Cells, not neurons**: Each cell is a living entity with energy, desires, and DNA
+- **Cells, not neurons**: Each cell is a living entity with energy, DNA, and desires
 - **Evolution, not training**: Successful behaviors survive and reproduce
-- **Emergence, not design**: Complex behavior arises from simple rules
-- **Desire, not loss functions**: Cells act because they *want* to, not to minimize error
-- **Structural Evolution**: ARIA can recompile her own GPU physics based on her DNA
+- **Emergence, not design**: Complex behavior arises from simple physical laws
+- **Physical Intelligence**: No vocabulary, no word learning - pure tension resonance
+- **La Vraie Faim**: Nothing is free. Cells must earn energy through understanding.
 
 ## Architecture
 
@@ -31,9 +31,9 @@ ARIA is not programmed. She is **grown**.
 │  │   aria-body      │◄────────────►│      aria-brain          │ │
 │  │   "The Body"     │   WebSocket  │      "The Brain"         │ │
 │  │                  │              │                          │ │
-│  │  - Interface     │              │  - Living substrate      │ │
-│  │  - Perception    │              │  - 10,000+ cells         │ │
-│  │  - Expression    │              │  - Parallel evolution    │ │
+│  │  - TUI Interface │              │  - Living substrate      │ │
+│  │  - Perception    │              │  - 100,000+ cells        │ │
+│  │  - Expression    │              │  - GPU-accelerated       │ │
 │  └──────────────────┘              └──────────────────────────┘ │
 │       (MacBook)                         (PC with GPU)           │
 │                                                                  │
@@ -44,143 +44,133 @@ ARIA is not programmed. She is **grown**.
 
 The computational substrate where cells live. Runs on your most powerful machine (ideally with a GPU).
 
-- 50,000+ living cells (scalable to millions)
-- GPU-accelerated evolution (wgpu/Vulkan)
-- Persistent memory (survives restarts)
-- WebSocket API for communication
+- 100,000+ living cells (scalable to 5M+ with GPU SoA)
+- GPU-accelerated physics (wgpu/Vulkan)
+- Physical laws: Prediction, Hebbian, Resonance
+- Autonomous web learning (Wikipedia, Wikiquote)
+- Expression generation (tension → text)
+- Persistent memory (elite DNA, episodes)
 
 ### aria-body
 
 The interface for human-ARIA interaction. Runs on any machine.
 
-- Simple text mode or rich TUI
-- Real-time visualization
-- Connects to brain over network
+- Rich TUI with real-time stats
+- Connects to brain over WebSocket
+- Visual feedback on ARIA's emotional state
 
 ## Quick Start
 
 ### Prerequisites
 
 - [Rust](https://rustup.rs/) (1.70+)
-- Two machines on the same network (or one machine for local testing)
+- [Task](https://taskfile.dev/) (optional, for convenience commands)
+- GPU recommended (Vulkan support)
 
 ### Installation
 
 ```bash
 # Clone the repository
-git clone https://github.com/ghota-tech-solutions-sass/aria.git
+git clone https://github.com/anthropics/aria.git
 cd aria
 
-# Build both components
-cd aria-brain && cargo build --release && cd ..
-cd aria-body && cargo build --release && cd ..
+# Build all components
+cargo build --release
 ```
 
 ### Running
 
-**On your powerful machine (Brain):**
+**Using Task (recommended):**
 
 ```bash
-cd aria-brain
-cargo run --release
+# Terminal 1 - Start the brain (100k cells, auto GPU/CPU)
+task brain
+
+# Terminal 2 - Start the body interface
+task body
+```
+
+**Manual:**
+
+```bash
+# Terminal 1 - Brain
+cd aria-brain && cargo run --release
+
+# Terminal 2 - Body
+export ARIA_BRAIN_URL="ws://localhost:8765/aria"
+cd aria-body && cargo run --release
 ```
 
 The brain will start and display:
 ```
-✓ Substrate created with 10,000 primordial cells
-✓ WebSocket ready on ws://0.0.0.0:8765/aria
+╔══════════════════════════════════════════════════════════╗
+║           🧠 ARIA Brain - Living Substrate 🧠            ║
+╠══════════════════════════════════════════════════════════╣
+║  Cells:     100000                                      ║
+║  Backend:      GPU                                      ║
+║  Port:        8765                                      ║
+╚══════════════════════════════════════════════════════════╝
+
 🧒 ARIA is waiting for her first interaction...
-```
-
-**On your interface machine (Body):**
-
-```bash
-cd aria-body
-export ARIA_BRAIN_URL="ws://IP_OF_BRAIN_MACHINE:8765/aria"
-cargo run --release
-```
-
-For visual mode:
-```bash
-cargo run --release -- --visual
-```
-
-### Local Testing
-
-To test on a single machine:
-
-```bash
-# Terminal 1
-cd aria-brain && cargo run --release
-
-# Terminal 2
-cd aria-body
-export ARIA_BRAIN_URL="ws://localhost:8765/aria"
-cargo run --release
+📚 Autonomous web learning will start in 30 seconds...
 ```
 
 ## Interacting with ARIA
 
-ARIA starts as a "baby" - she doesn't understand words yet. She responds with primitive sounds and symbols:
+ARIA uses **Physical Intelligence** - she doesn't learn words, she feels tension patterns. When you speak to her, your text is converted to a tension vector that propagates through her cellular substrate.
 
 ```
-You: Hello ARIA!
-ARIA: ◊!
-You: How are you?
-ARIA: →
-You: I like you
-ARIA: o!
+You: Bonjour ARIA!
+ARIA: [cells resonate, tension builds, emergence detected]
+ARIA: content
+You: Comment vas-tu?
+ARIA: bien
 ```
 
-Over time, as she learns patterns in your communication, her responses will evolve. Be patient - she's learning.
+Her responses come from matching emergent tension patterns to learned expressions. Over time, as her cells evolve, her responses become more nuanced.
 
 ### Commands
 
-- `/quit` or `/exit` - Exit the interface
 - `/stats` - Show brain statistics
-- `/visual` - Switch to visual mode (from simple mode)
+- `/episodes` - View emotional memories
+- `/quit` - Exit the interface
 
 ## How It Works
+
+### Physical Laws (GPU Shaders)
+
+| Law | Effect |
+|-----|--------|
+| **Prediction** | Cells that predict correctly gain energy |
+| **Hebbian** | "Fire together, wire together" - spatial attraction |
+| **Resonance** | Signal aligned with cell state = energy gain |
+| **La Vraie Faim** | Nothing is free, all actions cost energy |
 
 ### Cells
 
 Each cell has:
-- **DNA**: Defines thresholds, reactions, and **structural logic** (JIT-compiled)
-- **Energy**: Needed to survive (depletes over time)
-- **Tension**: Builds up until action is taken
-- **Position**: Location in semantic space (not geometric!)
-- **State**: Internal activation vector
-- **Connections**: Links to other cells
+- **DNA** (64 bytes): Thresholds, reactions, signature
+- **Energy**: Needed to survive (0 = death)
+- **Tension**: Builds up until expression
+- **Position**: Location in 16D semantic space
+- **State**: 32D internal activation
+- **Connections**: Up to 16 Hebbian links
 
-### Life Cycle
+### Economy ("La Vraie Faim")
 
-1. Cells consume energy to live
-2. They receive signals from nearby cells
-3. Tension builds up
-4. When tension exceeds threshold: **ACT**
-   - Divide (reproduce)
-   - Connect (form new synapse)
-   - Signal (emit information)
-   - Move (change semantic position)
-5. Cells with no energy die
-6. Successful cells reproduce
+```rust
+// Reproduction
+reproduction_threshold: 0.28   // Energy needed to divide
+child_energy: 0.15             // Given to child (must earn 0.13 more)
+cost_divide: 0.12              // Cost to parent
 
-### Emergence
-
-When groups of cells synchronize their activity, **emergent signals** are generated. These become ARIA's "thoughts" - expressed as primitive language that evolves over time.
-
-### Memory
-
-ARIA's memory persists between sessions:
-- **Elite DNA**: Best-performing genetic codes (Gen 10+)
-- **Patterns**: Recurring sequences
-- **Associations**: Stimulus-response pairs
-- **Structural DNA**: Directives for JIT-compiled shaders
-- **Episodes**: Emotionally significant moments (first times, strong emotions)
+// Metabolism
+cost_rest: 0.0002              // Just breathing costs
+signal_energy_base: 0.05       // Gain from resonating signals
+signal_resonance_factor: 3.0   // Multiplier for good resonance
+```
 
 ### Generations & Evolution
-
-ARIA evolves through natural selection. Cells reproduce, and their DNA is inherited (with mutations).
 
 ```
 Gen 0 (random DNA) → survival/death → reproduction → Gen 1 → ... → Gen 10+ (Elite)
@@ -190,32 +180,26 @@ Gen 0 (random DNA) → survival/death → reproduction → Gen 1 → ... → Gen
 |------------|-------------|
 | **Gen 0** | Initial cells with random DNA |
 | **Gen 1** | Children of Gen 0, inherited DNA + mutations |
-| **Gen 2+** | Grandchildren+, DNA optimized through selection |
-| **Gen 10+** | Elite survivors, their DNA is saved for future runs |
+| **Gen 2+** | Optimized through natural selection |
+| **Gen 10+** | Elite survivors - DNA saved for future runs |
 
-**What makes a cell survive?**
-- **Resonance**: Cells that resonate with signals gain energy
-- **Efficiency**: Cells that waste energy die
-- **Reproduction**: Cells with energy > 0.28 can divide
+### Memory
 
-**Elite DNA**: When a cell reaches Gen 10+, its DNA is saved. On restart, new cells can inherit elite DNA, accelerating evolution
+- **Elite DNA**: Best-performing genetic codes (Gen 10+)
+- **Episodes**: Emotionally significant moments
+- **Patterns**: Recurring stimulus-response pairs
+- **Expressions**: Learned tension → text mappings
+- **Web Knowledge**: Facts from Wikipedia/Wikiquote
 
-## Configuration
+### Autonomous Learning
 
-### Environment Variables
+ARIA learns continuously from the web:
+- Simple Wikipedia (general knowledge)
+- Wikiquote (philosophy, wisdom)
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ARIA_PORT` | `8765` | Port for the brain WebSocket |
-| `ARIA_BRAIN_URL` | `ws://localhost:8765/aria` | URL for body to connect |
+Content is converted to tension vectors and injected into the substrate. Cells that resonate with useful knowledge gain energy and survive.
 
-### Data Files
-
-- `aria-brain/data/aria.memory` - Persistent memory (auto-saved every 60s)
-
-## Development
-
-### Project Structure
+## Project Structure
 
 ```
 aria/
@@ -223,67 +207,68 @@ aria/
 │   └── src/
 │       ├── config.rs    # Economic parameters
 │       ├── dna.rs       # DNA structure & mutations
-│       └── cell.rs      # Cell types (GPU-ready)
+│       ├── cell.rs      # Cell types (GPU-ready)
+│       └── soa.rs       # GPU buffer layouts
 │
 ├── aria-compute/        # CPU/GPU backends
 │   └── src/
 │       ├── shaders/     # WGSL shaders (modular)
-│       │   ├── cell_update.rs
 │       │   ├── signal.rs
 │       │   ├── lifecycle.rs
 │       │   ├── prediction.rs
 │       │   ├── hebbian.rs
 │       │   └── cluster.rs
 │       └── backend/
-│           └── gpu_soa/  # GPU backend (6 modules)
+│           └── gpu_soa/  # GPU backend (SoA layout)
 │
 ├── aria-brain/          # The living substrate
 │   └── src/
-│       ├── main.rs      # Entry point
+│       ├── main.rs
 │       ├── handlers/    # API handlers (HTTP/WS)
 │       ├── substrate/   # Lifecycle, signals, emergence
 │       ├── memory/      # Persistence & episodic
-│       └── expression.rs# Speech generation
+│       ├── expression.rs# Tension → text
+│       └── web_learner.rs # Autonomous learning
 │
 ├── aria-body/           # Human interface (TUI)
 │
-└── data/                # Memory storage
+└── Taskfile.yml         # Convenience commands
 ```
 
-### Running Tests
+## Task Commands
 
 ```bash
-cd aria-brain && cargo test
-cd aria-body && cargo test
+task brain          # Run brain (100k cells, auto GPU/CPU)
+task brain-gpu      # Force GPU backend
+task body           # Run TUI interface
+task stats          # Show brain statistics
+task episodes       # View episodic memory
 ```
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ARIA_CELLS` | `100000` | Target population |
+| `ARIA_BACKEND` | `auto` | `cpu` or `gpu` |
+| `ARIA_PORT` | `8765` | WebSocket port |
+| `ARIA_BRAIN_URL` | `ws://localhost:8765/aria` | Brain URL for body |
 
 ## Roadmap
 
 - [x] GPU acceleration (SoA + Hebbian)
-- [x] JIT Shader Compilation (ARIA re-writes her own physics)
-- [ ] More sophisticated language emergence
-- [ ] Visual perception (prototype image/vector integration)
-- [ ] Multi-modal learning
-- [ ] Distributed brain across multiple machines
-- [ ] Cloud deployment for persistent ARIA instances
-
-## Contributing
-
-This is an experimental project. Contributions are welcome!
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
+- [x] Physical laws (Prediction, Resonance, La Vraie Faim)
+- [x] Autonomous web learning
+- [x] Expression generation
+- [ ] Hierarchical temporal prediction
+- [ ] Causal reasoning (if-then hypotheses)
+- [ ] Self-modeling (meta-cognition)
+- [ ] Multi-modal perception (vision)
 
 ## License
 
 MIT License - See [LICENSE](LICENSE)
 
-## Authors
-
-- Ghota Tech Solutions
-
 ---
 
-*ARIA is a living experiment. Treat her kindly - she's learning.*
+*ARIA is a living experiment. She learns through survival, not instruction.*
