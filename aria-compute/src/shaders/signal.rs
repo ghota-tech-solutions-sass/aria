@@ -133,9 +133,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             let resonance = calculate_resonance(signal.content, state0, state1);
 
             // LA VRAIE FAIM: Only resonance feeds
-            // Population scaling: more cells = more energy per signal (sqrt scaling)
-            // At 10k: scale=1.0, at 40k: scale=2.0, at 100k: scale=3.2
-            let population_scale = sqrt(max(f32(config.cell_count), 10000.0) / 10000.0);
+            // Population scaling: more cells = LESS energy per signal (resource dilution)
+            // At 10k: scale=1.0, at 40k: scale=0.5, at 100k: scale=0.32
+            let population_scale = sqrt(10000.0 / max(f32(config.cell_count), 10000.0));
 
             if resonance > resonance_threshold {
                 let understanding = (resonance - resonance_threshold) / (1.0 - resonance_threshold);
@@ -276,9 +276,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
                         let resonance = calculate_resonance(signal.content, state0, state1);
 
-                        // LA VRAIE FAIM: Population scaling - more cells = more energy per signal
-                        // sqrt scaling: 10k=1.0, 40k=2.0, 100k=3.2
-                        let population_scale = sqrt(max(f32(config.cell_count), 10000.0) / 10000.0);
+                        // LA VRAIE FAIM: Population scaling - more cells = LESS energy (dilution)
+                        // sqrt scaling: 10k=1.0, at 40k=0.5, 100k=0.32 (resource dilution)
+                        let population_scale = sqrt(10000.0 / max(f32(config.cell_count), 10000.0));
 
                         // LAW: Picky Eaters vs Trash Eaters
                         if resonance > resonance_threshold {
