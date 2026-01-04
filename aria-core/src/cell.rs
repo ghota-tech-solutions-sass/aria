@@ -98,6 +98,11 @@ impl CellState {
         let mut rng = rand::thread_rng();
         use rand::Rng;
 
+        // Session 35: Start 90% of cells sleeping to reduce startup freeze
+        // They'll wake up gradually as signals hit them
+        let start_sleeping = rng.gen::<f32>() < 0.9;
+        let sleeping_flag = if start_sleeping { crate::soa::CellMetadata::SLEEPING } else { 0 };
+
         Self {
             // Position in semantic space: -10..10 (matches spatial_view grid)
             position: std::array::from_fn(|_| rng.gen::<f32>() * 20.0 - 10.0),
@@ -106,8 +111,8 @@ impl CellState {
             // BELOW reproduction_threshold (0.70) - cells must EARN energy to reproduce
             energy: 0.3 + rng.gen::<f32>() * 0.3,
             tension: 0.0,
-            activity_level: 1.0, // Start awake
-            flags: 0,
+            activity_level: if start_sleeping { 0.0 } else { 1.0 },
+            flags: sleeping_flag,
             cluster_id: 0,
             hysteresis: 0.0,
             predicted_state: [0.0; STATE_DIMS],

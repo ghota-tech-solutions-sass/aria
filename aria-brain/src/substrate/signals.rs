@@ -109,13 +109,11 @@ impl Substrate {
         // - Hebbian connection propagation
         // CPU only adds signal to buffer; GPU does ALL propagation.
 
-        // Add to signal buffer for GPU processing
+        // Add to signal buffer for GPU processing (Session 35: ring buffer)
+        // Ring buffer auto-discards oldest when full - no manual removal needed
         {
             let mut buffer = self.signal_buffer.write();
             buffer.push(fragment);
-            if buffer.len() > 100 {
-                buffer.remove(0);
-            }
         }
 
         // Visual processing still works (images → tension)
@@ -147,10 +145,8 @@ impl Substrate {
 
         // === GPU-ONLY PROPAGATION (Session 31) ===
         // The CPU loop was REMOVED. Signal added to buffer for GPU spatial hash processing.
+        // Session 35: Ring buffer auto-discards oldest when full
         let mut buffer = self.signal_buffer.write();
         buffer.push(fragment);
-        if buffer.len() > 100 {
-            buffer.remove(0);
-        }
     }
 }

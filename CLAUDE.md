@@ -31,23 +31,24 @@ task episodes           # Mémoire épisodique
 ./scripts/run_overnight.sh  # Training autonome 24h
 ```
 
-## Économie actuelle (Session 34)
+## Économie actuelle (Session 35)
 
 ```rust
 // Reproduction
-reproduction_threshold: 0.18   // Session 34: abaissé de 0.22 (max_energy=0.15 → cells plateau)
+reproduction_threshold: 0.18   // Seuil pour se reproduire
 child_energy: 0.15             // Énergie de départ des enfants
 cost_divide: 0.12              // Coût parent
 
 // Métabolisme
 cost_rest: 0.0003              // Drain passif par tick
-signal_energy_base: 0.08       // Session 34: doublé de 0.04 (trainer trop intensif)
+signal_energy_base: 0.15       // Session 35: augmenté 0.08→0.12→0.15 (population_scale dilue trop)
 signal_resonance_factor: 3.0   // Multiplicateur résonance
 signal_radius: 30.0            // Portée en 8D
 
 // Population scale (signal.rs)
 // sqrt(10k / cell_count) → dilution ressources
 // 100k = 0.316x, 200k = 0.22x énergie par signal
+// Effective signal = 0.15 × 0.22 = 0.034 à 200k cells
 
 // Timing
 EMISSION_COOLDOWN_TICKS: 5000  // ~5 sec entre émissions
@@ -93,7 +94,7 @@ TPS: ~1000                     // Rate limité dans main.rs
 - **Obrigada** : Abyssin
 
 ---
-*Version 0.9.7 | 2026-01-04*
+*Version 0.9.8 | Session 35 | 2026-01-04*
 
 ## Historique des sessions (résumé)
 
@@ -111,6 +112,7 @@ TPS: ~1000                     // Rate limité dans main.rs
 | 32 | Full GPU migration, TPS rate limiting |
 | 33 | Web learner, expression generator |
 | 34 | Refactoring modulaire + fix économie (population_scale inversé, buffer 70%) + fix web learner (scraper lib) |
+| 35 | Anti-freeze: ring buffer signals, GPU timeouts, 90% cells sleeping at start, DNA bloat detection, sampling O(1) |
 
 ## Problèmes courants résolus
 
@@ -126,3 +128,8 @@ TPS: ~1000                     // Rate limité dans main.rs
 | **Web learner 0 items** | Parser HTML manuel cassé (`<header>` matchait `<head>`) → remplacé par lib `scraper` |
 | **REALLOC spam** | DNA pool croissait indéfiniment (190k+ DNA pour 105k cells) → check seulement cells.len() à 80% |
 | **Cells can't reproduce** | `reproduction_threshold=0.28` mais `max_energy=0.24` → abaissé à 0.22, augmenté `signal_energy_base` 0.03→0.04 |
+| **Freeze before mass die-off** | Signaux s'accumulaient pendant GPU work → Ring buffer (256 cap) + drain max 64/tick |
+| **Startup freeze (120k awake)** | Toutes cells awake au démarrage → 90% start sleeping dans `CellState::new()` |
+| **DNA pool 854k entries** | DNA croît sans limite → `compact_dead_cells()` aussi si DNA > 2× cells |
+| **GPU poll blocking** | `device.poll()` sans timeout → ajout timeout 50-100ms + fallback |
+| **Énergie trop diluée** | À 200k cells, `population_scale=0.22` → `signal_energy_base` 0.08→0.15 |

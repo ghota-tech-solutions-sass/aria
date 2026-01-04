@@ -662,8 +662,9 @@ impl ComputeBackend for GpuSoABackend {
         self.stats.cells_sleeping = sleeping_count as u64;
         self.stats.signals_propagated = signals.len() as u64;
 
-        // Periodic download
-        let should_download = self.tick % 5000 == 0 || needs_realloc;
+        // Periodic download - Session 35: reduced frequency (20000 instead of 5000)
+        // GPU handles lifecycle internally; CPU sync is just for stats/debug
+        let should_download = self.tick % 20000 == 0 || needs_realloc;
         let mut actions = Vec::new();
 
         if should_download {
@@ -713,10 +714,17 @@ impl ComputeBackend for GpuSoABackend {
             return Ok(Vec::new());
         }
 
+        // Session 35: Sample-based emergence detection instead of O(n)
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        let sample_size = 5000.min(states.len());
+
         let mut sum = [0.0f32; 8];
         let mut count = 0usize;
 
-        for state in states.iter() {
+        for _ in 0..sample_size {
+            let idx = rng.gen_range(0..states.len());
+            let state = &states[idx];
             if !state.is_sleeping() && !state.is_dead() && state.activity_level > 0.1 {
                 for (i, &s) in state.state.iter().take(8).enumerate() {
                     sum[i] += s;
@@ -757,9 +765,10 @@ impl ComputeBackend for GpuSoABackend {
     }
 
     fn sync(&mut self) -> AriaResult<()> {
+        // Session 35: Add timeout to prevent infinite blocking
         let _ = self.device.poll(wgpu::PollType::Wait {
             submission_index: None,
-            timeout: None,
+            timeout: Some(std::time::Duration::from_millis(100)),
         });
         Ok(())
     }

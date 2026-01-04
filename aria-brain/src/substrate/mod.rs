@@ -148,8 +148,9 @@ pub struct Substrate {
 
     // === Signal Buffers ===
 
-    /// Pending signals for cells
-    signal_buffer: RwLock<Vec<SignalFragment>>,
+    /// Pending signals for cells (ring buffer for constant throughput - Session 35)
+    /// Capacity: 256 signals ≈ 4 ticks of buffering at max trainer rate
+    signal_buffer: RwLock<types::SignalRingBuffer>,
 
     // === Spatial Inhibition (Gemini optimization) ===
 
@@ -264,7 +265,7 @@ impl Substrate {
             last_emission_cells: RwLock::new(Vec::new()),
             last_spontaneous_tick: AtomicU64::new(0),
             adaptive_params: RwLock::new(adaptive_params),
-            signal_buffer: RwLock::new(Vec::new()),
+            signal_buffer: RwLock::new(types::SignalRingBuffer::new(256)), // Session 35: Ring buffer
             spatial_inhibitor: RwLock::new(SpatialInhibitor::default()),
             last_emergent_tension: RwLock::new([0.0f32; SIGNAL_DIMS]),
             structural_checksum: 0,
@@ -350,10 +351,11 @@ impl Substrate {
             inhibitor.set_base_threshold(params.emission_threshold);
         }
 
-        // Get external signals from buffer
+        // Get external signals from buffer (limited per tick - Session 35)
+        // Ring buffer prevents accumulation; drain() limits GPU burst
         let mut signals: Vec<SignalFragment> = {
             let mut buffer = self.signal_buffer.write();
-            std::mem::take(&mut *buffer)
+            buffer.drain(types::MAX_SIGNALS_PER_TICK)
         };
 
         // === BACKGROUND NOISE: Prevent entropy=0 freeze ===
@@ -987,6 +989,7 @@ impl Substrate {
             intensity * 0.3 // Weak - prevents self-sustaining loop
         );
 
+        // Session 35: Ring buffer auto-discards oldest when full
         let mut buffer = self.signal_buffer.write();
         buffer.push(fragment);
 

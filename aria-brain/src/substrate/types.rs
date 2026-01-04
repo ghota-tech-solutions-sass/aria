@@ -2,15 +2,104 @@
 //!
 //! ## Physical Intelligence (Session 20)
 //! Word-based types removed. ARIA resonates with tension, not words.
+//!
+//! ## Session 35: Signal Ring Buffer
+//! Added SignalRingBuffer for constant-throughput signal processing.
+//! Prevents signal accumulation during GPU work (freeze → mass die-off).
 
+use aria_core::SignalFragment;
 use serde::{Deserialize, Serialize};
 
 /// Minimum ticks between emissions (anti-spam)
 /// At ~4ms/tick (actual observed rate), 75 ticks ≈ 300ms between responses
 pub const EMISSION_COOLDOWN_TICKS: u64 = 5000;  // ~5 seconds between emissions (meaningful responses)
 
+/// Maximum signals per tick to prevent burst processing
+pub const MAX_SIGNALS_PER_TICK: usize = 64;
+
 // NOTE: STOP_WORDS removed in Session 20 (Physical Intelligence)
 // ARIA no longer processes language semantically - only tension vectors
+
+// ============================================================================
+// SIGNAL RING BUFFER (Session 35)
+// ============================================================================
+
+/// Ring buffer for signal processing with constant throughput
+///
+/// **Problem Solved**: During GPU work, trainer signals accumulate in the
+/// broadcast channel. When brain resumes, ALL signals are processed at once,
+/// causing mass cell die-off.
+///
+/// **Solution**: Fixed-capacity ring buffer. When full, oldest signals are
+/// overwritten. GPU receives constant signal rate instead of bursts.
+///
+/// Capacity: 256 signals ≈ 4 ticks of buffering at max trainer rate (64/tick)
+#[derive(Debug)]
+pub struct SignalRingBuffer {
+    /// The circular buffer storage
+    buffer: Vec<Option<SignalFragment>>,
+    /// Write position (where next signal goes)
+    write_pos: usize,
+    /// Read position (where next drain starts)
+    read_pos: usize,
+    /// Number of signals currently in buffer
+    count: usize,
+    /// Statistics: total signals received
+    pub total_received: u64,
+    /// Statistics: total signals dropped (overwritten)
+    pub total_dropped: u64,
+}
+
+impl SignalRingBuffer {
+    /// Create a new ring buffer with given capacity
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            buffer: vec![None; capacity],
+            write_pos: 0,
+            read_pos: 0,
+            count: 0,
+            total_received: 0,
+            total_dropped: 0,
+        }
+    }
+
+    /// Push a signal into the buffer
+    /// If buffer is full, overwrites the oldest signal
+    pub fn push(&mut self, signal: SignalFragment) {
+        self.total_received += 1;
+
+        // If buffer is full, we'll overwrite the oldest (at read_pos)
+        if self.count == self.buffer.len() {
+            self.total_dropped += 1;
+            // Move read_pos forward (we're losing the oldest)
+            self.read_pos = (self.read_pos + 1) % self.buffer.len();
+        } else {
+            self.count += 1;
+        }
+
+        // Write at write_pos
+        self.buffer[self.write_pos] = Some(signal);
+        self.write_pos = (self.write_pos + 1) % self.buffer.len();
+    }
+
+    /// Drain up to `max_count` signals from the buffer
+    /// Returns signals in FIFO order (oldest first)
+    pub fn drain(&mut self, max_count: usize) -> Vec<SignalFragment> {
+        let take_count = self.count.min(max_count);
+        let mut result = Vec::with_capacity(take_count);
+
+        for _ in 0..take_count {
+            if let Some(signal) = self.buffer[self.read_pos].take() {
+                result.push(signal);
+            }
+            self.read_pos = (self.read_pos + 1) % self.buffer.len();
+            self.count -= 1;
+        }
+
+        result
+    }
+
+}
 
 /// Adaptive parameters that ARIA modifies herself
 /// These evolve through feedback - no hardcoded rules, just emergence

@@ -148,9 +148,9 @@ impl Default for MetabolismConfig {
             cost_rest: 0.0003,
 
             // Signal energy - must exceed cost_rest for NET POSITIVE growth
-            // Session 34: Doubled from 0.04 to 0.08 - cells were plateauing at child_energy
-            // Stronger signal income to compensate for trainer's rapid feedback
-            signal_energy_base: 0.08,
+            // Session 35: Increased to 0.15 - population was declining at 0.12
+            // At 200k cells: effective = 0.15 × 0.224 = 0.034 per signal
+            signal_energy_base: 0.15,
             signal_resonance_factor: 3.0,   // Good differentiation for selection
         }
     }
