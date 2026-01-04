@@ -167,9 +167,24 @@ impl WebLearner {
 
         for sentence in sentences {
             let clean = sentence.trim();
-            // Skip error messages, robot policy notices, and code fragments
+            // Skip error messages, robot policy notices, code fragments, and CSS
             let lower = clean.to_lowercase();
-            if lower.contains("user-agent")
+            let has_css = clean.contains('{') || clean.contains('}')
+                || lower.contains("font-weight")
+                || lower.contains("line-height")
+                || lower.contains("box-sizing")
+                || lower.contains("text-align")
+                || lower.contains("padding:")
+                || lower.contains("margin:")
+                || lower.contains("position:")
+                || lower.contains("display:")
+                || lower.contains("border:")
+                || lower.contains("background:")
+                || lower.contains("width:")
+                || lower.contains("height:");
+
+            if has_css
+                || lower.contains("user-agent")
                 || lower.contains("robot")
                 || lower.contains("phabricator")
                 || lower.contains("error")

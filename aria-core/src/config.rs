@@ -143,13 +143,14 @@ impl Default for MetabolismConfig {
             cost_signal: 0.005,  // Speaking is EXPENSIVE
             cost_divide: 0.12,   // Creating life costs but parent survives (Session 32 Part 12)
             cost_move: 0.002,    // Moving costs energy
-            // Session 32: Tuned for balance between survival and pressure
-            cost_rest: 0.0002,   // From tuning: "Balanced drain" scored best
+            // Session 34: Increased from 0.0002 to 0.0003 - stronger passive drain
+            // Target equilibrium: ~100k cells (was ~127k)
+            cost_rest: 0.0003,
 
             // Signal energy - must exceed cost_rest for NET POSITIVE growth
-            // Session 34: Reduced from 0.60 to 0.05 after removing CPU-side 50x scaling
-            // Now ~3 good signals needed to reproduce (was 1 signal = 480 reproductions!)
-            signal_energy_base: 0.05,
+            // Session 34: Reduced from 0.05 to 0.03 - tighter energy economy
+            // Combined with population_scale dilution, equilibrium should be ~100k
+            signal_energy_base: 0.03,
             signal_resonance_factor: 3.0,   // Good differentiation for selection
         }
     }

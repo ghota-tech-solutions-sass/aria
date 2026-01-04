@@ -528,8 +528,35 @@ impl GpuSoABackend {
         if old_count >= dna_pool.len() {
             return;
         }
-        let new_dna = &dna_pool[old_count..];
+
+        // Safety check: don't write beyond buffer capacity
+        let safe_end = dna_pool.len().min(self.max_cell_count);
+        if old_count >= safe_end {
+            tracing::warn!(
+                "⚠️ upload_new_dna skipped: old_count {} >= safe_end {} (max_cell_count: {})",
+                old_count,
+                safe_end,
+                self.max_cell_count
+            );
+            return;
+        }
+
+        let new_dna = &dna_pool[old_count..safe_end];
         let offset_bytes = old_count * std::mem::size_of::<DNA>();
+
+        // Final safety: verify we won't overflow
+        let end_bytes = offset_bytes + new_dna.len() * std::mem::size_of::<DNA>();
+        let buffer_size = self.max_cell_count * std::mem::size_of::<DNA>();
+        if end_bytes > buffer_size {
+            tracing::error!(
+                "🚨 DNA OVERFLOW PREVENTED: {}..{} > buffer size {}",
+                offset_bytes,
+                end_bytes,
+                buffer_size
+            );
+            return;
+        }
+
         if let Some(buf) = &self.dna_buffer {
             self.queue
                 .write_buffer(buf, offset_bytes as u64, bytemuck::cast_slice(new_dna));

@@ -36,14 +36,18 @@ task episodes           # Mémoire épisodique
 ```rust
 // Reproduction
 reproduction_threshold: 0.28   // Énergie nécessaire
-child_energy: 0.15             // Session 34: réduit de 0.24 → enfants doivent gagner 0.13
+child_energy: 0.15             // Session 34: réduit de 0.24
 cost_divide: 0.12              // Coût parent
 
 // Métabolisme
-cost_rest: 0.0002              // Respirer
-signal_energy_base: 0.05       // Session 34: réduit de 0.60 (fix double scaling)
+cost_rest: 0.0003              // Session 34: augmenté pour équilibre ~100k
+signal_energy_base: 0.03       // Session 34: réduit pour équilibre ~100k
 signal_resonance_factor: 3.0   // Multiplicateur résonance
 signal_radius: 30.0            // Portée en 8D
+
+// Population scale (signal.rs)
+// sqrt(10k / cell_count) → dilution ressources
+// 100k = 0.316x, 200k = 0.22x énergie par signal
 
 // Timing
 EMISSION_COOLDOWN_TICKS: 5000  // ~5 sec entre émissions
