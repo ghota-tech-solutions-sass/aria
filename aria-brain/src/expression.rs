@@ -29,7 +29,6 @@ pub struct LearnedExpression {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ExpressionSource {
     User,        // Learned from user interaction
-    Web,         // Learned from web content
     Spontaneous, // Self-generated
 }
 
@@ -130,33 +129,6 @@ impl ExpressionGenerator {
         info!("📖 Learned expression: '{}' (total: {})", text, self.total_learned);
     }
 
-    /// Learn from web content
-    pub fn learn_from_web(&mut self, text: &str, tension: TensionVector, tick: u64) {
-        // Only learn if new enough
-        if self.find_similar_expression(&tension, 0.95).is_some() {
-            return; // Already know something similar
-        }
-
-        // Short phrases only (not full sentences)
-        let words: Vec<&str> = text.split_whitespace().collect();
-        if words.len() > 5 || words.is_empty() {
-            return;
-        }
-
-        self.expressions.push_back(LearnedExpression {
-            text: text.to_string(),
-            tension,
-            reinforcement: 1,
-            learned_at: tick,
-            source: ExpressionSource::Web,
-        });
-        self.total_learned += 1;
-
-        while self.expressions.len() > MAX_EXPRESSIONS {
-            self.expressions.pop_front();
-        }
-    }
-
     /// Find the best matching expression for a tension pattern
     pub fn express(&mut self, tension: &TensionVector, coherence: f32, tick: u64) -> Option<String> {
         // Cooldown - only express every 5000 ticks (~5 seconds at 1000 TPS)
@@ -234,14 +206,12 @@ impl ExpressionGenerator {
     /// Get stats
     pub fn stats(&self) -> ExpressionStats {
         let user_count = self.expressions.iter().filter(|e| e.source == ExpressionSource::User).count();
-        let web_count = self.expressions.iter().filter(|e| e.source == ExpressionSource::Web).count();
         let spontaneous_count = self.expressions.iter().filter(|e| e.source == ExpressionSource::Spontaneous).count();
 
         ExpressionStats {
             total_expressions: self.expressions.len(),
             total_learned: self.total_learned,
             user_learned: user_count,
-            web_learned: web_count,
             spontaneous: spontaneous_count,
         }
     }
@@ -252,7 +222,6 @@ pub struct ExpressionStats {
     pub total_expressions: usize,
     pub total_learned: u64,
     pub user_learned: usize,
-    pub web_learned: usize,
     pub spontaneous: usize,
 }
 

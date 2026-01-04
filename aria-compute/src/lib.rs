@@ -15,6 +15,7 @@
 
 pub mod backend;
 pub mod compiler;
+pub mod shaders;
 pub mod spatial;
 pub mod spatial_gpu;
 

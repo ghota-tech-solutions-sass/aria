@@ -6,7 +6,6 @@
 use aria_core::TensionVector;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 /// Maximum number of knowledge items to keep
@@ -110,16 +109,6 @@ impl WebLearner {
         ]
     }
 
-    /// Add a new knowledge source
-    pub fn add_source(&mut self, url: String, category: KnowledgeCategory) {
-        self.sources.push(KnowledgeSource {
-            url,
-            category,
-            last_fetched: None,
-            fetch_count: 0,
-        });
-    }
-
     /// Convert text to tension vector using semantic hashing
     pub fn text_to_tension(text: &str) -> TensionVector {
         use std::hash::{Hash, Hasher};
@@ -170,6 +159,16 @@ impl WebLearner {
 
         for sentence in sentences {
             let clean = sentence.trim();
+            // Skip error messages and robot policy notices
+            let lower = clean.to_lowercase();
+            if lower.contains("user-agent")
+                || lower.contains("robot")
+                || lower.contains("phabricator")
+                || lower.contains("error")
+                || lower.contains("blocked")
+            {
+                continue;
+            }
             if clean.len() > 20 {
                 let tension_vector = Self::text_to_tension(clean);
                 items.push(KnowledgeItem {
@@ -229,8 +228,14 @@ impl WebLearner {
         let url = source.url.clone();
         let category = source.category.clone();
 
-        // Fetch content
-        match reqwest::get(&url).await {
+        // Fetch content with proper User-Agent
+        let client = reqwest::Client::new();
+        match client
+            .get(&url)
+            .header("User-Agent", "ARIA/0.9.7 (Autonomous Learning Bot; +https://github.com/ghota-tech-solutions-sass/aria)")
+            .send()
+            .await
+        {
             Ok(response) => {
                 if let Ok(html) = response.text().await {
                     // Extract knowledge
@@ -295,30 +300,6 @@ impl WebLearner {
     pub fn queue_injections(&mut self, injections: Vec<PendingInjection>) {
         for inj in injections {
             self.pending_injections.push_back(inj);
-        }
-    }
-
-    /// Find related knowledge by tension similarity
-    pub fn find_related(&self, query_tension: &TensionVector, limit: usize) -> Vec<&KnowledgeItem> {
-        let mut scored: Vec<(f32, &KnowledgeItem)> = self.knowledge.iter()
-            .map(|item| {
-                let similarity = Self::cosine_similarity(&item.tension_vector, query_tension);
-                (similarity, item)
-            })
-            .collect();
-
-        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        scored.into_iter().take(limit).map(|(_, item)| item).collect()
-    }
-
-    fn cosine_similarity(a: &TensionVector, b: &TensionVector) -> f32 {
-        let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-        let mag_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-        let mag_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if mag_a > 0.0 && mag_b > 0.0 {
-            dot / (mag_a * mag_b)
-        } else {
-            0.0
         }
     }
 

@@ -42,7 +42,7 @@ mod shadow_brain;
 
 // Re-exports for convenience
 // NOTE: RecentWord, STOP_WORDS, ConversationContext removed in Session 20 (Physical Intelligence)
-pub use types::{AdaptiveParams, SubstrateStats, SpatialInhibitor, EMISSION_COOLDOWN_TICKS};
+pub use types::{AdaptiveParams, SubstrateStats, SubstrateView, SpatialInhibitor, EMISSION_COOLDOWN_TICKS};
 pub use emotion::EmotionalState;
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -992,54 +992,6 @@ impl Substrate {
 
         tracing::trace!("🧠 REFLEXIVITY: Self-signal injected (intensity={:.2})", intensity);
     }
-}
-
-/// Spatial view of the substrate for visualization
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct SubstrateView {
-    /// Grid size (16x16)
-    pub grid_size: usize,
-    /// Activity level per grid cell (0.0-1.0)
-    pub activity_grid: Vec<f32>,
-    /// Energy level per grid cell (normalized)
-    pub energy_grid: Vec<f32>,
-    /// Tension level per grid cell (normalized)
-    pub tension_grid: Vec<f32>,
-    /// Number of cells per grid position
-    pub cell_count_grid: Vec<usize>,
-    /// Total cells (including dead)
-    pub total_cells: usize,
-    /// Alive cells count
-    pub alive_cells: usize,
-    /// Sleeping cells count
-    pub sleeping_cells: usize,
-    /// Dead cells count
-    pub dead_cells: usize,
-    /// Awake cells count
-    pub awake_cells: usize,
-    /// Energy distribution histogram (10 buckets)
-    pub energy_histogram: Vec<usize>,
-    /// Activity entropy (0.0 = structured, 1.0 = chaotic)
-    pub activity_entropy: f32,
-    /// System health (0.0 = dying, 1.0 = thriving)
-    pub system_health: f32,
-    // === Advanced metrics for visualization ===
-    /// Maximum generation (lineage depth) - elite lineage indicator
-    pub max_generation: u32,
-    /// Average generation across alive cells
-    pub avg_generation: f32,
-    /// Elite cell count (generation > 10)
-    pub elite_count: usize,
-    /// Sparse dispatch savings (% of cells sleeping)
-    pub sparse_savings_percent: f32,
-    /// Average energy per cell
-    pub avg_energy: f32,
-    /// Average tension per cell
-    pub avg_tension: f32,
-    /// Total tension in the system (indicates desire to act)
-    pub total_tension: f32,
-    /// Tick per second (TPS) - computed externally but stored here
-    pub tps: f32,
 }
 
 // ============================================================================

@@ -76,9 +76,12 @@ TPS: ~1000                     // Rate limité dans main.rs
 |---------|---------|
 | `aria-core/src/config.rs` | Tous les paramètres économiques |
 | `aria-core/src/dna.rs` | Structure ADN, mutations |
-| `aria-compute/src/compiler.rs` | Shaders WGSL (signal, prediction, hebb) |
+| `aria-compute/src/shaders/` | Shaders WGSL modulaires |
+| `aria-compute/src/backend/gpu_soa/` | Backend GPU SoA (6 modules) |
+| `aria-brain/src/handlers/` | API handlers HTTP/WebSocket |
 | `aria-brain/src/substrate/` | Logique substrate (lifecycle, signals, emergence) |
 | `aria-brain/src/expression.rs` | Génération parole sans LLM |
+| `aria-brain/src/memory/persistence.rs` | Types sérialisables (DNA, patterns, etc.) |
 
 ## Contexte personnel
 
@@ -103,6 +106,7 @@ TPS: ~1000                     // Rate limité dans main.rs
 | 31 | Suppression vocabulaire, intelligence physique |
 | 32 | Full GPU migration, TPS rate limiting |
 | 33 | Web learner, expression generator |
+| 34 | Refactoring: shaders/, gpu_soa/, handlers/ modulaires |
 
 ## Problèmes courants résolus
 

@@ -44,8 +44,8 @@ ARIA is not programmed. She is **grown**.
 
 The computational substrate where cells live. Runs on your most powerful machine (ideally with a GPU).
 
-- 10,000+ living cells
-- Parallel evolution using Rayon
+- 50,000+ living cells (scalable to millions)
+- GPU-accelerated evolution (wgpu/Vulkan)
 - Persistent memory (survives restarts)
 - WebSocket API for communication
 
@@ -219,23 +219,35 @@ Gen 0 (random DNA) → survival/death → reproduction → Gen 1 → ... → Gen
 
 ```
 aria/
-├── aria-brain/          # The living substrate
-│   ├── src/
-│   │   ├── main.rs      # Entry point
-│   │   ├── cell.rs      # Cell definition
-│   │   ├── substrate.rs # The universe
-│   │   ├── signal.rs    # Communication
-│   │   ├── memory/      # Persistence
-│   │   └── connection.rs# WebSocket handling
-│   └── data/            # Memory storage
+├── aria-core/           # Shared types & config
+│   └── src/
+│       ├── config.rs    # Economic parameters
+│       ├── dna.rs       # DNA structure & mutations
+│       └── cell.rs      # Cell types (GPU-ready)
 │
-├── aria-body/           # Human interface
+├── aria-compute/        # CPU/GPU backends
+│   └── src/
+│       ├── shaders/     # WGSL shaders (modular)
+│       │   ├── cell_update.rs
+│       │   ├── signal.rs
+│       │   ├── lifecycle.rs
+│       │   ├── prediction.rs
+│       │   ├── hebbian.rs
+│       │   └── cluster.rs
+│       └── backend/
+│           └── gpu_soa/  # GPU backend (6 modules)
+│
+├── aria-brain/          # The living substrate
 │   └── src/
 │       ├── main.rs      # Entry point
-│       ├── signal.rs    # Signal types
-│       └── visualizer.rs# TUI
+│       ├── handlers/    # API handlers (HTTP/WS)
+│       ├── substrate/   # Lifecycle, signals, emergence
+│       ├── memory/      # Persistence & episodic
+│       └── expression.rs# Speech generation
 │
-└── docs/                # Documentation
+├── aria-body/           # Human interface (TUI)
+│
+└── data/                # Memory storage
 ```
 
 ### Running Tests
